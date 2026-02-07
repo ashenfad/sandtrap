@@ -27,6 +27,7 @@ class Rewriter(ast.NodeTransformer):
         self._func_asts: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
         self._class_asts: list[ast.ClassDef] = []
         self._class_depth = 0
+        self._func_depth = 0
 
     def _new_tmp(self) -> str:
         name = f"__sb_tmp_{self._tmp_counter}"
@@ -401,7 +402,11 @@ class Rewriter(ast.NodeTransformer):
         return node
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST | list[ast.stmt]:
-        node = self._prepend_checkpoint(node)
+        self._func_depth += 1
+        try:
+            node = self._prepend_checkpoint(node)
+        finally:
+            self._func_depth -= 1
         if not self._task_mode or self._class_depth > 0:
             return node
         return self._wrap_defun(node)
@@ -409,7 +414,11 @@ class Rewriter(ast.NodeTransformer):
     def visit_AsyncFunctionDef(
         self, node: ast.AsyncFunctionDef
     ) -> ast.AST | list[ast.stmt]:
-        node = self._prepend_checkpoint(node)
+        self._func_depth += 1
+        try:
+            node = self._prepend_checkpoint(node)
+        finally:
+            self._func_depth -= 1
         if not self._task_mode or self._class_depth > 0:
             return node
         return self._wrap_defun(node)
@@ -420,16 +429,22 @@ class Rewriter(ast.NodeTransformer):
         """Wrap a function def with __sb_defun__ for task mode."""
         import copy
 
-        idx = len(self._func_asts)
-        self._func_asts.append(copy.deepcopy(node))
+        if self._func_depth > 0:
+            # Inner function: embed source string (survives cross-turn activation)
+            ast_ref = ast.Constant(value=ast.unparse(node))
+        else:
+            # Top-level function: index into _func_asts
+            idx = len(self._func_asts)
+            self._func_asts.append(copy.deepcopy(node))
+            ast_ref = ast.Constant(value=idx)
 
-        # name = __sb_defun__(name, name_ref, ast_index)
+        # name = __sb_defun__(name, name_ref, ast_ref)
         wrap_call = ast.Call(
             func=ast.Name(id="__sb_defun__", ctx=ast.Load()),
             args=[
                 ast.Constant(value=node.name),
                 ast.Name(id=node.name, ctx=ast.Load()),
-                ast.Constant(value=idx),
+                ast_ref,
             ],
             keywords=[],
         )
