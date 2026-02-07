@@ -1,0 +1,58 @@
+[project]
+name = "sblite"
+version = "0.1.0"
+description = "Lightweight in-process Python sandbox using AST rewriting."
+readme = "README.md"
+license = "MIT"
+authors = [
+    {name = "ashenfad"},
+]
+keywords = ["sandbox", "security", "ast", "python", "runtime"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+requires-python = ">=3.10"
+
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "ruff",
+    "pre-commit",
+    "pytest",
+]
+test = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-timeout",
+]
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+ignore = ["E731"]
+
+[tool.pytest.ini_options]
+pythonpath = [
+  "."
+]
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = {find = {where = ["./"], exclude = ["tests*"]}}
+
+[tool.setuptools.package-data]
+sblite = ["py.typed"]
