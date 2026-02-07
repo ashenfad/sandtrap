@@ -123,16 +123,15 @@ def test_context_var_isolation():
 
 
 def test_net_install_uninstall_roundtrip():
-    """install() then uninstall() restores original socket methods."""
-    from sblite.net.patch import uninstall as uninstall_net
+    """install/uninstall ref counting works correctly."""
+    from sblite.net import patch as net_patch
 
-    # Capture current patched connect
-    patched_connect = socket.socket.connect
+    count_before = net_patch._install_count
 
-    # Uninstall
-    uninstall_net()
-    assert socket.socket.connect is not patched_connect
+    # Extra install increments count
+    net_patch.install()
+    assert net_patch._install_count == count_before + 1
 
-    # Re-install
-    install_net()
-    assert socket.socket.connect is patched_connect
+    # Uninstall decrements back
+    net_patch.uninstall()
+    assert net_patch._install_count == count_before

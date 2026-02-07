@@ -3,7 +3,7 @@
 import threading
 
 from sblite import Policy, Sandbox
-from sblite.errors import SbCancelled, SbTimeout
+from sblite.errors import SbCancelled, SbTickLimit, SbTimeout
 
 
 def test_while_true_times_out():
@@ -127,3 +127,60 @@ for i in range(10_000_000):
 """)
     timer.cancel()
     assert isinstance(result.error, SbCancelled)
+
+
+def test_tick_limit_triggers():
+    """Loop exceeding tick limit raises SbTickLimit."""
+    policy = Policy(tick_limit=50)
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("""\
+for i in range(200):
+    pass
+""")
+    assert isinstance(result.error, SbTickLimit)
+
+
+def test_tick_limit_allows_fast_code():
+    """Short loop under tick limit succeeds."""
+    policy = Policy(tick_limit=1000)
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("""\
+total = 0
+for i in range(10):
+    total += i
+""")
+    assert result.error is None
+    assert result.namespace["total"] == 45
+
+
+def test_tick_count_on_result():
+    """result.ticks reflects the actual checkpoint count."""
+    policy = Policy(timeout=None)
+    sandbox = Sandbox(policy)
+    # A for loop with 5 iterations = 5 ticks from loop body
+    result = sandbox.exec("""\
+for i in range(5):
+    pass
+""")
+    assert result.error is None
+    assert result.ticks == 5
+
+
+def test_tick_limit_none_no_enforcement():
+    """tick_limit=None means no tick enforcement."""
+    policy = Policy(tick_limit=None)
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("""\
+for i in range(10000):
+    pass
+""")
+    assert result.error is None
+    assert result.ticks == 10000
+
+
+def test_comprehension_respects_tick_limit():
+    """Comprehension ticks count against tick_limit."""
+    policy = Policy(tick_limit=50)
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("[i for i in range(200)]")
+    assert isinstance(result.error, SbTickLimit)

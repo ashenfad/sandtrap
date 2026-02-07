@@ -6,6 +6,27 @@ import inspect
 from collections.abc import Sequence
 from typing import Any
 
+from .builtins import _SAFE_EXCEPTIONS, _SAFE_FN_NAMES
+
+_SAFE_BUILTIN_NAMES = set(_SAFE_FN_NAMES) | set(_SAFE_EXCEPTIONS) | {
+    "True", "False", "None", "Ellipsis", "NotImplemented",
+    "print", "getattr", "hasattr", "locals",
+}
+
+
+def _collect_global_names(code: Any) -> set[str]:
+    """Collect co_names from a code object and all nested code objects.
+
+    Generator expressions, comprehensions, and nested functions create
+    separate code objects.  Global names used inside them appear in the
+    nested code's co_names, not the parent's.
+    """
+    names: set[str] = set(code.co_names)
+    for const in code.co_consts:
+        if hasattr(const, "co_names"):
+            names.update(_collect_global_names(const))
+    return names
+
 
 def _extract_names(nodes: Sequence[ast.AST]) -> set[str]:
     """Extract all non-internal Name.id references from AST nodes."""
@@ -33,6 +54,8 @@ class SbFunction:
         self._name = name
         self._compiled = compiled_fn
         self._func_ast = func_ast
+        self._sandbox: Any = None  # set by activate() or auto-activation
+        self._gates: dict[str, Any] | None = None
 
         # Copy plain-data metadata from compiled function
         self.__name__ = name
@@ -60,15 +83,36 @@ class SbFunction:
                 f"SbFunction '{self._name}' is not active "
                 f"-- call activate() with gate functions first"
             )
+        if self._sandbox is not None and self._gates is not None:
+            return self._sandbox._call_in_context(
+                self._compiled, self._gates, args, kwargs
+            )
         return self._compiled(*args, **kwargs)
 
     def __repr__(self) -> str:
         status = "active" if self._compiled is not None else "inactive"
         return f"<SbFunction '{self._name}' ({status})>"
 
+    @property
+    def global_refs(self) -> set[str]:
+        """Names this function references as globals (excluding builtins/gates)."""
+        stored = getattr(self, "_global_ref_names", None)
+        if stored is not None:
+            return set(stored)
+        if self._compiled is not None:
+            return {
+                n for n in _collect_global_names(self._compiled.__code__)
+                if not n.startswith("__sb_")
+                and n not in _SAFE_BUILTIN_NAMES
+                and n != self._name
+            }
+        return set()
+
     def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
         compiled = state.pop("_compiled", None)
+        state.pop("_sandbox", None)
+        state.pop("_gates", None)
 
         # Freeze closure variables from the compiled function
         if compiled is not None and compiled.__closure__:
@@ -84,36 +128,81 @@ class SbFunction:
             if frozen:
                 state["_frozen_closure"] = frozen
 
+        # Freeze global references (SbFunction/SbClass only) and store
+        # all global ref names for introspection via global_refs property
+        if compiled is not None:
+            globs = compiled.__globals__
+            frozen_globals: dict[str, Any] = {}
+            global_ref_names: set[str] = set()
+            for name in _collect_global_names(compiled.__code__):
+                if name.startswith("__sb_"):
+                    continue
+                if name in _SAFE_BUILTIN_NAMES:
+                    continue
+                if name == self._name:
+                    continue
+                global_ref_names.add(name)
+                if name in globs and isinstance(globs[name], (SbFunction, SbClass)):
+                    frozen_globals[name] = globs[name]
+            if frozen_globals:
+                state["_frozen_globals"] = frozen_globals
+            if global_ref_names:
+                state["_global_ref_names"] = global_ref_names
+
         return state
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         self.__dict__.update(state)
         self._compiled = None
+        self._sandbox = None
+        self._gates = None
 
     def activate(
         self,
         gates: dict[str, Any],
         *,
+        sandbox: Any = None,
         namespace: dict[str, Any] | None = None,
     ) -> None:
         """Recompile from stored AST with the given gate functions.
 
         Args:
             gates: Gate function dict (from make_gates).
+            sandbox: Optional Sandbox reference for direct-call context.
             namespace: Optional namespace for globals the function references.
+
+        Namespace priority (lowest to highest):
+            1. Frozen globals (fallback from pickle)
+            2. Caller namespace (late-binding override)
+            3. Frozen closure (value captures, sacred)
+            4. Gates + builtins (always on top)
         """
         from .builtins import SAFE_BUILTINS
 
-        # Build execution namespace
-        ns: dict[str, Any] = dict(namespace or {})
+        ns: dict[str, Any] = {}
+
+        frozen_globals = getattr(self, "_frozen_globals", None)
+        if frozen_globals:
+            ns.update(frozen_globals)
+
+        if namespace:
+            ns.update(namespace)
+
+        frozen_closure = getattr(self, "_frozen_closure", None)
+        if frozen_closure:
+            ns.update(frozen_closure)
+
         ns.update(gates)
         ns["__builtins__"] = dict(SAFE_BUILTINS)
         ns["__name__"] = "__sblite__"
 
-        # Inject frozen closure values (become globals in recompiled code)
-        frozen = getattr(self, "_frozen_closure", None)
-        if frozen:
-            ns.update(frozen)
+        # Auto-activate frozen globals
+        if frozen_globals:
+            for val in frozen_globals.values():
+                if isinstance(val, SbFunction) and val._compiled is None:
+                    val.activate(gates, sandbox=sandbox, namespace=ns)
+                elif isinstance(val, SbClass) and val._compiled_cls is None:
+                    val.activate(gates, sandbox=sandbox, namespace=ns)
 
         # Wrap function AST in a module for compilation
         func_copy = copy.deepcopy(self._func_ast)
@@ -124,6 +213,8 @@ class SbFunction:
         exec(code, ns)  # noqa: S102
 
         self._compiled = ns[self._name]
+        self._sandbox = sandbox
+        self._gates = gates
 
 
 class SbClass:
@@ -145,6 +236,8 @@ class SbClass:
         self._class_ast = class_ast
         self._frozen_refs = frozen_refs or {}
         self._sb_getattr_gate: Any = None
+        self._sandbox: Any = None
+        self._gates: dict[str, Any] | None = None
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         if self._compiled_cls is None:
@@ -152,7 +245,12 @@ class SbClass:
                 f"SbClass '{self._name}' is not active "
                 f"-- call activate() first"
             )
-        instance = self._compiled_cls(*args, **kwargs)
+        if self._sandbox is not None and self._gates is not None:
+            instance = self._sandbox._call_in_context(
+                self._compiled_cls, self._gates, args, kwargs
+            )
+        else:
+            instance = self._compiled_cls(*args, **kwargs)
         return SbInstance(self, instance, self._sb_getattr_gate)
 
     def __mro_entries__(self, bases: tuple) -> tuple:
@@ -178,20 +276,40 @@ class SbClass:
         state = self.__dict__.copy()
         state.pop("_compiled_cls", None)
         state.pop("_sb_getattr_gate", None)
+        state.pop("_sandbox", None)
+        state.pop("_gates", None)
         return state
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         self.__dict__.update(state)
         self._compiled_cls = None
         self._sb_getattr_gate = None
+        self._sandbox = None
+        self._gates = None
 
     def activate(
         self,
         gates: dict[str, Any],
         *,
+        sandbox: Any = None,
         namespace: dict[str, Any] | None = None,
     ) -> None:
         """Recompile class from stored AST with the given gate functions."""
+        if getattr(self, "_activating", False):
+            return  # Guard against circular activation (e.g. mutual base refs)
+        self._activating = True
+        try:
+            self._activate_inner(gates, sandbox=sandbox, namespace=namespace)
+        finally:
+            self._activating = False
+
+    def _activate_inner(
+        self,
+        gates: dict[str, Any],
+        *,
+        sandbox: Any = None,
+        namespace: dict[str, Any] | None = None,
+    ) -> None:
         from .builtins import SAFE_BUILTINS
 
         # Frozen refs first (lowest priority), then caller namespace overrides
@@ -204,12 +322,14 @@ class SbClass:
         ns["__builtins__"] = dict(SAFE_BUILTINS)
         ns["__name__"] = "__sblite__"
 
-        # Auto-activate any frozen SbFunction/SbClass refs
-        for val in ns.values():
-            if isinstance(val, SbFunction) and val._compiled is None:
-                val.activate(gates, namespace=ns)
-            elif isinstance(val, SbClass) and val._compiled_cls is None:
-                val.activate(gates, namespace=ns)
+        # Auto-activate frozen refs only (not the full namespace — that's
+        # the sandbox's job via _auto_activate to avoid ordering issues)
+        if self._frozen_refs:
+            for val in self._frozen_refs.values():
+                if isinstance(val, SbFunction) and val._compiled is None:
+                    val.activate(gates, sandbox=sandbox, namespace=ns)
+                elif isinstance(val, SbClass) and val._compiled_cls is None:
+                    val.activate(gates, sandbox=sandbox, namespace=ns)
 
         class_copy = copy.deepcopy(self._class_ast)
         module = ast.Module(body=[class_copy], type_ignores=[])
@@ -219,6 +339,8 @@ class SbClass:
         exec(code, ns)  # noqa: S102
 
         self._compiled_cls = ns[self._name]
+        self._sandbox = sandbox
+        self._gates = gates
 
 
 class SbInstance:

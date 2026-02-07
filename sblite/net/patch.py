@@ -6,7 +6,7 @@ import threading
 from . import socket as _gated
 
 _lock = threading.Lock()
-_installed = False
+_install_count = 0
 
 _METHODS = [
     "connect",
@@ -42,11 +42,12 @@ _PATCHES = {
 
 
 def install() -> None:
-    """Install network socket patches (idempotent, thread-safe)."""
-    global _installed
+    """Install network socket patches (ref-counted, thread-safe)."""
+    global _install_count
     with _lock:
-        if _installed:
-            return
+        _install_count += 1
+        if _install_count > 1:
+            return  # Already patched
 
         # Store originals
         for name in _METHODS:
@@ -60,15 +61,16 @@ def install() -> None:
         # Install getaddrinfo patch at module level
         socket.getaddrinfo = _gated._p_getaddrinfo
 
-        _installed = True
-
 
 def uninstall() -> None:
-    """Uninstall network socket patches (idempotent, thread-safe)."""
-    global _installed
+    """Uninstall network socket patches (ref-counted, thread-safe)."""
+    global _install_count
     with _lock:
-        if not _installed:
+        if _install_count <= 0:
             return
+        _install_count -= 1
+        if _install_count > 0:
+            return  # Other sandboxes still using patches
 
         for name in _METHODS:
             setattr(socket.socket, name, _gated._originals[name])
@@ -76,4 +78,3 @@ def uninstall() -> None:
 
         _gated._originals.clear()
         _gated._original_getaddrinfo = None
-        _installed = False

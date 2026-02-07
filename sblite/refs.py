@@ -1,6 +1,8 @@
 """Static analysis to find external name references in source code."""
 
 import ast
+from collections.abc import Mapping
+from typing import Any
 
 
 class _ModuleRefAnalyzer(ast.NodeVisitor):
@@ -363,7 +365,38 @@ class _ClassRefAnalyzer(ast.NodeVisitor):
                 self.loaded.add(name)
 
 
-def find_refs(source: str) -> set[str]:
+def _follow_transitive_deps(
+    initial_refs: set[str],
+    namespace: Mapping[str, Any],
+) -> set[str]:
+    """Expand refs by following SbFunction.global_refs transitively."""
+    from .wrappers import SbFunction
+
+    all_refs = set(initial_refs)
+    queue = [name for name in initial_refs if name in namespace]
+    visited: set[str] = set()
+
+    while queue:
+        name = queue.pop()
+        if name in visited:
+            continue
+        visited.add(name)
+
+        val = namespace.get(name)
+        if isinstance(val, SbFunction):
+            for dep in val.global_refs:
+                all_refs.add(dep)
+                if dep not in visited and dep in namespace:
+                    queue.append(dep)
+
+    return all_refs
+
+
+def find_refs(
+    source: str,
+    *,
+    namespace: Mapping[str, Any] | None = None,
+) -> set[str]:
     """Find external names that source code references.
 
     Parses the source and statically determines which names are read from
@@ -371,6 +404,15 @@ def find_refs(source: str) -> set[str]:
 
     1. Lazily deserialize only the state entries the code actually needs.
     2. Use the same set to check for mutations after execution.
+
+    When *namespace* is provided, also follows transitive dependencies
+    through ``SbFunction.global_refs``: if the source references ``A`` and
+    ``A`` is an ``SbFunction`` whose ``global_refs`` include ``B``, then
+    ``B`` is added to the result (and so on recursively).
+
+    *namespace* can be any ``Mapping`` — including lazy containers that
+    deserialize on ``get()``.  The BFS only touches values that are part
+    of the dependency chain, so untouched entries stay serialized.
 
     Returns a set of name strings.  Builtins and ``__sb_*`` internal names
     are excluded.
@@ -384,4 +426,9 @@ def find_refs(source: str) -> set[str]:
     refs.discard("True")
     refs.discard("False")
     refs.discard("None")
-    return {r for r in refs if not r.startswith("__sb_")}
+    refs = {r for r in refs if not r.startswith("__sb_")}
+
+    if namespace is not None:
+        refs = _follow_transitive_deps(refs, namespace)
+
+    return refs

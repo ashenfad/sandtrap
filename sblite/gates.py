@@ -7,7 +7,7 @@ import time
 from contextlib import ExitStack
 from typing import Any
 
-from .errors import SbCancelled, SbTimeout
+from .errors import SbCancelled, SbTickLimit, SbTimeout
 from .policy import Policy
 
 
@@ -118,9 +118,9 @@ def make_gates(
         _vfs_module_cache[module_name] = mod
 
         try:
-            # Parse + rewrite in service mode (no SbFunction/SbClass wrapping)
+            # Parse + rewrite (task mode wraps functions/classes as SbFunction/SbClass)
             tree = _ast.parse(source)
-            rewriter = Rewriter(task_mode=False)
+            rewriter = Rewriter(task_mode=_task_mode)
             tree = rewriter.visit(tree)
             _ast.fix_missing_locations(tree)
             code = compile(tree, f"<sblite:vfs:{module_name}>", "exec")
@@ -129,6 +129,33 @@ def make_gates(
             ns = dict(mod.__dict__)
             ns["__builtins__"] = dict(SAFE_BUILTINS)
             ns.update(gates)
+
+            # Override defun/defclass gates with VFS-specific ones that
+            # reference this rewriter's AST lists (not the main code's)
+            if _task_mode and rewriter._func_asts:
+                vfs_func_asts = rewriter._func_asts
+
+                def _vfs_defun(name: str, compiled_fn: Any, ast_idx: int) -> Any:
+                    from .wrappers import SbFunction
+
+                    return SbFunction(name, compiled_fn, vfs_func_asts[ast_idx])
+
+                ns["__sb_defun__"] = _vfs_defun
+
+            if _task_mode and rewriter._class_asts:
+                vfs_class_asts = rewriter._class_asts
+
+                def _vfs_defclass(
+                    name: str, compiled_cls: Any, ast_idx: int, **frozen_refs: Any
+                ) -> Any:
+                    from .wrappers import SbClass
+
+                    cls_ast = vfs_class_asts[ast_idx]
+                    sb_cls = SbClass(name, compiled_cls, cls_ast, frozen_refs=frozen_refs)
+                    sb_cls._sb_getattr_gate = __sb_getattr__
+                    return sb_cls
+
+                ns["__sb_defclass__"] = _vfs_defclass
 
             # Execute module code
             exec(code, ns)  # noqa: S102
@@ -293,22 +320,37 @@ def make_gates(
         sb_cls._sb_getattr_gate = __sb_getattr__
         return sb_cls
 
+    # Mutable boxes so checkpoint state can be reset for direct calls
+    _tick_counter = [0]
+    _start_time_box = [_start_time]
+    _cancel_flag_box = [_cancel_flag]
+    _memory_box = [_memory_limit_bytes, _start_rss]
+
     def __sb_checkpoint__() -> None:
-        if _cancel_flag is not None and _cancel_flag.is_set():
+        if _cancel_flag_box[0] is not None and _cancel_flag_box[0].is_set():
             raise SbCancelled("Execution cancelled")
-        if _start_time is not None and policy.timeout is not None:
-            if time.monotonic() - _start_time > policy.timeout:
+        _tick_counter[0] += 1
+        if policy.tick_limit is not None and _tick_counter[0] > policy.tick_limit:
+            raise SbTickLimit(
+                f"Execution exceeded {policy.tick_limit} tick limit"
+            )
+        if _start_time_box[0] is not None and policy.timeout is not None:
+            if time.monotonic() - _start_time_box[0] > policy.timeout:
                 raise SbTimeout(
                     f"Execution exceeded {policy.timeout}s timeout"
                 )
-        if _memory_limit_bytes is not None and _start_rss is not None:
+        if _memory_box[0] is not None and _memory_box[1] is not None:
             from .resource_limits import get_rss_bytes
 
-            if get_rss_bytes() - _start_rss > _memory_limit_bytes:
+            if get_rss_bytes() - _memory_box[1] > _memory_box[0]:
                 raise MemoryError(
                     f"Execution exceeded {policy.memory_limit}MB memory limit"
                 )
 
+    gates["__sb_tick_counter__"] = _tick_counter
+    gates["__sb_start_time__"] = _start_time_box
+    gates["__sb_cancel_flag__"] = _cancel_flag_box
+    gates["__sb_memory__"] = _memory_box
     gates.update({
         "__sb_getattr__": __sb_getattr__,
         "__sb_setattr__": __sb_setattr__,

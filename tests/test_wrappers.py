@@ -1,10 +1,13 @@
 """Tests for SbFunction and SbClass wrappers."""
 
 import pickle
+import threading
 
 import pytest
 
-from sblite import Policy, Sandbox, SbClass, SbFunction, SbInstance
+from sblite import Policy, Sandbox
+from sblite.wrappers import SbClass, SbFunction, SbInstance
+from sblite.errors import SbCancelled, SbTickLimit, SbTimeout
 
 
 def test_task_mode_creates_sbfunction():
@@ -500,3 +503,370 @@ eq = p == Pair(4, 6)
     assert result.error is None
     assert result.namespace["s"] == "(4, 6)"
     assert result.namespace["eq"] is True
+
+
+# --- Auto-activation tests ---
+
+
+def test_auto_activate_sbfunction_in_namespace():
+    """Inactive SbFunction passed via namespace is auto-activated by exec()."""
+    policy = Policy()
+    sandbox = Sandbox(policy, mode="task")
+
+    # Define and pickle a function
+    result = sandbox.exec("def inc(x): return x + 1")
+    f = result.namespace["inc"]
+    data = pickle.dumps(f)
+    f2 = pickle.loads(data)
+    assert f2._compiled is None  # Inactive
+
+    # Pass inactive wrapper in namespace — exec should auto-activate it
+    result2 = sandbox.exec("y = inc(10)", namespace={"inc": f2})
+    assert result2.error is None
+    assert result2.namespace["y"] == 11
+
+
+def test_auto_activate_sbclass_in_namespace():
+    """Inactive SbClass passed via namespace is auto-activated by exec()."""
+    policy = Policy()
+    sandbox = Sandbox(policy, mode="task")
+
+    result = sandbox.exec("""\
+class Point:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+    def sum(self):
+        return self.x + self.y
+""")
+    cls = result.namespace["Point"]
+    data = pickle.dumps(cls)
+    cls2 = pickle.loads(data)
+    assert cls2._compiled_cls is None  # Inactive
+
+    result2 = sandbox.exec("p = Point(3, 7)\nr = p.sum()", namespace={"Point": cls2})
+    assert result2.error is None
+    assert result2.namespace["r"] == 10
+
+
+def test_auto_activate_sbinstance_in_namespace():
+    """Inactive SbInstance passed via namespace is auto-activated by exec()."""
+    policy = Policy()
+    sandbox = Sandbox(policy, mode="task")
+
+    result = sandbox.exec("""\
+class Counter:
+    def __init__(self, n):
+        self.n = n
+    def value(self):
+        return self.n
+
+c = Counter(42)
+""")
+    c = result.namespace["c"]
+    data = pickle.dumps(c)
+    c2 = pickle.loads(data)
+
+    result2 = sandbox.exec("v = c.value()", namespace={"c": c2})
+    assert result2.error is None
+    assert result2.namespace["v"] == 42
+
+
+def test_auto_activate_multiple_wrappers():
+    """Multiple inactive wrappers are all auto-activated."""
+    policy = Policy()
+    sandbox = Sandbox(policy, mode="task")
+
+    result = sandbox.exec("""\
+def add(a, b): return a + b
+def mul(a, b): return a * b
+""")
+    add_fn = result.namespace["add"]
+    mul_fn = result.namespace["mul"]
+
+    # Pickle both
+    add2 = pickle.loads(pickle.dumps(add_fn))
+    mul2 = pickle.loads(pickle.dumps(mul_fn))
+
+    result2 = sandbox.exec(
+        "r = add(2, 3) + mul(4, 5)",
+        namespace={"add": add2, "mul": mul2},
+    )
+    assert result2.error is None
+    assert result2.namespace["r"] == 25
+
+
+# --- _call_in_context tests (direct calls with sandbox protections) ---
+
+
+def test_direct_call_enforces_tick_limit():
+    """Direct SbFunction call respects tick_limit via _call_in_context."""
+    policy = Policy(tick_limit=50)
+    sandbox = Sandbox(policy, mode="task")
+
+    result = sandbox.exec("""\
+def count_high():
+    total = 0
+    for i in range(200):
+        total += i
+    return total
+""")
+    assert result.error is None
+    f = result.namespace["count_high"]
+
+    with pytest.raises(SbTickLimit):
+        f()
+
+
+def test_direct_call_enforces_timeout():
+    """Direct SbFunction call respects timeout via _call_in_context."""
+    policy = Policy(timeout=0.1)
+    sandbox = Sandbox(policy, mode="task")
+
+    result = sandbox.exec("""\
+def spin():
+    while True:
+        pass
+""")
+    assert result.error is None
+    f = result.namespace["spin"]
+
+    with pytest.raises(SbTimeout):
+        f()
+
+
+def test_direct_call_enforces_cancellation():
+    """Direct SbFunction call respects cancellation via _call_in_context."""
+    policy = Policy(timeout=10.0)
+    sandbox = Sandbox(policy, mode="task")
+
+    result = sandbox.exec("""\
+def spin():
+    while True:
+        pass
+""")
+    assert result.error is None
+    f = result.namespace["spin"]
+
+    # Cancel from a timer thread after a short delay
+    timer = threading.Timer(0.05, sandbox.cancel)
+    timer.start()
+
+    with pytest.raises(SbCancelled):
+        f()
+    timer.cancel()
+
+
+def test_direct_call_resets_tick_counter():
+    """Each direct call gets a fresh tick counter."""
+    policy = Policy(tick_limit=100)
+    sandbox = Sandbox(policy, mode="task")
+
+    result = sandbox.exec("""\
+def loop50():
+    for i in range(50):
+        pass
+""")
+    assert result.error is None
+    f = result.namespace["loop50"]
+
+    # Both calls should succeed — each starts fresh at 0 ticks
+    f()
+    f()
+
+
+def test_direct_call_sbclass_enforces_tick_limit():
+    """Direct SbClass construction respects tick_limit."""
+    policy = Policy(tick_limit=50)
+    sandbox = Sandbox(policy, mode="task")
+
+    result = sandbox.exec("""\
+class Heavy:
+    def __init__(self):
+        for i in range(200):
+            pass
+""")
+    assert result.error is None
+    cls = result.namespace["Heavy"]
+
+    with pytest.raises(SbTickLimit):
+        cls()
+
+
+def test_direct_call_after_pickle_roundtrip():
+    """Pickled + activated SbFunction gets full sandbox context on direct call."""
+    policy = Policy(tick_limit=50)
+    sandbox = Sandbox(policy, mode="task")
+
+    result = sandbox.exec("""\
+def count_high():
+    for i in range(200):
+        pass
+""")
+    f = result.namespace["count_high"]
+
+    # Pickle round-trip
+    f2 = pickle.loads(pickle.dumps(f))
+    sandbox.activate(f2)
+
+    # Direct call should enforce tick limit
+    with pytest.raises(SbTickLimit):
+        f2()
+
+
+def test_direct_call_succeeds_under_limits():
+    """Direct SbFunction call succeeds when within limits."""
+    policy = Policy(tick_limit=1000, timeout=10.0)
+    sandbox = Sandbox(policy, mode="task")
+
+    result = sandbox.exec("""\
+def compute(n):
+    total = 0
+    for i in range(n):
+        total += i
+    return total
+""")
+    assert result.error is None
+    f = result.namespace["compute"]
+
+    assert f(10) == 45
+    assert f(50) == 1225
+
+
+# --- Frozen globals tests ---
+
+
+def test_frozen_globals_on_pickle():
+    """Global SbFunction deps are frozen on pickle and restored on activate."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    result = sandbox.exec("""\
+def square(x): return x * x
+def sum_squares(lst):
+    return sum(square(x) for x in lst)
+""")
+    assert result.error is None
+    sum_sq = result.namespace["sum_squares"]
+
+    # Pickle only sum_squares (not square)
+    data = pickle.dumps(sum_sq)
+    restored = pickle.loads(data)
+
+    # _frozen_globals should contain square
+    assert hasattr(restored, "_frozen_globals")
+    assert "square" in restored._frozen_globals
+    assert isinstance(restored._frozen_globals["square"], SbFunction)
+
+    # Activate without providing square — frozen globals make it work
+    sandbox.activate(restored)
+    assert restored([1, 2, 3]) == 14
+
+
+def test_frozen_globals_namespace_overrides():
+    """Caller namespace overrides frozen globals (late binding)."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    result = sandbox.exec("""\
+def square(x): return x * x
+def apply(x):
+    return square(x)
+""")
+    assert result.error is None
+    apply_fn = result.namespace["apply"]
+
+    # Pickle and restore
+    restored = pickle.loads(pickle.dumps(apply_fn))
+
+    # Define a different "square" — cubes instead
+    result2 = sandbox.exec("def cube(x): return x * x * x")
+    cube_fn = result2.namespace["cube"]
+
+    # Activate with namespace override
+    sandbox.activate(restored, namespace={"square": cube_fn})
+    # Should use the namespace version (cube), not the frozen one
+    assert restored(3) == 27
+
+
+def test_frozen_globals_closure_wins_over_globals():
+    """Closure vars take priority over frozen globals with the same name."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    result = sandbox.exec("""\
+def helper(x): return x + 100
+
+def make_fn(n):
+    def f(x):
+        return x + n
+    return f
+
+add5 = make_fn(5)
+""")
+    assert result.error is None
+    add5 = result.namespace["add5"]
+
+    # Pickle round-trip
+    restored = pickle.loads(pickle.dumps(add5))
+    sandbox.activate(restored)
+
+    # Closure value n=5 should be preserved
+    assert restored(10) == 15
+
+
+def test_global_refs_property():
+    """global_refs returns names of global references."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    result = sandbox.exec("""\
+def square(x): return x * x
+def sum_squares(lst):
+    return sum(square(x) for x in lst)
+""")
+    assert result.error is None
+    sum_sq = result.namespace["sum_squares"]
+
+    refs = sum_sq.global_refs
+    assert "square" in refs
+
+
+def test_global_refs_property_after_pickle():
+    """global_refs works after pickle round-trip."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    result = sandbox.exec("""\
+def square(x): return x * x
+def sum_squares(lst):
+    return sum(square(x) for x in lst)
+""")
+    assert result.error is None
+    sum_sq = result.namespace["sum_squares"]
+
+    restored = pickle.loads(pickle.dumps(sum_sq))
+    refs = restored.global_refs
+    assert "square" in refs
+
+
+def test_frozen_globals_auto_activate():
+    """Frozen globals are auto-activated when the parent is activated."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    result = sandbox.exec("""\
+def square(x): return x * x
+def sum_squares(lst):
+    return sum(square(x) for x in lst)
+""")
+    assert result.error is None
+    sum_sq = result.namespace["sum_squares"]
+
+    # Pickle and restore only sum_squares
+    restored = pickle.loads(pickle.dumps(sum_sq))
+    assert restored._frozen_globals["square"]._compiled is None  # Inactive
+
+    # Activate sum_squares — should auto-activate frozen square
+    sandbox.activate(restored)
+    assert restored([1, 2, 3, 4]) == 30

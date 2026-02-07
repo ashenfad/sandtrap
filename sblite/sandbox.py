@@ -52,6 +52,7 @@ class ExecResult:
     namespace: dict[str, Any] = field(default_factory=dict)
     stdout: str = ""
     error: BaseException | None = None
+    ticks: int = 0
 
 
 class Sandbox:
@@ -84,6 +85,19 @@ class Sandbox:
             install_net()
 
 
+    def __enter__(self) -> "Sandbox":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        if self.filesystem is not None:
+            from .fs.patch import uninstall as uninstall_fs
+
+            uninstall_fs()
+        if not self.policy.allow_network:
+            from .net.patch import uninstall as uninstall_net
+
+            uninstall_net()
+
     def cancel(self) -> None:
         """Cancel the currently running execution.
 
@@ -92,6 +106,73 @@ class Sandbox:
         function entry).
         """
         self._cancel_flag.set()
+
+    def _auto_activate(
+        self,
+        ns: dict[str, Any],
+        gates: dict[str, Any],
+    ) -> None:
+        """Auto-activate any inactive SbFunction/SbClass/SbInstance in namespace."""
+        from .wrappers import SbClass, SbFunction, SbInstance
+
+        for v in list(ns.values()):
+            if isinstance(v, SbFunction) and v._compiled is None:
+                v.activate(gates, sandbox=self, namespace=ns)
+            elif isinstance(v, SbClass) and v._compiled_cls is None:
+                v.activate(gates, sandbox=self, namespace=ns)
+            elif isinstance(v, SbInstance):
+                sb_class = object.__getattribute__(v, "_sb_class")
+                if sb_class._compiled_cls is None:
+                    sb_class.activate(gates, sandbox=self, namespace=ns)
+                if object.__getattribute__(v, "_sb_instance") is None:
+                    v.activate()
+
+    def _attach_sandbox_refs(
+        self,
+        ns: dict[str, Any],
+        gates: dict[str, Any],
+    ) -> None:
+        """Attach sandbox/gates refs to wrappers that don't have them yet.
+
+        Functions and classes created during exec() need these refs so
+        that direct calls from host code get full sandbox protections.
+        """
+        from .wrappers import SbClass, SbFunction
+
+        for v in ns.values():
+            if isinstance(v, SbFunction) and v._sandbox is None:
+                v._sandbox = self
+                v._gates = gates
+            elif isinstance(v, SbClass) and v._sandbox is None:
+                v._sandbox = self
+                v._gates = gates
+
+    def _call_in_context(
+        self,
+        fn: Any,
+        gates: dict[str, Any],
+        args: tuple,
+        kwargs: dict[str, Any],
+    ) -> Any:
+        """Call a compiled function with full sandbox context.
+
+        Resets checkpoint state (ticks, timeout, memory) and enters
+        the sandbox context (fs/net patches) for the duration of the call.
+        """
+        import time
+
+        # Reset checkpoint state for this call
+        gates["__sb_tick_counter__"][0] = 0
+        gates["__sb_start_time__"][0] = time.monotonic()
+        self._cancel_flag.clear()
+        gates["__sb_cancel_flag__"][0] = self._cancel_flag
+        mem_limit, start_rss = self._memory_params()
+        gates["__sb_memory__"][0] = mem_limit
+        gates["__sb_memory__"][1] = start_rss
+
+        with ExitStack() as stack:
+            self._enter_sandbox_context(stack)
+            return fn(*args, **kwargs)
 
     def _build_namespace(
         self,
@@ -252,7 +333,10 @@ class Sandbox:
         stdout_buf = self._make_stdout_buf()
         ns, injected = self._build_namespace(namespace, gates, stdout_buf)
 
-        # 7. Execute with sandbox context
+        # 7. Auto-activate any inactive wrappers in the namespace
+        self._auto_activate(ns, gates)
+
+        # 8. Execute with sandbox context
         error = None
         with ExitStack() as stack:
             self._enter_sandbox_context(stack)
@@ -263,7 +347,10 @@ class Sandbox:
                     raise  # Real Ctrl-C from host
                 error = strip_internal_frames(e)
 
-        # 8. Build clean result namespace (keep original ns intact for globals)
+        # 9. Attach sandbox refs to newly created wrappers for direct calls
+        self._attach_sandbox_refs(ns, gates)
+
+        # 10. Build clean result namespace (keep original ns intact for globals)
         result_ns = {
             k: v
             for k, v in ns.items()
@@ -272,13 +359,18 @@ class Sandbox:
             and not (k in injected and v is injected[k])
         }
 
-        # 9. Clean up linecache entry
+        # 11. Read tick count
+        tick_counter = gates.get("__sb_tick_counter__")
+        ticks = tick_counter[0] if tick_counter else 0
+
+        # 12. Clean up linecache entry
         linecache.cache.pop(filename, None)
 
         return ExecResult(
             namespace=result_ns,
             stdout=stdout_buf.getvalue(),
             error=error,
+            ticks=ticks,
         )
 
     def activate(
@@ -292,9 +384,9 @@ class Sandbox:
 
         gates = make_gates(self.policy)
         if isinstance(obj, SbFunction):
-            obj.activate(gates, namespace=namespace)
+            obj.activate(gates, sandbox=self, namespace=namespace)
         elif isinstance(obj, SbClass):
-            obj.activate(gates, namespace=namespace)
+            obj.activate(gates, sandbox=self, namespace=namespace)
         elif isinstance(obj, SbInstance):
             sb_class = object.__getattribute__(obj, "_sb_class")
             if sb_class._compiled_cls is None:
@@ -386,6 +478,9 @@ class Sandbox:
         stdout_buf = self._make_stdout_buf()
         ns, injected = self._build_namespace(namespace, gates, stdout_buf)
 
+        # Auto-activate any inactive wrappers in the namespace
+        self._auto_activate(ns, gates)
+
         # Inject locals() under an internal name for the async wrapper
         import builtins as _builtins
         ns["__sb_locals__"] = _builtins.locals
@@ -413,7 +508,10 @@ class Sandbox:
                     raise  # Real Ctrl-C from host
                 error = strip_internal_frames(e)
 
-        # 9. Build result namespace from locals + globals
+        # 9. Attach sandbox refs to newly created wrappers for direct calls
+        self._attach_sandbox_refs(ns, gates)
+
+        # 10. Build result namespace from locals + globals
         result_ns: dict[str, Any] = {}
         # Include globals set by user code
         for k, v in ns.items():
@@ -428,11 +526,16 @@ class Sandbox:
             if not k.startswith("__sb_"):
                 result_ns[k] = v
 
-        # 10. Clean up linecache entry
+        # 11. Read tick count
+        tick_counter = gates.get("__sb_tick_counter__")
+        ticks = tick_counter[0] if tick_counter else 0
+
+        # 12. Clean up linecache entry
         linecache.cache.pop(filename, None)
 
         return ExecResult(
             namespace=result_ns,
             stdout=stdout_buf.getvalue(),
             error=error,
+            ticks=ticks,
         )

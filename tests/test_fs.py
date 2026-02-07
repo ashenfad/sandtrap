@@ -125,21 +125,18 @@ cwd = os.getcwd()
 
 
 def test_fs_install_uninstall_roundtrip():
-    """install() then uninstall() restores original functions."""
-    import builtins
+    """install/uninstall ref counting works correctly."""
+    from sblite.fs import patch as fs_patch
 
-    from sblite.fs.patch import uninstall as uninstall_fs
+    count_before = fs_patch._install_count
 
-    # Capture current patched state
-    patched_open = builtins.open
+    # Extra install increments count
+    fs_patch.install()
+    assert fs_patch._install_count == count_before + 1
 
-    # Uninstall
-    uninstall_fs()
-    assert builtins.open is not patched_open
-
-    # Re-install for remaining tests
-    install_fs()
-    assert builtins.open is patched_open
+    # Uninstall decrements back
+    fs_patch.uninstall()
+    assert fs_patch._install_count == count_before
 
 
 def test_memoryfs_path_normalization():
