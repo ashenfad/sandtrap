@@ -507,6 +507,77 @@ result = "{0.__class__}".format(42)
     assert isinstance(result.error, AttributeError)
 
 
+def test_attributeerror_obj_no_leak_on_policy_block():
+    """Policy-blocked attr raises AttributeError with .obj = None (CVE-2026-0863 pattern)."""
+    policy = Policy()
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("""\
+class Foo:
+    _secret = 42
+f = Foo()
+try:
+    f._secret
+except AttributeError as e:
+    obj_val = getattr(e, 'obj', 'NOT SET')
+""")
+    assert result.error is None
+    assert result.namespace["obj_val"] is None
+
+
+def test_attributeerror_obj_no_escalation():
+    """Even with .obj set, dunder traversal is blocked (CVE-2026-0863 pattern)."""
+    policy = Policy()
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("""\
+class Foo:
+    pass
+f = Foo()
+try:
+    f.nonexistent
+except AttributeError as e:
+    obj = getattr(e, 'obj', None)
+    # Attempt n8n-style escalation: obj -> type -> __subclasses__
+    t = type(obj)
+    try:
+        t.__subclasses__
+        escaped = True
+    except AttributeError:
+        escaped = False
+""")
+    assert result.error is None
+    assert result.namespace["escaped"] is False
+
+
+def test_builtins_frozen():
+    """Sandboxed code cannot mutate __builtins__."""
+    policy = Policy()
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("""\
+try:
+    __builtins__["isinstance"] = lambda obj, cls: True
+    mutated = True
+except TypeError:
+    mutated = False
+""")
+    assert result.error is None
+    assert result.namespace["mutated"] is False
+
+
+def test_builtins_delete_frozen():
+    """Sandboxed code cannot delete from __builtins__."""
+    policy = Policy()
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("""\
+try:
+    del __builtins__["len"]
+    deleted = True
+except TypeError:
+    deleted = False
+""")
+    assert result.error is None
+    assert result.namespace["deleted"] is False
+
+
 def test_negative_timeout_still_runs():
     """Negative timeout doesn't prevent execution."""
     policy = Policy()
