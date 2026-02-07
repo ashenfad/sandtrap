@@ -6,7 +6,7 @@ import pytest
 
 from sblite import MemoryFS, Policy, Sandbox, find_refs
 from sblite.errors import SbTickLimit
-from sblite.wrappers import SbFunction
+from sblite.wrappers import SbFunction, SbInstance
 
 # --- Function pickle + reuse ---
 
@@ -726,3 +726,300 @@ result = adder(multiplier(3, 4), 10)
 """, namespace={"adder": adder, "multiplier": multiplier})
     assert r2.error is None
     assert r2.namespace["result"] == 22  # 3*4 + 10
+
+
+# --- Async multi-turn ---
+
+
+@pytest.mark.asyncio
+async def test_async_function_pickle_across_turns():
+    """Async function defined in turn 1, pickled, called via aexec in turn 2."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    r1 = await sandbox.aexec("""\
+async def double(x):
+    return x * 2
+""")
+    assert r1.error is None
+    assert isinstance(r1.namespace["double"], SbFunction)
+
+    data = pickle.dumps(r1.namespace["double"])
+    restored = pickle.loads(data)
+
+    r2 = await sandbox.aexec(
+        "result = await double(21)",
+        namespace={"double": restored},
+    )
+    assert r2.error is None
+    assert r2.namespace["result"] == 42
+
+
+@pytest.mark.asyncio
+async def test_async_closure_survives_pickle():
+    """Async closure (inner async def) survives pickle across turns."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    r1 = await sandbox.aexec("""\
+def make_async_adder(n):
+    async def add(x):
+        return x + n
+    return add
+add10 = make_async_adder(10)
+""")
+    assert r1.error is None
+    assert isinstance(r1.namespace["add10"], SbFunction)
+
+    data = pickle.dumps(r1.namespace["add10"])
+    restored = pickle.loads(data)
+
+    r2 = await sandbox.aexec(
+        "result = await add10(5)",
+        namespace={"add10": restored},
+    )
+    assert r2.error is None
+    assert r2.namespace["result"] == 15
+
+
+@pytest.mark.asyncio
+async def test_async_calls_sync_dep_across_turns():
+    """Async function calling a sync dep, both pickled across turns."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    r1 = await sandbox.aexec("""\
+def square(x):
+    return x * x
+
+async def sum_squares(lst):
+    total = 0
+    for x in lst:
+        total = total + square(x)
+    return total
+""")
+    assert r1.error is None
+
+    # Pickle only sum_squares — square should be frozen as a global ref
+    data = pickle.dumps(r1.namespace["sum_squares"])
+    restored = pickle.loads(data)
+
+    sandbox.activate(restored)
+    r2 = await sandbox.aexec(
+        "result = await sum_squares([1, 2, 3, 4])",
+        namespace={"sum_squares": restored},
+    )
+    assert r2.error is None
+    assert r2.namespace["result"] == 30
+
+
+@pytest.mark.asyncio
+async def test_sync_calls_async_dep_across_turns():
+    """Sync function defined in turn 2 awaits async fn from turn 1."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    # Turn 1: define async helper
+    r1 = await sandbox.aexec("""\
+async def fetch(x):
+    return x * 10
+""")
+    assert r1.error is None
+
+    fetch = pickle.loads(pickle.dumps(r1.namespace["fetch"]))
+
+    # Turn 2: define async function that uses the turn-1 async helper
+    r2 = await sandbox.aexec("""\
+async def process(items):
+    results = []
+    for item in items:
+        results.append(await fetch(item))
+    return results
+""", namespace={"fetch": fetch})
+    assert r2.error is None
+
+    # Turn 3: use composed function
+    process = pickle.loads(pickle.dumps(r2.namespace["process"]))
+    r3 = await sandbox.aexec(
+        "result = await process([1, 2, 3])",
+        namespace={"process": process, "fetch": fetch},
+    )
+    assert r3.error is None
+    assert r3.namespace["result"] == [10, 20, 30]
+
+
+@pytest.mark.asyncio
+async def test_async_generator_across_turns():
+    """Async generator function pickled and used in turn 2."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    r1 = await sandbox.aexec("""\
+async def arange(start, stop):
+    i = start
+    while i < stop:
+        yield i
+        i += 1
+""")
+    assert r1.error is None
+    assert isinstance(r1.namespace["arange"], SbFunction)
+
+    data = pickle.dumps(r1.namespace["arange"])
+    restored = pickle.loads(data)
+
+    r2 = await sandbox.aexec("""\
+total = 0
+async for x in arange(1, 5):
+    total += x
+""", namespace={"arange": restored})
+    assert r2.error is None
+    assert r2.namespace["total"] == 10  # 1 + 2 + 3 + 4
+
+
+@pytest.mark.asyncio
+async def test_async_decorator_across_turns():
+    """Async decorator pattern: wrapper is async inner function, survives pickle."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    r1 = await sandbox.aexec("""\
+def with_logging(fn):
+    async def wrapper(*args):
+        result = await fn(*args)
+        return ("logged", result)
+    return wrapper
+
+async def compute(x):
+    return x * x
+
+logged_compute = with_logging(compute)
+""")
+    assert r1.error is None
+    assert isinstance(r1.namespace["logged_compute"], SbFunction)
+
+    data = pickle.dumps(r1.namespace["logged_compute"])
+    restored = pickle.loads(data)
+
+    r2 = await sandbox.aexec(
+        "result = await logged_compute(7)",
+        namespace={"logged_compute": restored},
+    )
+    assert r2.error is None
+    assert r2.namespace["result"] == ("logged", 49)
+
+
+@pytest.mark.asyncio
+async def test_async_three_turn_accumulation():
+    """Async state accumulates across three turns with pickle boundaries."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    # Turn 1: define async class + populate
+    r1 = await sandbox.aexec("""\
+class AsyncLog:
+    def __init__(self):
+        self.entries = []
+    async def append(self, msg):
+        self.entries.append(msg)
+    async def get_all(self):
+        return list(self.entries)
+
+log = AsyncLog()
+await log.append("turn1")
+""")
+    assert r1.error is None
+
+    # Turn 2: continue
+    ns2 = {
+        "AsyncLog": pickle.loads(pickle.dumps(r1.namespace["AsyncLog"])),
+        "log": pickle.loads(pickle.dumps(r1.namespace["log"])),
+    }
+    r2 = await sandbox.aexec('await log.append("turn2")', namespace=ns2)
+    assert r2.error is None
+
+    # Turn 3: read
+    ns3 = {"log": pickle.loads(pickle.dumps(r2.namespace["log"]))}
+    r3 = await sandbox.aexec("result = await log.get_all()", namespace=ns3)
+    assert r3.error is None
+    assert r3.namespace["result"] == ["turn1", "turn2"]
+
+
+# --- Regression: getattr gate restored after pickle ---
+
+
+def test_sbinstance_getattr_gate_restored_after_pickle():
+    """Private attrs blocked by policy on SbInstance after pickle round-trip."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    r1 = sandbox.exec("""\
+class Obj:
+    def __init__(self):
+        self.public = 42
+
+o = Obj()
+""")
+    assert r1.error is None
+
+    # Set a private attr on the real instance from host code
+    real = object.__getattribute__(r1.namespace["o"], "_sb_instance")
+    real._secret = "hidden"
+
+    # Before pickle: gate blocks _secret access in sandbox
+    r_check = sandbox.exec("x = o._secret", namespace={
+        "Obj": r1.namespace["Obj"],
+        "o": r1.namespace["o"],
+    })
+    assert isinstance(r_check.error, AttributeError)
+
+    # After pickle round-trip: gate must still block _secret
+    ns2 = {
+        "Obj": pickle.loads(pickle.dumps(r1.namespace["Obj"])),
+        "o": pickle.loads(pickle.dumps(r1.namespace["o"])),
+    }
+    # Public attr works
+    r2 = sandbox.exec("x = o.public", namespace=ns2)
+    assert r2.error is None
+    assert r2.namespace["x"] == 42
+
+    # Private attr still blocked
+    r3 = sandbox.exec("x = o._secret", namespace=ns2)
+    assert isinstance(r3.error, AttributeError)
+
+
+# --- Regression: mutual SbFunction refs don't cause infinite activation ---
+
+
+def test_mutual_sbfunction_refs_no_infinite_loop():
+    """Mutually referencing SbFunctions activate without RecursionError."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    r1 = sandbox.exec("""\
+def is_even(n):
+    if n == 0:
+        return True
+    return is_odd(n - 1)
+
+def is_odd(n):
+    if n == 0:
+        return False
+    return is_even(n - 1)
+""")
+    assert r1.error is None
+
+    # Pickle both — frozen globals create circular refs
+    data_even = pickle.dumps(r1.namespace["is_even"])
+    data_odd = pickle.dumps(r1.namespace["is_odd"])
+
+    is_even = pickle.loads(data_even)
+    is_odd = pickle.loads(data_odd)
+
+    # Activate and use — should not hit RecursionError during activation
+    r2 = sandbox.exec("""\
+result_even = is_even(4)
+result_odd = is_odd(3)
+""", namespace={"is_even": is_even, "is_odd": is_odd})
+    assert r2.error is None
+    assert r2.namespace["result_even"] is True
+    assert r2.namespace["result_odd"] is True
