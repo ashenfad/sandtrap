@@ -135,10 +135,16 @@ def make_gates(
             if _task_mode and rewriter._func_asts:
                 vfs_func_asts = rewriter._func_asts
 
-                def _vfs_defun(name: str, compiled_fn: Any, ast_idx: int) -> Any:
+                def _vfs_defun(name: str, compiled_fn: Any, ast_ref: int | str) -> Any:
                     from .wrappers import SbFunction
 
-                    return SbFunction(name, compiled_fn, vfs_func_asts[ast_idx])
+                    if isinstance(ast_ref, str):
+                        import ast as _ast
+
+                        func_ast = _ast.parse(ast_ref).body[0]
+                    else:
+                        func_ast = vfs_func_asts[ast_ref]
+                    return SbFunction(name, compiled_fn, func_ast)
 
                 ns["__sb_defun__"] = _vfs_defun
 
@@ -300,12 +306,20 @@ def make_gates(
 
         raise ImportError(f"Import of '{module_name}' is not allowed")
 
-    def __sb_defun__(name: str, compiled_fn: Any, ast_idx: int) -> Any:
-        if not _task_mode or _func_asts is None:
+    def __sb_defun__(name: str, compiled_fn: Any, ast_ref: int | str) -> Any:
+        if not _task_mode:
             return compiled_fn
         from .wrappers import SbFunction
 
-        func_ast = _func_asts[ast_idx]
+        if isinstance(ast_ref, str):
+            # Inner function: ast_ref is source string embedded by rewriter
+            import ast as _ast
+
+            func_ast = _ast.parse(ast_ref).body[0]
+        else:
+            if _func_asts is None:
+                return compiled_fn
+            func_ast = _func_asts[ast_ref]
         return SbFunction(name, compiled_fn, func_ast)
 
     def __sb_defclass__(

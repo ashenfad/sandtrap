@@ -638,3 +638,91 @@ def sum_squares(lst):
     r2 = sandbox.exec(source, namespace=ns)
     assert r2.error is None
     assert r2.namespace["result"] == 14  # 1 + 4 + 9
+
+
+# --- Inner functions survive cross-turn activation ---
+
+
+def test_factory_function_across_turns():
+    """Factory with inner function defined in turn 1, called in turn 2."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    r1 = sandbox.exec("""\
+def make_adder(n):
+    def add(x):
+        return x + n
+    return add
+add10 = make_adder(10)
+add20 = make_adder(20)
+""")
+    assert r1.error is None
+
+    # Inner functions are SbFunction (pickleable)
+    assert isinstance(r1.namespace["add10"], SbFunction)
+    assert isinstance(r1.namespace["add20"], SbFunction)
+
+    # Pickle and restore in turn 2
+    add10 = pickle.loads(pickle.dumps(r1.namespace["add10"]))
+    add20 = pickle.loads(pickle.dumps(r1.namespace["add20"]))
+    r2 = sandbox.exec("""\
+result = add10(5) + add20(3)
+""", namespace={"add10": add10, "add20": add20})
+    assert r2.error is None
+    assert r2.namespace["result"] == 38  # 15 + 23
+
+
+def test_decorator_applied_across_turns():
+    """Decorator + decorated function in turn 1, result used in turn 2."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    r1 = sandbox.exec("""\
+def triple(fn):
+    def wrapper(x):
+        return fn(x) * 3
+    return wrapper
+
+def inc(x):
+    return x + 1
+
+tripled = triple(inc)
+""")
+    assert r1.error is None
+    assert isinstance(r1.namespace["tripled"], SbFunction)
+
+    data = pickle.dumps(r1.namespace["tripled"])
+    restored = pickle.loads(data)
+
+    r2 = sandbox.exec("result = tripled(4)", namespace={"tripled": restored})
+    assert r2.error is None
+    assert r2.namespace["result"] == 15  # (4 + 1) * 3
+
+
+def test_nested_factory_across_turns():
+    """Two-level nesting: factory of factories across turns."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    r1 = sandbox.exec("""\
+def make_op(op):
+    def apply(x, y):
+        if op == "add":
+            return x + y
+        elif op == "mul":
+            return x * y
+    return apply
+
+adder = make_op("add")
+multiplier = make_op("mul")
+""")
+    assert r1.error is None
+
+    adder = pickle.loads(pickle.dumps(r1.namespace["adder"]))
+    multiplier = pickle.loads(pickle.dumps(r1.namespace["multiplier"]))
+
+    r2 = sandbox.exec("""\
+result = adder(multiplier(3, 4), 10)
+""", namespace={"adder": adder, "multiplier": multiplier})
+    assert r2.error is None
+    assert r2.namespace["result"] == 22  # 3*4 + 10
