@@ -20,14 +20,11 @@ class _SafeFormatter(_string_mod.Formatter):
     """
 
     def get_field(self, field_name: str, args: Any, kwargs: Any) -> tuple[Any, str]:
-        first, rest = _string_mod._string.formatter_field_name_split(field_name)
-        obj = self.get_value(first, args, kwargs)
-        # Block any attribute (.) or item ([]) traversal
-        for _is_attr, _key in rest:
+        if "." in field_name or "[" in field_name:
             raise AttributeError(
                 "Attribute/item access in format strings is not allowed"
             )
-        return obj, str(first)
+        return super().get_field(field_name, args, kwargs)
 
 
 _safe_formatter = _SafeFormatter()

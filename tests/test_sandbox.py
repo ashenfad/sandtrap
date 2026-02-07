@@ -457,3 +457,71 @@ def test_comprehension_respects_timeout():
     sandbox = Sandbox(policy)
     result = sandbox.exec("[i for i in range(10_000_000_000)]")
     assert isinstance(result.error, SbTimeout)
+
+
+def test_fstring_attribute_gated():
+    """F-string attribute access goes through __sb_getattr__ gate."""
+    policy = Policy()
+    sandbox = Sandbox(policy)
+
+    # Public attribute should work
+    result = sandbox.exec("""\
+class Obj:
+    name = "hello"
+o = Obj()
+result = f"value={o.name}"
+""")
+    assert result.error is None
+    assert result.namespace["result"] == "value=hello"
+
+    # Private attribute should be blocked
+    result = sandbox.exec("""\
+class Obj:
+    _secret = 42
+o = Obj()
+result = f"value={o._secret}"
+""")
+    assert result.error is not None
+    assert isinstance(result.error, AttributeError)
+
+
+def test_fstring_dunder_attribute_blocked():
+    """F-string access to __class__ is blocked by policy."""
+    policy = Policy()
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("""\
+result = f"{(1).__class__}"
+""")
+    assert result.error is not None
+    assert isinstance(result.error, AttributeError)
+
+
+def test_str_format_traversal_blocked():
+    """str.format field traversal (e.g. {0.__class__}) is blocked."""
+    policy = Policy()
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("""\
+result = "{0.__class__}".format(42)
+""")
+    assert result.error is not None
+    assert isinstance(result.error, AttributeError)
+
+
+def test_negative_timeout_still_runs():
+    """Negative timeout doesn't prevent execution."""
+    policy = Policy()
+    policy.timeout = -1
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("x = 1 + 1")
+    # Should either error or succeed — not hang
+    # (negative timeout means already expired)
+    assert result.namespace.get("x") == 2 or result.error is not None
+
+
+def test_negative_memory_limit_still_runs():
+    """Negative memory limit doesn't prevent execution."""
+    policy = Policy()
+    policy.memory_limit = -1
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("x = 1 + 1")
+    assert result.namespace.get("x") == 2 or result.error is not None

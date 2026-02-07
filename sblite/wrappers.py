@@ -3,10 +3,11 @@
 import ast
 import copy
 import inspect
+from collections.abc import Sequence
 from typing import Any
 
 
-def _extract_names(nodes: list[ast.AST]) -> set[str]:
+def _extract_names(nodes: Sequence[ast.AST]) -> set[str]:
     """Extract all non-internal Name.id references from AST nodes."""
     names: set[str] = set()
     for node in nodes:
