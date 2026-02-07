@@ -4,6 +4,7 @@ import ast
 import itertools
 import linecache
 import threading
+import types
 from collections.abc import Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass, field
@@ -162,6 +163,9 @@ class Sandbox:
         print_fn = make_print(stdout_buf)
         ns["print"] = print_fn
         injected["print"] = print_fn
+
+        # Freeze builtins so sandboxed code cannot mutate them
+        ns["__builtins__"] = types.MappingProxyType(ns["__builtins__"])
 
         return ns, injected
 
