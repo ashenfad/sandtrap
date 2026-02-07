@@ -6,8 +6,8 @@ import threading
 import pytest
 
 from sblite import Policy, Sandbox
-from sblite.wrappers import SbClass, SbFunction, SbInstance
 from sblite.errors import SbCancelled, SbTickLimit, SbTimeout
+from sblite.wrappers import SbClass, SbFunction, SbInstance
 
 
 def test_task_mode_creates_sbfunction():
