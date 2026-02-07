@@ -179,6 +179,21 @@ class SbFunction:
             3. Frozen closure (value captures, sacred)
             4. Gates + builtins (always on top)
         """
+        if getattr(self, "_activating", False):
+            return  # Guard against circular activation (e.g. mutual refs)
+        self._activating = True
+        try:
+            self._activate_inner(gates, sandbox=sandbox, namespace=namespace)
+        finally:
+            self._activating = False
+
+    def _activate_inner(
+        self,
+        gates: dict[str, Any],
+        *,
+        sandbox: Any = None,
+        namespace: dict[str, Any] | None = None,
+    ) -> None:
         from .builtins import SAFE_BUILTINS
 
         ns: dict[str, Any] = {}
@@ -344,6 +359,7 @@ class SbClass:
         exec(code, ns)  # noqa: S102
 
         self._compiled_cls = ns[self._name]
+        self._sb_getattr_gate = gates.get("__sb_getattr__")
         self._sandbox = sandbox
         self._gates = gates
 
@@ -428,6 +444,7 @@ class SbInstance:
         frozen = object.__getattribute__(self, "_frozen_attrs")
         instance.__dict__.update(frozen)
         object.__setattr__(self, "_sb_instance", instance)
+        object.__setattr__(self, "_sb_getattr_gate", sb_class._sb_getattr_gate)
 
 
 def _make_dunder_forwarder(name: str):
