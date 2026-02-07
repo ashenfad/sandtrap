@@ -1,7 +1,9 @@
 """Tests for VFS module imports."""
 
+import pickle
 
 from sblite import MemoryFS, Policy, Sandbox
+from sblite.wrappers import SbClass, SbFunction
 
 
 def _make_sandbox(**kwargs):
@@ -380,3 +382,76 @@ def test_relative_import_nonexistent_name():
     assert result.error is not None
     assert isinstance(result.error, ImportError)
     assert "MISSING" in str(result.error)
+
+
+# ------------------------------------------------------------------
+# VFS task mode wrapping
+# ------------------------------------------------------------------
+
+
+def test_vfs_function_is_sbfunction_in_task_mode():
+    """VFS module functions are SbFunction in task mode."""
+    sandbox, fs = _make_sandbox()
+    fs.files["/helpers.py"] = "def double(x): return x * 2"
+
+    result = sandbox.exec("""\
+from helpers import double
+result = double(5)
+""")
+    assert result.error is None
+    assert result.namespace["result"] == 10
+    assert isinstance(result.namespace["double"], SbFunction)
+
+
+def test_vfs_function_is_regular_in_service_mode():
+    """VFS module functions are regular functions in service mode."""
+    sandbox, fs = _make_sandbox(mode="service")
+    fs.files["/helpers.py"] = "def double(x): return x * 2"
+
+    result = sandbox.exec("""\
+from helpers import double
+result = double(5)
+""")
+    assert result.error is None
+    assert result.namespace["result"] == 10
+    assert not isinstance(result.namespace["double"], SbFunction)
+    assert callable(result.namespace["double"])
+
+
+def test_vfs_class_is_sbclass_in_task_mode():
+    """VFS module classes are SbClass in task mode."""
+    sandbox, fs = _make_sandbox()
+    fs.files["/models.py"] = """\
+class Point:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+"""
+
+    result = sandbox.exec("""\
+from models import Point
+p = Point(3, 4)
+result = p.x + p.y
+""")
+    assert result.error is None
+    assert result.namespace["result"] == 7
+    assert isinstance(result.namespace["Point"], SbClass)
+
+
+def test_vfs_function_pickle_roundtrip():
+    """VFS module SbFunction survives pickle round-trip."""
+    sandbox, fs = _make_sandbox(policy=Policy(tick_limit=10_000))
+    fs.files["/helpers.py"] = "def double(x): return x * 2"
+
+    result = sandbox.exec("from helpers import double")
+    assert result.error is None
+    double = result.namespace["double"]
+
+    # Pickle and restore
+    data = pickle.dumps(double)
+    restored = pickle.loads(data)
+    assert isinstance(restored, SbFunction)
+
+    # Activate and call
+    sandbox.activate(restored)
+    assert restored(21) == 42

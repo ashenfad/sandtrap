@@ -19,6 +19,12 @@ class SbCancelled(SbError):
     pass
 
 
+class SbTickLimit(SbError):
+    """Raised when sandbox execution exceeds the configured tick limit."""
+
+    pass
+
+
 class SbValidationError(SbError):
     """Raised when AST validation rejects code before compilation."""
 

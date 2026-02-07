@@ -121,6 +121,7 @@ class Policy:
         memory_limit: int | None = None,
         max_stdout: int | None = None,
         allow_network: bool = False,
+        tick_limit: int | None = None,
     ) -> None:
         self.functions: dict[str, _FnRegistration] = {}
         self.classes: dict[str, _ClsRegistration] = {}
@@ -133,6 +134,7 @@ class Policy:
         self.timeout = timeout
         self.memory_limit = memory_limit  # MB of additional allocation headroom
         self.max_stdout = max_stdout  # max chars of stdout (keeps tail)
+        self.tick_limit = tick_limit  # max checkpoint ticks per execution
 
     def fn(
         self,
@@ -160,7 +162,7 @@ class Policy:
 
     def cls(
         self,
-        cls: type,
+        cls: type | None = None,
         *,
         name: str | None = None,
         constructable: bool = True,
@@ -169,19 +171,26 @@ class Policy:
         configure: dict[str, MemberSpec] | None = None,
         host_fs_access: bool = False,
         network_access: bool = False,
-    ) -> None:
-        """Register a class with member filtering."""
-        cls_name = name or cls.__name__
-        self.classes[cls_name] = _ClsRegistration(
-            cls=cls,
-            name=cls_name,
-            constructable=constructable,
-            include=include,
-            exclude=exclude,
-            configure=configure or {},
-            host_fs_access=host_fs_access,
-            network_access=network_access,
-        )
+    ) -> type | Callable[[type], type]:
+        """Register a class. Usable as @policy.cls or @policy.cls(...)."""
+
+        def _register(c: type) -> type:
+            cls_name = name or c.__name__
+            self.classes[cls_name] = _ClsRegistration(
+                cls=c,
+                name=cls_name,
+                constructable=constructable,
+                include=include,
+                exclude=exclude,
+                configure=configure or {},
+                host_fs_access=host_fs_access,
+                network_access=network_access,
+            )
+            return c
+
+        if cls is not None:
+            return _register(cls)
+        return _register
 
     def module(
         self,

@@ -280,3 +280,87 @@ def test_starred_unpack_binds():
     assert "items" in refs
     assert "first" not in refs
     assert "rest" not in refs
+
+
+# --- Transitive dependency tests ---
+
+
+def test_find_refs_with_namespace_follows_deps():
+    """find_refs with namespace follows SbFunction.global_refs."""
+    from sblite import Policy, Sandbox
+
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    result = sandbox.exec("""\
+def square(x): return x * x
+def sum_squares(lst):
+    return sum(square(x) for x in lst)
+""")
+    assert result.error is None
+    ns = result.namespace
+
+    refs = find_refs("result = sum_squares([1, 2, 3])", namespace=ns)
+    assert "sum_squares" in refs
+    assert "square" in refs  # Discovered transitively
+
+
+def test_find_refs_transitive_chain():
+    """A -> B -> C chain is fully discovered."""
+    from sblite import Policy, Sandbox
+
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    result = sandbox.exec("""\
+def c(x): return x + 1
+def b(x): return c(x) * 2
+def a(x): return b(x) + 10
+""")
+    assert result.error is None
+    ns = result.namespace
+
+    refs = find_refs("result = a(5)", namespace=ns)
+    assert "a" in refs
+    assert "b" in refs
+    assert "c" in refs
+
+
+def test_find_refs_cycle_detection():
+    """Circular deps (A -> B -> A) don't cause infinite loop."""
+    from sblite import Policy, Sandbox
+
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    # Both reference each other as globals (even if it would recurse at runtime)
+    result = sandbox.exec("""\
+def a(x):
+    if x <= 0:
+        return 0
+    return b(x - 1)
+def b(x):
+    if x <= 0:
+        return 0
+    return a(x - 1)
+""")
+    assert result.error is None
+    ns = result.namespace
+
+    refs = find_refs("result = a(5)", namespace=ns)
+    assert "a" in refs
+    assert "b" in refs
+
+
+def test_find_refs_no_namespace_unchanged():
+    """Without namespace, find_refs behaves exactly as before."""
+    refs_without = find_refs("result = f(x)")
+    refs_with_none = find_refs("result = f(x)", namespace=None)
+    assert refs_without == refs_with_none
+    assert refs_without == {"f", "x"}
+
+
+def test_find_refs_namespace_non_sbfunction_ignored():
+    """Plain values in namespace are not followed."""
+    refs = find_refs("result = f(x)", namespace={"f": lambda x: x, "x": 42})
+    assert refs == {"f", "x"}

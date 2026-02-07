@@ -596,3 +596,51 @@ def test_negative_memory_limit_still_runs():
     sandbox = Sandbox(policy)
     result = sandbox.exec("x = 1 + 1")
     assert result.namespace.get("x") == 2 or result.error is not None
+
+
+def test_sandbox_context_manager(sandbox):
+    """Sandbox works as a context manager."""
+    with sandbox as sbx:
+        result = sbx.exec("x = 42")
+        assert result.error is None
+        assert result.namespace["x"] == 42
+
+
+def test_context_manager_cleans_fs_patches():
+    """Context manager decrements fs patch ref count on exit."""
+    from sblite import MemoryFS
+    from sblite.fs import patch as fs_patch
+
+    count_before = fs_patch._install_count
+    fs = MemoryFS()
+    with Sandbox(Policy(), filesystem=fs):
+        assert fs_patch._install_count == count_before + 1
+    assert fs_patch._install_count == count_before
+
+
+def test_context_manager_cleans_net_patches():
+    """Context manager decrements net patch ref count on exit."""
+    from sblite.net import patch as net_patch
+
+    count_before = net_patch._install_count
+    with Sandbox(Policy(allow_network=False)):
+        assert net_patch._install_count == count_before + 1
+    assert net_patch._install_count == count_before
+
+
+def test_overlapping_sandboxes():
+    """Patches survive until the last sandbox exits."""
+    from sblite import MemoryFS
+    from sblite.fs import patch as fs_patch
+
+    fs1 = MemoryFS()
+    fs2 = MemoryFS()
+    count_before = fs_patch._install_count
+    with Sandbox(Policy(), filesystem=fs1):
+        assert fs_patch._install_count == count_before + 1
+        with Sandbox(Policy(), filesystem=fs2):
+            assert fs_patch._install_count == count_before + 2
+        # Inner exited, but outer still active
+        assert fs_patch._install_count == count_before + 1
+    # Both exited
+    assert fs_patch._install_count == count_before

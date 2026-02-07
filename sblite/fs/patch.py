@@ -9,7 +9,7 @@ from typing import Any
 from .context import current_fs
 
 _lock = threading.Lock()
-_installed = False
+_install_count = 0
 _originals: dict[str, Any] = {}
 
 # Recursion guard: prevents re-interception when FS internals do real I/O.
@@ -192,11 +192,12 @@ def _patched_chdir(path: Any) -> None:
 
 
 def install() -> None:
-    """Install filesystem patches (idempotent, thread-safe)."""
-    global _installed
+    """Install filesystem patches (ref-counted, thread-safe)."""
+    global _install_count
     with _lock:
-        if _installed:
-            return
+        _install_count += 1
+        if _install_count > 1:
+            return  # Already patched
 
         # Store originals
         _originals["open"] = builtins.open
@@ -230,15 +231,16 @@ def install() -> None:
         os.getcwd = _patched_getcwd
         os.chdir = _patched_chdir
 
-        _installed = True
-
 
 def uninstall() -> None:
-    """Uninstall filesystem patches (idempotent, thread-safe)."""
-    global _installed
+    """Uninstall filesystem patches (ref-counted, thread-safe)."""
+    global _install_count
     with _lock:
-        if not _installed:
+        if _install_count <= 0:
             return
+        _install_count -= 1
+        if _install_count > 0:
+            return  # Other sandboxes still using patches
 
         builtins.open = _originals["open"]
         os.stat = _originals["stat"]
@@ -256,4 +258,3 @@ def uninstall() -> None:
         os.chdir = _originals["chdir"]
 
         _originals.clear()
-        _installed = False
