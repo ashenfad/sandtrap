@@ -50,7 +50,7 @@ class ExecResult:
 
     namespace: dict[str, Any] = field(default_factory=dict)
     stdout: str = ""
-    error: Exception | None = None
+    error: BaseException | None = None
 
 
 class Sandbox:
@@ -328,7 +328,7 @@ class Sandbox:
                 keywords=[],
             )
         )
-        wrapper = ast.AsyncFunctionDef(
+        wrapper_kwargs: dict[str, Any] = dict(
             name="__sb_aexec__",
             args=ast.arguments(
                 posonlyargs=[],
@@ -341,6 +341,10 @@ class Sandbox:
             decorator_list=[],
             returns=None,
         )
+        # type_params added in Python 3.12
+        if hasattr(ast.AsyncFunctionDef, "type_params"):
+            wrapper_kwargs["type_params"] = []
+        wrapper = ast.AsyncFunctionDef(**wrapper_kwargs)
         tree.body = [wrapper]
 
         # 4. Fix missing locations

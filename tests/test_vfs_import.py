@@ -309,3 +309,74 @@ def test_relative_import_no_vfs_fails():
     result = sandbox.exec("from .foo import bar")
     assert result.error is not None
     assert isinstance(result.error, ImportError)
+
+
+def test_relative_import_from_toplevel():
+    """Relative import from top-level sandbox code resolves against VFS root."""
+    sandbox, fs = _make_sandbox()
+    fs.files["/utils.py"] = "X = 99"
+
+    # Top-level sandbox code has no __file__, so base_dir becomes ""
+    # and ".utils" resolves to "utils" at VFS root
+    result = sandbox.exec("""\
+from .utils import X
+result = X
+""")
+    assert result.error is None
+    assert result.namespace["result"] == 99
+
+
+def test_relative_import_dot_only_from_toplevel():
+    """from . import mod from top-level resolves to VFS root module."""
+    sandbox, fs = _make_sandbox()
+    fs.files["/helpers.py"] = "Y = 7"
+
+    result = sandbox.exec("""\
+from . import helpers
+result = helpers.Y
+""")
+    assert result.error is None
+    assert result.namespace["result"] == 7
+
+
+def test_relative_import_chained():
+    """Relative imports work across multiple levels of VFS modules."""
+    sandbox, fs = _make_sandbox()
+    fs.files["/a/b/c.py"] = "VAL = 1"
+    fs.files["/a/b/d.py"] = """\
+from .c import VAL
+DOUBLED = VAL * 2
+"""
+    fs.files["/a/entry.py"] = """\
+from .b.d import DOUBLED
+RESULT = DOUBLED + 10
+"""
+
+    result = sandbox.exec("""\
+from a import entry
+result = entry.RESULT
+""")
+    assert result.error is None
+    assert result.namespace["result"] == 12
+
+
+def test_relative_import_nonexistent_module():
+    """Relative import of a nonexistent sibling raises ImportError."""
+    sandbox, fs = _make_sandbox()
+    fs.files["/pkg/main.py"] = "from .missing import X"
+
+    result = sandbox.exec("from pkg import main")
+    assert result.error is not None
+    assert isinstance(result.error, ImportError)
+
+
+def test_relative_import_nonexistent_name():
+    """Relative import of a nonexistent name from an existing module."""
+    sandbox, fs = _make_sandbox()
+    fs.files["/pkg/utils.py"] = "X = 1"
+    fs.files["/pkg/main.py"] = "from .utils import MISSING"
+
+    result = sandbox.exec("from pkg import main")
+    assert result.error is not None
+    assert isinstance(result.error, ImportError)
+    assert "MISSING" in str(result.error)

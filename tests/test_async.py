@@ -103,3 +103,34 @@ result = factorial(5)
 """)
     assert result.error is None
     assert result.namespace["result"] == 120
+
+
+@pytest.mark.asyncio
+async def test_async_result_excludes_internals(sandbox):
+    """aexec result namespace doesn't contain __sb_* keys."""
+    result = await sandbox.aexec("x = 42")
+    assert result.error is None
+    assert result.namespace["x"] == 42
+    for key in result.namespace:
+        assert not key.startswith("__sb_"), f"Internal key leaked: {key}"
+
+
+@pytest.mark.asyncio
+async def test_async_cancellation():
+    """Cancelling an async sandbox execution via sandbox.cancel()."""
+    import threading
+
+    from sblite.errors import SbCancelled
+
+    policy = Policy()
+    sandbox = Sandbox(policy)
+
+    # Use a thread because the while loop blocks the event loop
+    timer = threading.Timer(0.05, sandbox.cancel)
+    timer.start()
+    try:
+        result = await sandbox.aexec("while True: pass")
+    finally:
+        timer.cancel()
+    assert result.error is not None
+    assert isinstance(result.error, SbCancelled)

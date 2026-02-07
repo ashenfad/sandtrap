@@ -28,7 +28,8 @@ class _ModuleRefAnalyzer(ast.NodeVisitor):
         inner = _FunctionRefAnalyzer(node)
         self.loaded.update(inner.free)
 
-    visit_AsyncFunctionDef = visit_FunctionDef
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self.visit_FunctionDef(node)  # type: ignore[arg-type]
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         # Decorators and bases are evaluated at module scope
@@ -67,7 +68,8 @@ class _ModuleRefAnalyzer(ast.NodeVisitor):
         self._bind_target(node.target)
         self.generic_visit(node)
 
-    visit_AsyncFor = visit_For
+    def visit_AsyncFor(self, node: ast.AsyncFor) -> None:
+        self.visit_For(node)  # type: ignore[arg-type]
 
     def visit_With(self, node: ast.With) -> None:
         for item in node.items:
@@ -75,7 +77,8 @@ class _ModuleRefAnalyzer(ast.NodeVisitor):
                 self._bind_target(item.optional_vars)
         self.generic_visit(node)
 
-    visit_AsyncWith = visit_With
+    def visit_AsyncWith(self, node: ast.AsyncWith) -> None:
+        self.visit_With(node)  # type: ignore[arg-type]
 
     def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
         if node.name:
@@ -187,7 +190,8 @@ class _FunctionRefAnalyzer(ast.NodeVisitor):
             if name not in self.bound and name not in self.globals:
                 self.loaded.add(name)
 
-    visit_AsyncFunctionDef = visit_FunctionDef
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self.visit_FunctionDef(node)  # type: ignore[arg-type]
 
     def visit_Lambda(self, node: ast.Lambda) -> None:
         inner = _FunctionRefAnalyzer(node)
@@ -214,7 +218,8 @@ class _FunctionRefAnalyzer(ast.NodeVisitor):
         self._bind_target(node.target)
         self.generic_visit(node)
 
-    visit_AsyncFor = visit_For
+    def visit_AsyncFor(self, node: ast.AsyncFor) -> None:
+        self.visit_For(node)  # type: ignore[arg-type]
 
     def visit_With(self, node: ast.With) -> None:
         for item in node.items:
@@ -222,7 +227,8 @@ class _FunctionRefAnalyzer(ast.NodeVisitor):
                 self._bind_target(item.optional_vars)
         self.generic_visit(node)
 
-    visit_AsyncWith = visit_With
+    def visit_AsyncWith(self, node: ast.AsyncWith) -> None:
+        self.visit_With(node)  # type: ignore[arg-type]
 
     def visit_AugAssign(self, node: ast.AugAssign) -> None:
         if isinstance(node.target, ast.Name):
@@ -338,7 +344,8 @@ class _ClassRefAnalyzer(ast.NodeVisitor):
             if name not in self.bound:
                 self.loaded.add(name)
 
-    visit_AsyncFunctionDef = visit_FunctionDef
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self.visit_FunctionDef(node)  # type: ignore[arg-type]
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         for dec in node.decorator_list:

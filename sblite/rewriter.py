@@ -2,8 +2,11 @@
 
 import ast
 import sys
+from typing import TypeVar, cast
 
 from .errors import SbValidationError
+
+_N = TypeVar("_N", bound=ast.AST)
 
 # Names that cannot be assigned to, deleted, or declared global/nonlocal.
 _BLOCKED_NAMES = frozenset({"exec", "eval", "compile", "__import__"})
@@ -21,7 +24,7 @@ class Rewriter(ast.NodeTransformer):
         super().__init__()
         self._tmp_counter = 0
         self._task_mode = task_mode
-        self._func_asts: list[ast.FunctionDef] = []
+        self._func_asts: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
         self._class_asts: list[ast.ClassDef] = []
         self._class_depth = 0
 
@@ -157,9 +160,9 @@ class Rewriter(ast.NodeTransformer):
                 self._emit_target_assign(elt, idx, stmts, loc)
         else:
             # Name, Subscript, etc. — normal assignment
-            target = self.visit(target)
+            visited = cast(ast.expr, self.visit(target))
             stmts.append(
-                ast.copy_location(ast.Assign(targets=[target], value=value), loc)
+                ast.copy_location(ast.Assign(targets=[visited], value=value), loc)
             )
 
     # ------------------------------------------------------------------
@@ -368,12 +371,12 @@ class Rewriter(ast.NodeTransformer):
     # Definitions
     # ------------------------------------------------------------------
 
-    def _prepend_checkpoint(self, node: ast.AST) -> ast.AST:
+    def _prepend_checkpoint(self, node: _N) -> _N:
         """Recurse into node, then insert __sb_checkpoint__() into its body.
 
         Preserves docstrings by inserting after any leading string literal.
         """
-        node = self._recurse(node)
+        node = cast(_N, self._recurse(node))
         checkpoint = ast.copy_location(
             ast.Expr(
                 value=ast.Call(
@@ -384,16 +387,17 @@ class Rewriter(ast.NodeTransformer):
             ),
             node,
         )
-        # Insert after docstring if present
+        # Insert after docstring if present — all callers pass nodes with .body
+        body: list[ast.stmt] = node.body  # type: ignore[attr-defined]
         insert_idx = 0
+        first = body[0] if body else None
         if (
-            node.body
-            and isinstance(node.body[0], ast.Expr)
-            and isinstance(node.body[0].value, ast.Constant)
-            and isinstance(node.body[0].value.value, str)
+            isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)
         ):
             insert_idx = 1
-        node.body.insert(insert_idx, checkpoint)
+        body.insert(insert_idx, checkpoint)
         return node
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST | list[ast.stmt]:
@@ -410,7 +414,9 @@ class Rewriter(ast.NodeTransformer):
             return node
         return self._wrap_defun(node)
 
-    def _wrap_defun(self, node: ast.AST) -> list[ast.stmt]:
+    def _wrap_defun(
+        self, node: ast.FunctionDef | ast.AsyncFunctionDef
+    ) -> list[ast.stmt]:
         """Wrap a function def with __sb_defun__ for task mode."""
         import copy
 
@@ -437,7 +443,7 @@ class Rewriter(ast.NodeTransformer):
     def visit_ClassDef(self, node: ast.ClassDef) -> ast.AST | list[ast.stmt]:
         self._class_depth += 1
         try:
-            node = self._recurse(node)
+            node = cast(ast.ClassDef, self._recurse(node))
         finally:
             self._class_depth -= 1
         if not self._task_mode or self._class_depth > 0:
@@ -631,7 +637,7 @@ class Rewriter(ast.NodeTransformer):
 
     visit_ExceptHandler = _recurse
     def visit_comprehension(self, node: ast.comprehension) -> ast.AST:
-        node = self._recurse(node)
+        node = cast(ast.comprehension, self._recurse(node))
         # Inject checkpoint as an always-true filter: __sb_checkpoint__() or True
         checkpoint = ast.Call(
             func=ast.Name(id="__sb_checkpoint__", ctx=ast.Load()),
