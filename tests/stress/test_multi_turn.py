@@ -5,8 +5,8 @@ import pickle
 import pytest
 
 from sblite import MemoryFS, Policy, Sandbox
-from sblite.wrappers import SbFunction
 from sblite.errors import SbTickLimit
+from sblite.wrappers import SbFunction
 
 # --- Function pickle + reuse ---
 
