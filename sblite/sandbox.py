@@ -125,7 +125,7 @@ class Sandbox:
                 if sb_class._compiled_cls is None:
                     sb_class.activate(gates, sandbox=self, namespace=ns)
                 if object.__getattribute__(v, "_sb_instance") is None:
-                    v.activate()
+                    v.activate(gates=gates, sandbox=self, namespace=ns)
 
     def _attach_sandbox_refs(
         self,
@@ -390,8 +390,8 @@ class Sandbox:
         elif isinstance(obj, SbInstance):
             sb_class = object.__getattribute__(obj, "_sb_class")
             if sb_class._compiled_cls is None:
-                sb_class.activate(gates, namespace=namespace)
-            obj.activate()
+                sb_class.activate(gates, sandbox=self, namespace=namespace)
+            obj.activate(gates=gates, sandbox=self, namespace=namespace)
         else:
             raise TypeError(f"Cannot activate {type(obj).__name__}")
 

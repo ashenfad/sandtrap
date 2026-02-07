@@ -429,10 +429,18 @@ class SbInstance:
         object.__setattr__(self, "_frozen_attrs", state["attrs"])
         object.__setattr__(self, "_sb_getattr_gate", None)
 
-    def activate(self) -> None:
+    def activate(
+        self,
+        *,
+        gates: dict[str, Any] | None = None,
+        sandbox: Any = None,
+        namespace: dict[str, Any] | None = None,
+    ) -> None:
         """Restore the real instance from frozen attrs.
 
         The SbClass must be activated before calling this.
+        When gates/sandbox/namespace are provided, nested SbFunction/SbClass/
+        SbInstance values in frozen attrs are auto-activated.
         """
         sb_class = object.__getattribute__(self, "_sb_class")
         if sb_class._compiled_cls is None:
@@ -442,6 +450,21 @@ class SbInstance:
         cls = sb_class._compiled_cls
         instance = cls.__new__(cls)
         frozen = object.__getattribute__(self, "_frozen_attrs")
+
+        # Auto-activate nested wrappers in frozen attrs
+        if gates is not None:
+            for val in frozen.values():
+                if isinstance(val, SbFunction) and val._compiled is None:
+                    val.activate(gates, sandbox=sandbox, namespace=namespace)
+                elif isinstance(val, SbClass) and val._compiled_cls is None:
+                    val.activate(gates, sandbox=sandbox, namespace=namespace)
+                elif isinstance(val, SbInstance):
+                    nested_class = object.__getattribute__(val, "_sb_class")
+                    if nested_class._compiled_cls is None:
+                        nested_class.activate(gates, sandbox=sandbox, namespace=namespace)
+                    if object.__getattribute__(val, "_sb_instance") is None:
+                        val.activate(gates=gates, sandbox=sandbox, namespace=namespace)
+
         instance.__dict__.update(frozen)
         object.__setattr__(self, "_sb_instance", instance)
         object.__setattr__(self, "_sb_getattr_gate", sb_class._sb_getattr_gate)

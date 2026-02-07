@@ -6,7 +6,7 @@ import pytest
 
 from sblite import MemoryFS, Policy, Sandbox, find_refs
 from sblite.errors import SbTickLimit
-from sblite.wrappers import SbFunction, SbInstance
+from sblite.wrappers import SbClass, SbFunction
 
 # --- Function pickle + reuse ---
 
@@ -1023,3 +1023,488 @@ result_odd = is_odd(3)
     assert r2.error is None
     assert r2.namespace["result_even"] is True
     assert r2.namespace["result_odd"] is True
+
+
+# --- VFS class pickle ---
+
+
+def test_vfs_class_pickle_round_trip():
+    """SbClass imported from VFS survives pickle and works in a later turn."""
+    fs = MemoryFS()
+    fs.files["/shapes.py"] = """\
+class Circle:
+    def __init__(self, r):
+        self.r = r
+    def area(self):
+        return 3.14 * self.r * self.r
+"""
+
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task", filesystem=fs)
+
+    r1 = sandbox.exec("from shapes import Circle")
+    assert r1.error is None
+    assert isinstance(r1.namespace["Circle"], SbClass)
+
+    data = pickle.dumps(r1.namespace["Circle"])
+    restored = pickle.loads(data)
+
+    r2 = sandbox.exec("""\
+c = Circle(5)
+result = c.area()
+""", namespace={"Circle": restored})
+    assert r2.error is None
+    assert abs(r2.namespace["result"] - 78.5) < 0.1
+
+
+def test_vfs_class_method_calls_vfs_function():
+    """VFS class method calling a VFS helper function, pickled across turns."""
+    fs = MemoryFS()
+    fs.files["/lib.py"] = """\
+def clamp(x, lo, hi):
+    if x < lo:
+        return lo
+    if x > hi:
+        return hi
+    return x
+
+class Gauge:
+    def __init__(self, lo, hi):
+        self.lo = lo
+        self.hi = hi
+        self.value = lo
+    def set(self, x):
+        self.value = clamp(x, self.lo, self.hi)
+    def read(self):
+        return self.value
+"""
+
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task", filesystem=fs)
+
+    r1 = sandbox.exec("from lib import Gauge")
+    assert r1.error is None
+
+    # Pickle just the class — clamp is a VFS global, not frozen in class refs
+    data = pickle.dumps(r1.namespace["Gauge"])
+    restored = pickle.loads(data)
+
+    # Provide clamp alongside Gauge so the class body can find it
+    r1b = sandbox.exec("from lib import clamp")
+    assert r1b.error is None
+
+    r2 = sandbox.exec("""\
+g = Gauge(0, 100)
+g.set(150)
+result = g.read()
+""", namespace={
+        "Gauge": restored,
+        "clamp": pickle.loads(pickle.dumps(r1b.namespace["clamp"])),
+    })
+    assert r2.error is None
+    assert r2.namespace["result"] == 100
+
+
+def test_vfs_class_instance_pickle_round_trip():
+    """VFS class instance constructed in VFS, pickled and used in later turn."""
+    fs = MemoryFS()
+    fs.files["/counter.py"] = """\
+class Counter:
+    def __init__(self, start=0):
+        self.n = start
+    def inc(self):
+        self.n += 1
+    def value(self):
+        return self.n
+"""
+
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task", filesystem=fs)
+
+    r1 = sandbox.exec("""\
+from counter import Counter
+c = Counter(10)
+c.inc()
+c.inc()
+""")
+    assert r1.error is None
+
+    ns2 = {
+        "Counter": pickle.loads(pickle.dumps(r1.namespace["Counter"])),
+        "c": pickle.loads(pickle.dumps(r1.namespace["c"])),
+    }
+    r2 = sandbox.exec("""\
+c.inc()
+result = c.value()
+""", namespace=ns2)
+    assert r2.error is None
+    assert r2.namespace["result"] == 13
+
+
+# --- Child class relies on frozen Base ref ---
+
+
+def test_child_class_pickle_without_explicit_base():
+    """Pickle only the child class — Base frozen as a ref, auto-activated."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    r1 = sandbox.exec("""\
+class Base:
+    def greet(self):
+        return "hello"
+
+class Child(Base):
+    def farewell(self):
+        return "bye"
+""")
+    assert r1.error is None
+
+    # Pickle only Child — Base should be captured in frozen_refs
+    data = pickle.dumps(r1.namespace["Child"])
+    restored = pickle.loads(data)
+
+    r2 = sandbox.exec("""\
+c = Child()
+result = c.greet() + " " + c.farewell()
+""", namespace={"Child": restored})
+    assert r2.error is None
+    assert r2.namespace["result"] == "hello bye"
+
+
+# --- Closure SbFunction + global SbFunction both need activation ---
+
+
+def test_closure_and_global_sbfunction_deps():
+    """Function with SbFunction in closure AND a global SbFunction dep."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    r1 = sandbox.exec("""\
+def square(x):
+    return x * x
+
+def make_fn(helper):
+    def f(x):
+        return square(helper(x))
+    return f
+
+def double(x):
+    return x * 2
+
+fn = make_fn(double)
+""")
+    assert r1.error is None
+
+    # fn has: double in closure, square as global ref
+    data = pickle.dumps(r1.namespace["fn"])
+    restored = pickle.loads(data)
+
+    # Activate standalone — both frozen closure (double) and frozen globals (square) needed
+    sandbox.activate(restored)
+    assert restored(3) == 36  # square(double(3)) = square(6) = 36
+
+
+# --- Namespace override vs frozen closure priority ---
+
+
+def test_namespace_cannot_override_frozen_closure():
+    """Frozen closure wins over namespace for same-named value."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    r1 = sandbox.exec("""\
+def make_fn(n):
+    def f(x):
+        return x + n
+    return f
+
+add10 = make_fn(10)
+""")
+    assert r1.error is None
+
+    data = pickle.dumps(r1.namespace["add10"])
+    restored = pickle.loads(data)
+
+    # Try to override "n" via namespace — closure should win
+    r2 = sandbox.exec("result = add10(5)", namespace={
+        "add10": restored,
+        "n": 999,
+    })
+    assert r2.error is None
+    assert r2.namespace["result"] == 15  # 5 + 10, not 5 + 999
+
+
+# --- Deeply nested frozen globals chain ---
+
+
+def test_deep_frozen_globals_chain():
+    """4-level frozen global chain: A -> B -> C -> D, all auto-activated."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    r1 = sandbox.exec("""\
+def d(x): return x + 1
+def c(x): return d(x) * 2
+def b(x): return c(x) + 10
+def a(x): return b(x) * 3
+""")
+    assert r1.error is None
+
+    # Pickle only a — d, c, b should be frozen transitively
+    data = pickle.dumps(r1.namespace["a"])
+    restored = pickle.loads(data)
+
+    sandbox.activate(restored)
+    # a(5) = b(5) * 3 = (c(5) + 10) * 3 = (d(5) * 2 + 10) * 3
+    #       = (6 * 2 + 10) * 3 = 22 * 3 = 66
+    assert restored(5) == 66
+
+
+# --- find_refs with inactive (pickled) SbFunctions ---
+
+
+def test_find_refs_with_pickled_inactive_namespace():
+    """find_refs follows transitive deps through inactive (pickled) SbFunctions."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    r1 = sandbox.exec("""\
+def helper(x): return x + 1
+def process(x): return helper(x) * 2
+def main(x): return process(x) + 100
+""")
+    assert r1.error is None
+
+    # Pickle everything — SbFunctions are inactive (_compiled=None)
+    ns = {k: pickle.loads(pickle.dumps(v))
+          for k, v in r1.namespace.items()
+          if isinstance(v, SbFunction)}
+
+    # find_refs should still discover transitive deps via _global_ref_names
+    refs = find_refs("result = main(5)", namespace=ns)
+    assert "main" in refs
+    assert "process" in refs
+    assert "helper" in refs
+
+
+# --- SbInstance with nested SbInstance in attrs ---
+
+
+def test_nested_sbinstance_in_attrs():
+    """SbInstance whose attrs contain another SbInstance, pickled across turns."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    r1 = sandbox.exec("""\
+class Node:
+    def __init__(self, value, child=None):
+        self.value = value
+        self.child = child
+    def depth_values(self):
+        result = [self.value]
+        if self.child is not None:
+            result = result + self.child.depth_values()
+        return result
+
+leaf = Node("c")
+mid = Node("b", leaf)
+root = Node("a", mid)
+""")
+    assert r1.error is None
+
+    ns2 = {
+        "Node": pickle.loads(pickle.dumps(r1.namespace["Node"])),
+        "root": pickle.loads(pickle.dumps(r1.namespace["root"])),
+    }
+    r2 = sandbox.exec("result = root.depth_values()", namespace=ns2)
+    assert r2.error is None
+    assert r2.namespace["result"] == ["a", "b", "c"]
+
+
+# --- SbFunction stored as instance attribute ---
+
+
+def test_sbfunction_as_instance_attr():
+    """SbInstance with an SbFunction stored as an attribute, pickled across turns."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    r1 = sandbox.exec("""\
+def double(x):
+    return x * 2
+
+class Processor:
+    def __init__(self, fn):
+        self.fn = fn
+    def run(self, x):
+        return self.fn(x)
+
+p = Processor(double)
+""")
+    assert r1.error is None
+
+    ns2 = {
+        "Processor": pickle.loads(pickle.dumps(r1.namespace["Processor"])),
+        "p": pickle.loads(pickle.dumps(r1.namespace["p"])),
+        "double": pickle.loads(pickle.dumps(r1.namespace["double"])),
+    }
+    r2 = sandbox.exec("result = p.run(21)", namespace=ns2)
+    assert r2.error is None
+    assert r2.namespace["result"] == 42
+
+
+# --- SbInstance dunder protocols after pickle ---
+
+
+def test_sbinstance_dunder_protocols_after_pickle():
+    """Dunder protocol methods (__len__, __getitem__, etc.) work after pickle."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    r1 = sandbox.exec("""\
+class MyList:
+    def __init__(self):
+        self.items = []
+    def append(self, x):
+        self.items.append(x)
+    def __len__(self):
+        return len(self.items)
+    def __getitem__(self, idx):
+        return self.items[idx]
+    def __contains__(self, x):
+        return x in self.items
+    def __iter__(self):
+        return iter(self.items)
+
+ml = MyList()
+ml.append(10)
+ml.append(20)
+ml.append(30)
+""")
+    assert r1.error is None
+
+    ns2 = {
+        "MyList": pickle.loads(pickle.dumps(r1.namespace["MyList"])),
+        "ml": pickle.loads(pickle.dumps(r1.namespace["ml"])),
+    }
+    r2 = sandbox.exec("""\
+length = len(ml)
+first = ml[0]
+has_20 = 20 in ml
+collected = [x for x in ml]
+""", namespace=ns2)
+    assert r2.error is None
+    assert r2.namespace["length"] == 3
+    assert r2.namespace["first"] == 10
+    assert r2.namespace["has_20"] is True
+    assert r2.namespace["collected"] == [10, 20, 30]
+
+
+# --- Direct SbClass construction after pickle ---
+
+
+def test_direct_sbclass_construction_after_pickle():
+    """SbClass constructed via direct call (not sandbox.exec) after pickle."""
+    policy = Policy(tick_limit=100)
+    sandbox = Sandbox(policy, mode="task")
+
+    r1 = sandbox.exec("""\
+class Adder:
+    def __init__(self, n):
+        self.n = n
+    def add(self, x):
+        return self.n + x
+""")
+    assert r1.error is None
+
+    data = pickle.dumps(r1.namespace["Adder"])
+    Adder = pickle.loads(data)
+
+    # Activate and call directly from host code
+    sandbox.activate(Adder)
+    instance = Adder(10)
+    assert instance.add(5) == 15
+
+
+# --- Async: SbClass pickled alone, construct + await in later turn ---
+
+
+@pytest.mark.asyncio
+async def test_async_class_pickle_and_construct_later():
+    """Async SbClass methods work after class-only pickle and later construction."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    r1 = await sandbox.aexec("""\
+class AsyncCalc:
+    def __init__(self, base):
+        self.base = base
+    async def compute(self, x):
+        return self.base + x * x
+""")
+    assert r1.error is None
+
+    data = pickle.dumps(r1.namespace["AsyncCalc"])
+    restored = pickle.loads(data)
+
+    r2 = await sandbox.aexec("""\
+c = AsyncCalc(100)
+result = await c.compute(5)
+""", namespace={"AsyncCalc": restored})
+    assert r2.error is None
+    assert r2.namespace["result"] == 125
+
+
+# --- Async fn with sync SbFunction in closure ---
+
+
+@pytest.mark.asyncio
+async def test_async_fn_with_sync_closure_dep():
+    """Async function captures a sync SbFunction in closure, pickled across turns."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    r1 = await sandbox.aexec("""\
+def square(x):
+    return x * x
+
+def make_async_mapper(fn):
+    async def mapper(items):
+        return [fn(x) for x in items]
+    return mapper
+
+async_square = make_async_mapper(square)
+""")
+    assert r1.error is None
+    assert isinstance(r1.namespace["async_square"], SbFunction)
+
+    data = pickle.dumps(r1.namespace["async_square"])
+    restored = pickle.loads(data)
+
+    r2 = await sandbox.aexec(
+        "result = await async_square([1, 2, 3, 4])",
+        namespace={"async_square": restored},
+    )
+    assert r2.error is None
+    assert r2.namespace["result"] == [1, 4, 9, 16]
+
+
+# --- Double activation ---
+
+
+def test_double_activation_no_crash():
+    """Activating the same SbFunction twice doesn't crash or corrupt state."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    r1 = sandbox.exec("def add(a, b): return a + b")
+    assert r1.error is None
+
+    fn = pickle.loads(pickle.dumps(r1.namespace["add"]))
+
+    # Activate twice
+    sandbox.activate(fn)
+    assert fn(1, 2) == 3
+    sandbox.activate(fn)
+    assert fn(3, 4) == 7
