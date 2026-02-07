@@ -99,7 +99,7 @@ class SbFunction:
         stored = getattr(self, "_global_ref_names", None)
         if stored is not None:
             return set(stored)
-        if self._compiled is not None:
+        if self._compiled is not None and hasattr(self._compiled, "__code__"):
             return {
                 n for n in _collect_global_names(self._compiled.__code__)
                 if not n.startswith("__sb_")
@@ -115,7 +115,8 @@ class SbFunction:
         state.pop("_gates", None)
 
         # Freeze closure variables from the compiled function
-        if compiled is not None and compiled.__closure__:
+        # (skip if _compiled is a wrapper like SbFunction, not a raw function)
+        if compiled is not None and hasattr(compiled, "__closure__") and compiled.__closure__:
             freevars = compiled.__code__.co_freevars
             frozen: dict[str, Any] = {}
             for name, cell in zip(freevars, compiled.__closure__):
@@ -130,7 +131,8 @@ class SbFunction:
 
         # Freeze global references (SbFunction/SbClass only) and store
         # all global ref names for introspection via global_refs property
-        if compiled is not None:
+        # (skip if _compiled is a wrapper like SbFunction, not a raw function)
+        if compiled is not None and hasattr(compiled, "__globals__"):
             globs = compiled.__globals__
             frozen_globals: dict[str, Any] = {}
             global_ref_names: set[str] = set()
@@ -196,13 +198,14 @@ class SbFunction:
         ns["__builtins__"] = dict(SAFE_BUILTINS)
         ns["__name__"] = "__sblite__"
 
-        # Auto-activate frozen globals
-        if frozen_globals:
-            for val in frozen_globals.values():
-                if isinstance(val, SbFunction) and val._compiled is None:
-                    val.activate(gates, sandbox=sandbox, namespace=ns)
-                elif isinstance(val, SbClass) and val._compiled_cls is None:
-                    val.activate(gates, sandbox=sandbox, namespace=ns)
+        # Auto-activate frozen globals and frozen closure values
+        for source in (frozen_globals, frozen_closure):
+            if source:
+                for val in source.values():
+                    if isinstance(val, SbFunction) and val._compiled is None:
+                        val.activate(gates, sandbox=sandbox, namespace=ns)
+                    elif isinstance(val, SbClass) and val._compiled_cls is None:
+                        val.activate(gates, sandbox=sandbox, namespace=ns)
 
         # Wrap function AST in a module for compilation
         func_copy = copy.deepcopy(self._func_ast)
@@ -322,10 +325,12 @@ class SbClass:
         ns["__builtins__"] = dict(SAFE_BUILTINS)
         ns["__name__"] = "__sblite__"
 
-        # Auto-activate frozen refs only (not the full namespace — that's
-        # the sandbox's job via _auto_activate to avoid ordering issues)
+        # Auto-activate frozen ref deps — use the values from ns (which
+        # may be namespace overrides of frozen refs) so the compiled class
+        # sees the activated version.
         if self._frozen_refs:
-            for val in self._frozen_refs.values():
+            for name in self._frozen_refs:
+                val = ns.get(name)
                 if isinstance(val, SbFunction) and val._compiled is None:
                     val.activate(gates, sandbox=sandbox, namespace=ns)
                 elif isinstance(val, SbClass) and val._compiled_cls is None:

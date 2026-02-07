@@ -4,7 +4,7 @@ import pickle
 
 import pytest
 
-from sblite import MemoryFS, Policy, Sandbox
+from sblite import MemoryFS, Policy, Sandbox, find_refs
 from sblite.errors import SbTickLimit
 from sblite.wrappers import SbFunction
 
@@ -423,3 +423,218 @@ def dot(xs, ys):
     )
     assert r2.error is None
     assert r2.namespace["result"] == 32  # 1*4 + 2*5 + 3*6
+
+
+# --- Error recovery across turns ---
+
+
+def test_error_in_turn_does_not_corrupt_prior_state():
+    """Turn 2 errors, but turn 1 state is still usable in turn 3."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    # Turn 1: define function
+    r1 = sandbox.exec("def double(x): return x * 2")
+    assert r1.error is None
+    data = pickle.dumps(r1.namespace["double"])
+
+    # Turn 2: error
+    fn = pickle.loads(data)
+    r2 = sandbox.exec("result = double(1) + oops", namespace={"double": fn})
+    assert r2.error is not None
+
+    # Turn 3: prior state still works
+    fn2 = pickle.loads(data)
+    r3 = sandbox.exec("result = double(21)", namespace={"double": fn2})
+    assert r3.error is None
+    assert r3.namespace["result"] == 42
+
+
+# --- Function redefinition across turns ---
+
+
+def test_redefine_function_across_turns():
+    """Turn 1 defines f, turn 2 redefines f, turn 3 uses new f."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    # Turn 1: original
+    r1 = sandbox.exec("def transform(x): return x * 2")
+    assert r1.error is None
+    data1 = pickle.dumps(r1.namespace["transform"])
+
+    # Turn 2: redefine with different logic
+    r2 = sandbox.exec("def transform(x): return x * x")
+    assert r2.error is None
+    data2 = pickle.dumps(r2.namespace["transform"])
+
+    # Turn 3: uses the new definition
+    fn = pickle.loads(data2)
+    r3 = sandbox.exec("result = transform(5)", namespace={"transform": fn})
+    assert r3.error is None
+    assert r3.namespace["result"] == 25  # x*x, not x*2
+
+    # Original still works independently
+    fn_old = pickle.loads(data1)
+    r4 = sandbox.exec("result = transform(5)", namespace={"transform": fn_old})
+    assert r4.error is None
+    assert r4.namespace["result"] == 10  # x*2
+
+
+# --- Class method evolution via subclass ---
+
+
+def test_subclass_overrides_method_across_turns():
+    """Turn 1 defines base, turn 2 defines subclass with override, both pickle."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    # Turn 1: base class
+    r1 = sandbox.exec("""\
+class Shape:
+    def area(self):
+        return 0
+    def describe(self):
+        return "shape"
+""")
+    assert r1.error is None
+
+    # Turn 2: subclass overrides area
+    ns2 = {"Shape": pickle.loads(pickle.dumps(r1.namespace["Shape"]))}
+    r2 = sandbox.exec("""\
+class Circle(Shape):
+    def __init__(self, r):
+        self.r = r
+    def area(self):
+        return 3.14 * self.r * self.r
+""", namespace=ns2)
+    assert r2.error is None
+
+    # Turn 3: use subclass
+    ns3 = {
+        "Circle": pickle.loads(pickle.dumps(r2.namespace["Circle"])),
+        "Shape": pickle.loads(pickle.dumps(r1.namespace["Shape"])),
+    }
+    r3 = sandbox.exec("""\
+c = Circle(10)
+a = c.area()
+d = c.describe()
+""", namespace=ns3)
+    assert r3.error is None
+    assert abs(r3.namespace["a"] - 314.0) < 0.1
+    assert r3.namespace["d"] == "shape"  # inherited
+
+
+# --- Instance from a later turn ---
+
+
+def test_instance_constructed_in_later_turn():
+    """Class defined turn 1, instance built turn 2, used turn 3."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    # Turn 1: define class only
+    r1 = sandbox.exec("""\
+class Bag:
+    def __init__(self):
+        self.items = []
+    def add(self, x):
+        self.items.append(x)
+    def contents(self):
+        return list(self.items)
+""")
+    assert r1.error is None
+
+    # Turn 2: construct and populate
+    ns2 = {"Bag": pickle.loads(pickle.dumps(r1.namespace["Bag"]))}
+    r2 = sandbox.exec("""\
+b = Bag()
+b.add("alpha")
+b.add("beta")
+""", namespace=ns2)
+    assert r2.error is None
+
+    # Turn 3: use instance from turn 2 (without the class)
+    ns3 = {"b": pickle.loads(pickle.dumps(r2.namespace["b"]))}
+    r3 = sandbox.exec("result = b.contents()", namespace=ns3)
+    assert r3.error is None
+    assert r3.namespace["result"] == ["alpha", "beta"]
+
+
+# --- Higher-order functions across turns ---
+
+
+def test_higher_order_function_result_survives_pickle():
+    """Apply a decorator in turn 1, pickle the result, use in turn 2."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    # Turn 1: define decorator, apply it, pickle the result
+    r1 = sandbox.exec("""\
+def triple(fn):
+    def wrapper(x):
+        return fn(x) * 3
+    return wrapper
+
+def inc(x):
+    return x + 1
+
+tripled_inc = triple(inc)
+""")
+    assert r1.error is None
+
+    # Pickle the composed result
+    data = pickle.dumps(r1.namespace["tripled_inc"])
+    restored = pickle.loads(data)
+
+    # Turn 2: use the composed function
+    r2 = sandbox.exec("result = tripled_inc(4)", namespace={"tripled_inc": restored})
+    assert r2.error is None
+    assert r2.namespace["result"] == 15  # (4 + 1) * 3
+
+
+# --- Selective restore via find_refs ---
+
+
+def test_selective_restore_via_find_refs():
+    """Large namespace, only subset restored via find_refs, still works."""
+    policy = Policy(tick_limit=10_000)
+    sandbox = Sandbox(policy, mode="task")
+
+    # Turn 1: define many functions
+    r1 = sandbox.exec("""\
+def add(a, b): return a + b
+def mul(a, b): return a * b
+def sub(a, b): return a - b
+def div(a, b): return a / b
+def square(x): return mul(x, x)
+def cube(x): return mul(x, mul(x, x))
+def sum_squares(lst):
+    return add(0, sum(square(x) for x in lst))
+""")
+    assert r1.error is None
+
+    # Pickle everything
+    pickled = {k: pickle.dumps(v) for k, v in r1.namespace.items()
+               if isinstance(v, SbFunction)}
+
+    # Turn 2: only need sum_squares — use find_refs to discover deps
+    source = "result = sum_squares([1, 2, 3])"
+    all_pickled = {k: pickle.loads(v) for k, v in pickled.items()}
+    refs = find_refs(source, namespace=all_pickled)
+
+    # Should discover sum_squares, square, mul, add (transitive)
+    assert "sum_squares" in refs
+    assert "square" in refs
+    assert "mul" in refs
+    assert "add" in refs
+    # Should NOT include unneeded functions
+    assert "sub" not in refs
+    assert "div" not in refs
+    assert "cube" not in refs
+
+    # Restore only what's needed
+    ns = {k: pickle.loads(pickled[k]) for k in refs if k in pickled}
+    r2 = sandbox.exec(source, namespace=ns)
+    assert r2.error is None
+    assert r2.namespace["result"] == 14  # 1 + 4 + 9
