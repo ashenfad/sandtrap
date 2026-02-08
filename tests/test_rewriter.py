@@ -208,3 +208,23 @@ def test_relative_import_parent_passes_level():
     """Parent-level relative imports are rewritten with _level keyword."""
     tree = _rewrite("from ..foo import bar")
     assert isinstance(tree, ast.Module)
+
+
+def test_block_del_method():
+    """__del__ methods in classes are rejected."""
+    with pytest.raises(SbValidationError, match="__del__ methods are not allowed"):
+        _rewrite("""\
+class Foo:
+    def __del__(self):
+        pass
+""")
+
+
+def test_block_async_del_method():
+    """async __del__ methods are also rejected."""
+    with pytest.raises(SbValidationError, match="__del__ methods are not allowed"):
+        _rewrite("""\
+class Foo:
+    async def __del__(self):
+        pass
+""")
