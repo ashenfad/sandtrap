@@ -66,7 +66,7 @@ class Sandbox:
         self,
         policy: Policy,
         *,
-        mode: Literal["task", "service"] = "task",
+        mode: Literal["wrapped", "raw"] = "wrapped",
         filesystem: FileSystem | None = None,
     ) -> None:
         self.policy = policy
@@ -292,8 +292,8 @@ class Sandbox:
             return ExecResult(error=e)
 
         # 2. Rewrite (validate + transform)
-        task_mode = self.mode == "task"
-        rewriter = Rewriter(task_mode=task_mode)
+        wrapped_mode = self.mode == "wrapped"
+        rewriter = Rewriter(wrapped_mode=wrapped_mode)
         tree = rewriter.visit(tree)
 
         # 3. Fix missing locations
@@ -323,9 +323,9 @@ class Sandbox:
             self.policy,
             _start_time=time.monotonic(),
             _cancel_flag=self._cancel_flag,
-            _func_asts=rewriter._func_asts if task_mode else None,
-            _class_asts=rewriter._class_asts if task_mode else None,
-            _task_mode=task_mode,
+            _func_asts=rewriter._func_asts if wrapped_mode else None,
+            _class_asts=rewriter._class_asts if wrapped_mode else None,
+            _wrapped_mode=wrapped_mode,
             _memory_limit_bytes=mem_limit_bytes,
             _start_rss=start_rss,
             _filesystem=self.filesystem,
@@ -412,8 +412,8 @@ class Sandbox:
             return ExecResult(error=e)
 
         # 2. Rewrite (validate + transform)
-        task_mode = self.mode == "task"
-        rewriter = Rewriter(task_mode=task_mode)
+        wrapped_mode = self.mode == "wrapped"
+        rewriter = Rewriter(wrapped_mode=wrapped_mode)
         tree = rewriter.visit(tree)
 
         # 3. Wrap body in: async def __sb_aexec__(): ...; return __sb_locals__()
@@ -468,9 +468,9 @@ class Sandbox:
             self.policy,
             _start_time=time.monotonic(),
             _cancel_flag=self._cancel_flag,
-            _func_asts=rewriter._func_asts if task_mode else None,
-            _class_asts=rewriter._class_asts if task_mode else None,
-            _task_mode=task_mode,
+            _func_asts=rewriter._func_asts if wrapped_mode else None,
+            _class_asts=rewriter._class_asts if wrapped_mode else None,
+            _wrapped_mode=wrapped_mode,
             _memory_limit_bytes=mem_limit_bytes,
             _start_rss=start_rss,
             _filesystem=self.filesystem,

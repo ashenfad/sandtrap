@@ -385,12 +385,12 @@ def test_relative_import_nonexistent_name():
 
 
 # ------------------------------------------------------------------
-# VFS task mode wrapping
+# VFS wrapped mode wrapping
 # ------------------------------------------------------------------
 
 
-def test_vfs_function_is_sbfunction_in_task_mode():
-    """VFS module functions are SbFunction in task mode."""
+def test_vfs_function_is_sbfunction_in_wrapped_mode():
+    """VFS module functions are SbFunction in wrapped mode."""
     sandbox, fs = _make_sandbox()
     fs.files["/helpers.py"] = "def double(x): return x * 2"
 
@@ -403,9 +403,9 @@ result = double(5)
     assert isinstance(result.namespace["double"], SbFunction)
 
 
-def test_vfs_function_is_regular_in_service_mode():
-    """VFS module functions are regular functions in service mode."""
-    sandbox, fs = _make_sandbox(mode="service")
+def test_vfs_function_is_regular_in_raw_mode():
+    """VFS module functions are regular functions in raw mode."""
+    sandbox, fs = _make_sandbox(mode="raw")
     fs.files["/helpers.py"] = "def double(x): return x * 2"
 
     result = sandbox.exec("""\
@@ -418,8 +418,8 @@ result = double(5)
     assert callable(result.namespace["double"])
 
 
-def test_vfs_class_is_sbclass_in_task_mode():
-    """VFS module classes are SbClass in task mode."""
+def test_vfs_class_is_sbclass_in_wrapped_mode():
+    """VFS module classes are SbClass in wrapped mode."""
     sandbox, fs = _make_sandbox()
     fs.files["/models.py"] = """\
 class Point:

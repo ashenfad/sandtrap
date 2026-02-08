@@ -61,7 +61,7 @@ def make_gates(
     _cancel_flag: threading.Event | None = None,
     _func_asts: list | None = None,
     _class_asts: list | None = None,
-    _task_mode: bool = False,
+    _wrapped_mode: bool = False,
     _memory_limit_bytes: int | None = None,
     _start_rss: int | None = None,
     _filesystem: Any = None,
@@ -118,9 +118,9 @@ def make_gates(
         _vfs_module_cache[module_name] = mod
 
         try:
-            # Parse + rewrite (task mode wraps functions/classes as SbFunction/SbClass)
+            # Parse + rewrite (wrapped mode wraps functions/classes as SbFunction/SbClass)
             tree = _ast.parse(source)
-            rewriter = Rewriter(task_mode=_task_mode)
+            rewriter = Rewriter(wrapped_mode=_wrapped_mode)
             tree = rewriter.visit(tree)
             _ast.fix_missing_locations(tree)
             code = compile(tree, f"<sblite:vfs:{module_name}>", "exec")
@@ -132,7 +132,7 @@ def make_gates(
 
             # Override defun/defclass gates with VFS-specific ones that
             # reference this rewriter's AST lists (not the main code's)
-            if _task_mode and rewriter._func_asts:
+            if _wrapped_mode and rewriter._func_asts:
                 vfs_func_asts = rewriter._func_asts
 
                 def _vfs_defun(name: str, compiled_fn: Any, ast_ref: int | str) -> Any:
@@ -140,15 +140,16 @@ def make_gates(
 
                     if isinstance(ast_ref, str):
                         import ast as _ast
+                        from typing import cast
 
-                        func_ast = _ast.parse(ast_ref).body[0]
+                        func_ast = cast(_ast.FunctionDef, _ast.parse(ast_ref).body[0])
                     else:
                         func_ast = vfs_func_asts[ast_ref]
                     return SbFunction(name, compiled_fn, func_ast)
 
                 ns["__sb_defun__"] = _vfs_defun
 
-            if _task_mode and rewriter._class_asts:
+            if _wrapped_mode and rewriter._class_asts:
                 vfs_class_asts = rewriter._class_asts
 
                 def _vfs_defclass(
@@ -307,15 +308,16 @@ def make_gates(
         raise ImportError(f"Import of '{module_name}' is not allowed")
 
     def __sb_defun__(name: str, compiled_fn: Any, ast_ref: int | str) -> Any:
-        if not _task_mode:
+        if not _wrapped_mode:
             return compiled_fn
         from .wrappers import SbFunction
 
         if isinstance(ast_ref, str):
             # Inner function: ast_ref is source string embedded by rewriter
             import ast as _ast
+            from typing import cast
 
-            func_ast = _ast.parse(ast_ref).body[0]
+            func_ast = cast(_ast.FunctionDef, _ast.parse(ast_ref).body[0])
         else:
             if _func_asts is None:
                 return compiled_fn
@@ -325,7 +327,7 @@ def make_gates(
     def __sb_defclass__(
         name: str, compiled_cls: Any, ast_idx: int, **frozen_refs: Any
     ) -> Any:
-        if not _task_mode or _class_asts is None:
+        if not _wrapped_mode or _class_asts is None:
             return compiled_cls
         from .wrappers import SbClass
 

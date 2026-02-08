@@ -14,7 +14,7 @@ from sblite.wrappers import SbClass, SbFunction
 def test_function_pickle_and_call_in_second_turn():
     """Define fn in turn 1, pickle, use in turn 2."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     # Turn 1
     r1 = sandbox.exec("def double(x): return x * 2")
@@ -31,7 +31,7 @@ def test_function_pickle_and_call_in_second_turn():
 def test_closure_survives_pickle():
     """Closure variable frozen across pickle boundary."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     r1 = sandbox.exec("""\
 def make_adder(n):
@@ -52,7 +52,7 @@ add10 = make_adder(10)
 def test_multiple_functions_across_turns():
     """Multiple functions defined in turn 1, all used in turn 2."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     r1 = sandbox.exec("""\
 def add(a, b): return a + b
@@ -73,7 +73,7 @@ def sub(a, b): return a - b
 def test_function_defined_in_turn2_uses_turn1_fn():
     """Turn 2 defines a new function that calls a turn 1 function."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     r1 = sandbox.exec("def square(x): return x * x")
     assert r1.error is None
@@ -94,7 +94,7 @@ result = sum_of_squares(3, 4)
 def test_class_pickle_and_construct_in_second_turn():
     """Define class in turn 1, pickle, construct in turn 2."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     r1 = sandbox.exec("""\
 class Counter:
@@ -122,7 +122,7 @@ result = c.value()
 def test_instance_pickle_across_turns():
     """Construct instance in turn 1, pickle, use in turn 2."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     r1 = sandbox.exec("""\
 class Accum:
@@ -152,7 +152,7 @@ result = a.value()
 def test_class_with_inheritance_across_turns():
     """Base + derived class both pickle and work in turn 2."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     r1 = sandbox.exec("""\
 class Base:
@@ -183,7 +183,7 @@ result = c.greet() + " " + c.farewell()
 def test_function_operating_on_class_across_turns():
     """Turn 1 defines class + function, turn 2 uses both."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     r1 = sandbox.exec("""\
 class Point:
@@ -215,7 +215,7 @@ result = distance(a, b)
 def test_three_turn_accumulation():
     """State accumulates across three turns."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     # Turn 1: define
     r1 = sandbox.exec("""\
@@ -252,7 +252,7 @@ s.add("turn1")
 def test_function_evolution_across_turns():
     """Turn 1 defines helper, turn 2 defines fn using it, turn 3 calls it."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     # Turn 1
     r1 = sandbox.exec("def square(x): return x * x")
@@ -282,7 +282,7 @@ def sum_squares(lst):
 def test_direct_call_after_pickle_has_sandbox_context():
     """Pickled + auto-activated fn gets sandbox protections on direct call."""
     policy = Policy(tick_limit=100)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     r1 = sandbox.exec("""\
 def spin():
@@ -307,7 +307,7 @@ def spin():
 def test_function_self_contained_after_pickle():
     """Pickled function works standalone via frozen globals."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     r1 = sandbox.exec("""\
 def square(x): return x * x
@@ -328,7 +328,7 @@ def sum_squares(lst):
 def test_frozen_globals_override_by_namespace():
     """Namespace-provided dep overrides frozen global."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     r1 = sandbox.exec("""\
 def square(x): return x * x
@@ -364,12 +364,12 @@ def apply(x):
 
 
 def test_vfs_module_function_survives_pickle():
-    """VFS module function (SbFunction in task mode) survives pickle."""
+    """VFS module function (SbFunction in wrapped mode) survives pickle."""
     fs = MemoryFS()
     fs.files["/mathlib.py"] = "def double(x): return x * 2"
 
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task", filesystem=fs)
+    sandbox = Sandbox(policy, mode="wrapped", filesystem=fs)
 
     # Turn 1: import from VFS and define function that uses it
     r1 = sandbox.exec("""\
@@ -398,7 +398,7 @@ def mul(a, b): return a * b
 """
 
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task", filesystem=fs)
+    sandbox = Sandbox(policy, mode="wrapped", filesystem=fs)
 
     # Turn 1: import + define
     r1 = sandbox.exec("""\
@@ -431,7 +431,7 @@ def dot(xs, ys):
 def test_error_in_turn_does_not_corrupt_prior_state():
     """Turn 2 errors, but turn 1 state is still usable in turn 3."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     # Turn 1: define function
     r1 = sandbox.exec("def double(x): return x * 2")
@@ -456,7 +456,7 @@ def test_error_in_turn_does_not_corrupt_prior_state():
 def test_redefine_function_across_turns():
     """Turn 1 defines f, turn 2 redefines f, turn 3 uses new f."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     # Turn 1: original
     r1 = sandbox.exec("def transform(x): return x * 2")
@@ -487,7 +487,7 @@ def test_redefine_function_across_turns():
 def test_subclass_overrides_method_across_turns():
     """Turn 1 defines base, turn 2 defines subclass with override, both pickle."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     # Turn 1: base class
     r1 = sandbox.exec("""\
@@ -531,7 +531,7 @@ d = c.describe()
 def test_instance_constructed_in_later_turn():
     """Class defined turn 1, instance built turn 2, used turn 3."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     # Turn 1: define class only
     r1 = sandbox.exec("""\
@@ -567,7 +567,7 @@ b.add("beta")
 def test_higher_order_function_result_survives_pickle():
     """Apply a decorator in turn 1, pickle the result, use in turn 2."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     # Turn 1: define decorator, apply it, pickle the result
     r1 = sandbox.exec("""\
@@ -599,7 +599,7 @@ tripled_inc = triple(inc)
 def test_selective_restore_via_find_refs():
     """Large namespace, only subset restored via find_refs, still works."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     # Turn 1: define many functions
     r1 = sandbox.exec("""\
@@ -646,7 +646,7 @@ def sum_squares(lst):
 def test_factory_function_across_turns():
     """Factory with inner function defined in turn 1, called in turn 2."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     r1 = sandbox.exec("""\
 def make_adder(n):
@@ -675,7 +675,7 @@ result = add10(5) + add20(3)
 def test_decorator_applied_across_turns():
     """Decorator + decorated function in turn 1, result used in turn 2."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     r1 = sandbox.exec("""\
 def triple(fn):
@@ -702,7 +702,7 @@ tripled = triple(inc)
 def test_nested_factory_across_turns():
     """Two-level nesting: factory of factories across turns."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     r1 = sandbox.exec("""\
 def make_op(op):
@@ -735,7 +735,7 @@ result = adder(multiplier(3, 4), 10)
 async def test_async_function_pickle_across_turns():
     """Async function defined in turn 1, pickled, called via aexec in turn 2."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     r1 = await sandbox.aexec("""\
 async def double(x):
@@ -759,7 +759,7 @@ async def double(x):
 async def test_async_closure_survives_pickle():
     """Async closure (inner async def) survives pickle across turns."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     r1 = await sandbox.aexec("""\
 def make_async_adder(n):
@@ -786,7 +786,7 @@ add10 = make_async_adder(10)
 async def test_async_calls_sync_dep_across_turns():
     """Async function calling a sync dep, both pickled across turns."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     r1 = await sandbox.aexec("""\
 def square(x):
@@ -817,7 +817,7 @@ async def sum_squares(lst):
 async def test_sync_calls_async_dep_across_turns():
     """Sync function defined in turn 2 awaits async fn from turn 1."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     # Turn 1: define async helper
     r1 = await sandbox.aexec("""\
@@ -852,7 +852,7 @@ async def process(items):
 async def test_async_generator_across_turns():
     """Async generator function pickled and used in turn 2."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     r1 = await sandbox.aexec("""\
 async def arange(start, stop):
@@ -880,7 +880,7 @@ async for x in arange(1, 5):
 async def test_async_decorator_across_turns():
     """Async decorator pattern: wrapper is async inner function, survives pickle."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     r1 = await sandbox.aexec("""\
 def with_logging(fn):
@@ -912,7 +912,7 @@ logged_compute = with_logging(compute)
 async def test_async_three_turn_accumulation():
     """Async state accumulates across three turns with pickle boundaries."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     # Turn 1: define async class + populate
     r1 = await sandbox.aexec("""\
@@ -950,7 +950,7 @@ await log.append("turn1")
 def test_sbinstance_getattr_gate_restored_after_pickle():
     """Private attrs blocked by policy on SbInstance after pickle round-trip."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     r1 = sandbox.exec("""\
 class Obj:
@@ -993,7 +993,7 @@ o = Obj()
 def test_mutual_sbfunction_refs_no_infinite_loop():
     """Mutually referencing SbFunctions activate without RecursionError."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     r1 = sandbox.exec("""\
 def is_even(n):
@@ -1040,7 +1040,7 @@ class Circle:
 """
 
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task", filesystem=fs)
+    sandbox = Sandbox(policy, mode="wrapped", filesystem=fs)
 
     r1 = sandbox.exec("from shapes import Circle")
     assert r1.error is None
@@ -1080,7 +1080,7 @@ class Gauge:
 """
 
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task", filesystem=fs)
+    sandbox = Sandbox(policy, mode="wrapped", filesystem=fs)
 
     r1 = sandbox.exec("from lib import Gauge")
     assert r1.error is None
@@ -1119,7 +1119,7 @@ class Counter:
 """
 
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task", filesystem=fs)
+    sandbox = Sandbox(policy, mode="wrapped", filesystem=fs)
 
     r1 = sandbox.exec("""\
 from counter import Counter
@@ -1147,7 +1147,7 @@ result = c.value()
 def test_child_class_pickle_without_explicit_base():
     """Pickle only the child class — Base frozen as a ref, auto-activated."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     r1 = sandbox.exec("""\
 class Base:
@@ -1178,7 +1178,7 @@ result = c.greet() + " " + c.farewell()
 def test_closure_and_global_sbfunction_deps():
     """Function with SbFunction in closure AND a global SbFunction dep."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     r1 = sandbox.exec("""\
 def square(x):
@@ -1211,7 +1211,7 @@ fn = make_fn(double)
 def test_namespace_cannot_override_frozen_closure():
     """Frozen closure wins over namespace for same-named value."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     r1 = sandbox.exec("""\
 def make_fn(n):
@@ -1241,7 +1241,7 @@ add10 = make_fn(10)
 def test_deep_frozen_globals_chain():
     """4-level frozen global chain: A -> B -> C -> D, all auto-activated."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     r1 = sandbox.exec("""\
 def d(x): return x + 1
@@ -1267,7 +1267,7 @@ def a(x): return b(x) * 3
 def test_find_refs_with_pickled_inactive_namespace():
     """find_refs follows transitive deps through inactive (pickled) SbFunctions."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     r1 = sandbox.exec("""\
 def helper(x): return x + 1
@@ -1294,7 +1294,7 @@ def main(x): return process(x) + 100
 def test_nested_sbinstance_in_attrs():
     """SbInstance whose attrs contain another SbInstance, pickled across turns."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     r1 = sandbox.exec("""\
 class Node:
@@ -1328,7 +1328,7 @@ root = Node("a", mid)
 def test_sbfunction_as_instance_attr():
     """SbInstance with an SbFunction stored as an attribute, pickled across turns."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     r1 = sandbox.exec("""\
 def double(x):
@@ -1360,7 +1360,7 @@ p = Processor(double)
 def test_sbinstance_dunder_protocols_after_pickle():
     """Dunder protocol methods (__len__, __getitem__, etc.) work after pickle."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     r1 = sandbox.exec("""\
 class MyList:
@@ -1407,7 +1407,7 @@ collected = [x for x in ml]
 def test_direct_sbclass_construction_after_pickle():
     """SbClass constructed via direct call (not sandbox.exec) after pickle."""
     policy = Policy(tick_limit=100)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     r1 = sandbox.exec("""\
 class Adder:
@@ -1434,7 +1434,7 @@ class Adder:
 async def test_async_class_pickle_and_construct_later():
     """Async SbClass methods work after class-only pickle and later construction."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     r1 = await sandbox.aexec("""\
 class AsyncCalc:
@@ -1463,7 +1463,7 @@ result = await c.compute(5)
 async def test_async_fn_with_sync_closure_dep():
     """Async function captures a sync SbFunction in closure, pickled across turns."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     r1 = await sandbox.aexec("""\
 def square(x):
@@ -1496,7 +1496,7 @@ async_square = make_async_mapper(square)
 def test_double_activation_no_crash():
     """Activating the same SbFunction twice doesn't crash or corrupt state."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     r1 = sandbox.exec("def add(a, b): return a + b")
     assert r1.error is None

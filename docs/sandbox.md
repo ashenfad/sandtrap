@@ -12,7 +12,7 @@ sandbox = Sandbox(policy)
 ```
 
 Options:
-- `mode` -- `"task"` (default) wraps user-defined functions/classes for pickling. `"service"` returns raw objects.
+- `mode` -- `"wrapped"` (default) wraps user-defined functions/classes for pickling. `"raw"` returns plain objects. See [serialization.md](serialization.md).
 - `filesystem` -- a `FileSystem` implementation for VFS interception (see [filesystem.md](filesystem.md)).
 
 ## Context manager
@@ -117,7 +117,7 @@ assert isinstance(result.error, SbCancelled)
 
 ## Reactivation
 
-See [task-mode.md](task-mode.md) for `sandbox.activate()`.
+See [serialization.md](serialization.md) for `sandbox.activate()`.
 
 ## Static analysis
 
@@ -141,4 +141,4 @@ refs = find_refs("result = process(data)", namespace=state)
 
 The namespace can be a lazy container that deserializes on `get()` -- only values in the dependency chain are touched.
 
-See [task-mode.md](task-mode.md) for details.
+See [serialization.md](serialization.md) for details.
