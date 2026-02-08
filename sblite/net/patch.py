@@ -1,4 +1,9 @@
-"""Thread-safe installation of network socket patches."""
+"""Installation of network socket patches.
+
+Patches are installed once and remain active for the process lifetime.
+They are inert when network access is allowed (``network_allowed`` is
+``True``, the default), falling through to the original methods.
+"""
 
 import socket
 import threading
@@ -6,7 +11,7 @@ import threading
 from . import socket as _gated
 
 _lock = threading.Lock()
-_install_count = 0
+_installed = False
 
 _METHODS = [
     "connect",
@@ -42,12 +47,11 @@ _PATCHES = {
 
 
 def install() -> None:
-    """Install network socket patches (ref-counted, thread-safe)."""
-    global _install_count
+    """Install network socket patches (idempotent, permanent)."""
+    global _installed
     with _lock:
-        _install_count += 1
-        if _install_count > 1:
-            return  # Already patched
+        if _installed:
+            return
 
         # Store originals
         for name in _METHODS:
@@ -61,20 +65,4 @@ def install() -> None:
         # Install getaddrinfo patch at module level
         socket.getaddrinfo = _gated._p_getaddrinfo
 
-
-def uninstall() -> None:
-    """Uninstall network socket patches (ref-counted, thread-safe)."""
-    global _install_count
-    with _lock:
-        if _install_count <= 0:
-            return
-        _install_count -= 1
-        if _install_count > 0:
-            return  # Other sandboxes still using patches
-
-        for name in _METHODS:
-            setattr(socket.socket, name, _gated._originals[name])
-        socket.getaddrinfo = _gated._original_getaddrinfo
-
-        _gated._originals.clear()
-        _gated._original_getaddrinfo = None
+        _installed = True

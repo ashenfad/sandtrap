@@ -606,41 +606,44 @@ def test_sandbox_context_manager(sandbox):
         assert result.namespace["x"] == 42
 
 
-def test_context_manager_cleans_fs_patches():
-    """Context manager decrements fs patch ref count on exit."""
+def test_fs_patches_installed_permanently():
+    """FS patches are installed once and remain active."""
     from sblite import MemoryFS
     from sblite.fs import patch as fs_patch
 
-    count_before = fs_patch._install_count
     fs = MemoryFS()
     with Sandbox(Policy(), filesystem=fs):
-        assert fs_patch._install_count == count_before + 1
-    assert fs_patch._install_count == count_before
+        assert fs_patch._installed
+    # Patches remain after exit
+    assert fs_patch._installed
 
 
-def test_context_manager_cleans_net_patches():
-    """Context manager decrements net patch ref count on exit."""
+def test_net_patches_installed_permanently():
+    """Net patches are installed once and remain active."""
     from sblite.net import patch as net_patch
 
-    count_before = net_patch._install_count
     with Sandbox(Policy(allow_network=False)):
-        assert net_patch._install_count == count_before + 1
-    assert net_patch._install_count == count_before
+        assert net_patch._installed
+    # Patches remain after exit
+    assert net_patch._installed
 
 
 def test_overlapping_sandboxes():
-    """Patches survive until the last sandbox exits."""
+    """Overlapping sandboxes each see their own filesystem."""
     from sblite import MemoryFS
-    from sblite.fs import patch as fs_patch
 
     fs1 = MemoryFS()
+    fs1.files["/a.txt"] = "from fs1"
     fs2 = MemoryFS()
-    count_before = fs_patch._install_count
-    with Sandbox(Policy(), filesystem=fs1):
-        assert fs_patch._install_count == count_before + 1
-        with Sandbox(Policy(), filesystem=fs2):
-            assert fs_patch._install_count == count_before + 2
-        # Inner exited, but outer still active
-        assert fs_patch._install_count == count_before + 1
-    # Both exited
-    assert fs_patch._install_count == count_before
+    fs2.files["/a.txt"] = "from fs2"
+
+    sandbox1 = Sandbox(Policy(), filesystem=fs1)
+    sandbox2 = Sandbox(Policy(), filesystem=fs2)
+
+    r1 = sandbox1.exec("f = open('/a.txt'); content = f.read(); f.close()")
+    assert r1.error is None
+    assert r1.namespace["content"] == "from fs1"
+
+    r2 = sandbox2.exec("f = open('/a.txt'); content = f.read(); f.close()")
+    assert r2.error is None
+    assert r2.namespace["content"] == "from fs2"

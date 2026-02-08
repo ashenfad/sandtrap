@@ -124,19 +124,16 @@ cwd = os.getcwd()
     assert result.namespace["cwd"] == os.getcwd()
 
 
-def test_fs_install_uninstall_roundtrip():
-    """install/uninstall ref counting works correctly."""
+def test_fs_install_idempotent():
+    """install() is idempotent -- calling it twice is safe."""
     from sblite.fs import patch as fs_patch
 
-    count_before = fs_patch._install_count
-
-    # Extra install increments count
     fs_patch.install()
-    assert fs_patch._install_count == count_before + 1
+    assert fs_patch._installed
 
-    # Uninstall decrements back
-    fs_patch.uninstall()
-    assert fs_patch._install_count == count_before
+    # Second call is a no-op
+    fs_patch.install()
+    assert fs_patch._installed
 
 
 def test_memoryfs_path_normalization():

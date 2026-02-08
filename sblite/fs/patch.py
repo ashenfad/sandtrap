@@ -1,4 +1,9 @@
-"""Thread-safe installation of filesystem patches."""
+"""Installation of filesystem patches.
+
+Patches are installed once and remain active for the process lifetime.
+They are inert when no sandbox filesystem is active (``current_fs`` is
+``None``), falling through to the original functions transparently.
+"""
 
 import builtins
 import contextvars
@@ -9,7 +14,7 @@ from typing import Any
 from .context import current_fs
 
 _lock = threading.Lock()
-_install_count = 0
+_installed = False
 _originals: dict[str, Any] = {}
 
 # Recursion guard: prevents re-interception when FS internals do real I/O.
@@ -192,12 +197,11 @@ def _patched_chdir(path: Any) -> None:
 
 
 def install() -> None:
-    """Install filesystem patches (ref-counted, thread-safe)."""
-    global _install_count
+    """Install filesystem patches (idempotent, permanent)."""
+    global _installed
     with _lock:
-        _install_count += 1
-        if _install_count > 1:
-            return  # Already patched
+        if _installed:
+            return
 
         # Store originals
         _originals["open"] = builtins.open
@@ -231,30 +235,4 @@ def install() -> None:
         os.getcwd = _patched_getcwd
         os.chdir = _patched_chdir
 
-
-def uninstall() -> None:
-    """Uninstall filesystem patches (ref-counted, thread-safe)."""
-    global _install_count
-    with _lock:
-        if _install_count <= 0:
-            return
-        _install_count -= 1
-        if _install_count > 0:
-            return  # Other sandboxes still using patches
-
-        builtins.open = _originals["open"]
-        os.stat = _originals["stat"]
-        os.lstat = _originals["lstat"]
-        os.listdir = _originals["listdir"]
-        os.path.exists = _originals["exists"]
-        os.path.isfile = _originals["isfile"]
-        os.path.isdir = _originals["isdir"]
-        os.mkdir = _originals["mkdir"]
-        os.makedirs = _originals["makedirs"]
-        os.remove = _originals["remove"]
-        os.unlink = _originals["unlink"]
-        os.rename = _originals["rename"]
-        os.getcwd = _originals["getcwd"]
-        os.chdir = _originals["chdir"]
-
-        _originals.clear()
+        _installed = True
