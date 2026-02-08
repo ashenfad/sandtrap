@@ -59,6 +59,31 @@ class _ModuleRegistration:
     network_access: bool = False
 
 
+# Interpreter-internal attributes that don't start with underscore but
+# expose frames, code objects, and execution internals.  Blocked by default
+# to prevent sandboxed code from reaching the execution namespace (e.g.
+# via generator.gi_frame.f_globals) and tampering with gate functions.
+BLOCKED_INTERNAL_ATTRS = frozenset(
+    {
+        # Generator / coroutine / async-generator frame & code access
+        "gi_frame",
+        "gi_code",
+        "gi_yieldfrom",
+        "cr_frame",
+        "cr_code",
+        "cr_origin",
+        "ag_frame",
+        "ag_code",
+        "ag_await",
+        # Frame internals
+        "f_globals",
+        "f_locals",
+        "f_builtins",
+        "f_code",
+        "f_back",
+    }
+)
+
 # Default dunders accessible in sandboxed code
 DEFAULT_ALLOWED_DUNDERS = frozenset(
     {
@@ -244,6 +269,9 @@ class Policy:
                     return False
                 return True
 
+        # Interpreter-internal attrs (frames, code objects, etc.)
+        if attr in BLOCKED_INTERNAL_ATTRS:
+            return False
         # Default dunder check
         if attr.startswith("__") and attr.endswith("__"):
             return attr in DEFAULT_ALLOWED_DUNDERS
@@ -343,9 +371,7 @@ class Policy:
         include_pred = _make_predicate(reg.include)
         exclude_pred = _make_predicate(reg.exclude)
         if not include_pred(member_name) or exclude_pred(member_name):
-            raise ImportError(
-                f"'{member_name}' is not available from '{module_name}'"
-            )
+            raise ImportError(f"'{member_name}' is not available from '{module_name}'")
 
         # Get the member from the actual module object
         module_obj = self.resolve_module(module_name)
