@@ -125,7 +125,9 @@ def make_gates(
 
             # Build namespace with same gates
             ns = dict(mod.__dict__)
-            ns["__builtins__"] = make_safe_builtins(__sb_getattr__)
+            ns["__builtins__"] = make_safe_builtins(
+                __sb_getattr__, checkpoint=__sb_checkpoint__
+            )
             ns.update(gates)
 
             # Override defun/defclass gates with VFS-specific ones that
