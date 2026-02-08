@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from ._traceback import strip_internal_frames
-from .builtins import SAFE_BUILTINS, TailBuffer, make_print, make_safe_locals
+from .builtins import TailBuffer, make_print, make_safe_builtins
 from .fs.protocol import FileSystem
 from .gates import _wrap_privileged, make_gates
 from .policy import Policy
@@ -181,31 +181,9 @@ class Sandbox:
         ns: dict[str, Any] = dict(namespace) if namespace else {}
         injected: dict[str, Any] = {}
 
-        ns["__builtins__"] = dict(SAFE_BUILTINS)
+        ns["__builtins__"] = make_safe_builtins(gates["__sb_getattr__"])
         ns.setdefault("__name__", "__sblite__")
         ns.update(gates)
-
-        # Gate-aware getattr/hasattr that enforce the attr whitelist
-        _sb_getattr = gates["__sb_getattr__"]
-
-        def _safe_getattr(obj: Any, name: str, *default: Any) -> Any:
-            try:
-                return _sb_getattr(obj, name)
-            except AttributeError:
-                if default:
-                    return default[0]
-                raise
-
-        def _safe_hasattr(obj: Any, name: str) -> bool:
-            try:
-                _sb_getattr(obj, name)
-                return True
-            except AttributeError:
-                return False
-
-        ns["__builtins__"]["getattr"] = _safe_getattr
-        ns["__builtins__"]["hasattr"] = _safe_hasattr
-        ns["__builtins__"]["locals"] = make_safe_locals()
 
         # Populate registered functions (with privilege wrapping)
         for fn_name, fn_reg in self.policy.functions.items():

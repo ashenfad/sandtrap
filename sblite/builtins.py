@@ -195,6 +195,36 @@ def make_print(buffer: StringIO | TailBuffer) -> Any:
     return _print
 
 
+def make_safe_builtins(getattr_gate: Any) -> dict[str, Any]:
+    """Create a safe builtins dict with policy-gated getattr/hasattr/locals.
+
+    This must be used everywhere sandboxed code executes (main exec,
+    VFS modules, reactivated functions/classes) so that ``getattr()``
+    and ``hasattr()`` always route through the attribute policy.
+    """
+    builtins = dict(SAFE_BUILTINS)
+
+    def _safe_getattr(obj: Any, name: str, *default: Any) -> Any:
+        try:
+            return getattr_gate(obj, name)
+        except AttributeError:
+            if default:
+                return default[0]
+            raise
+
+    def _safe_hasattr(obj: Any, name: str) -> bool:
+        try:
+            getattr_gate(obj, name)
+            return True
+        except AttributeError:
+            return False
+
+    builtins["getattr"] = _safe_getattr
+    builtins["hasattr"] = _safe_hasattr
+    builtins["locals"] = make_safe_locals()
+    return builtins
+
+
 def make_safe_locals() -> Any:
     """Create a safe locals() replacement for sandboxed code.
 

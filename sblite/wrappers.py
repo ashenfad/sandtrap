@@ -194,7 +194,7 @@ class SbFunction:
         sandbox: Any = None,
         namespace: dict[str, Any] | None = None,
     ) -> None:
-        from .builtins import SAFE_BUILTINS
+        from .builtins import make_safe_builtins
 
         ns: dict[str, Any] = {}
 
@@ -210,7 +210,7 @@ class SbFunction:
             ns.update(frozen_closure)
 
         ns.update(gates)
-        ns["__builtins__"] = dict(SAFE_BUILTINS)
+        ns["__builtins__"] = make_safe_builtins(gates["__sb_getattr__"])
         ns["__name__"] = "__sblite__"
 
         # Auto-activate frozen globals and frozen closure values
@@ -328,7 +328,7 @@ class SbClass:
         sandbox: Any = None,
         namespace: dict[str, Any] | None = None,
     ) -> None:
-        from .builtins import SAFE_BUILTINS
+        from .builtins import make_safe_builtins
 
         # Frozen refs first (lowest priority), then caller namespace overrides
         ns: dict[str, Any] = {}
@@ -337,7 +337,7 @@ class SbClass:
         if namespace:
             ns.update(namespace)
         ns.update(gates)
-        ns["__builtins__"] = dict(SAFE_BUILTINS)
+        ns["__builtins__"] = make_safe_builtins(gates["__sb_getattr__"])
         ns["__name__"] = "__sblite__"
 
         # Auto-activate frozen ref deps — use the values from ns (which
