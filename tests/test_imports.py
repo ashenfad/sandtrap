@@ -96,11 +96,12 @@ def test_from_import_excluded_private():
 
 
 def test_wildcard_import_blocked():
-    with pytest.raises(SbValidationError, match="Wildcard imports"):
-        policy = Policy()
-        policy.module(math)
-        sandbox = Sandbox(policy)
-        sandbox.exec("from math import *")
+    policy = Policy()
+    policy.module(math)
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("from math import *")
+    assert isinstance(result.error, SbValidationError)
+    assert "Wildcard imports" in str(result.error)
 
 
 def test_registered_function_in_namespace():

@@ -67,14 +67,21 @@ The namespace excludes sandbox internals (`__builtins__`, `__sb_*` gates, regist
 
 ## Error handling
 
-**Runtime errors** are captured on `result.error` without crashing the host:
+All errors are captured on `result.error` without crashing the host:
 
 ```python
 result = sandbox.exec("x = 1 / 0")
 assert isinstance(result.error, ZeroDivisionError)
 ```
 
-**Validation errors** (e.g., using `__sb_*` names, unsupported syntax) raise `SbValidationError` immediately -- they are not captured on `result.error`.
+This includes validation errors (unsupported syntax, reserved names, etc.):
+
+```python
+result = sandbox.exec("from os import *")
+assert isinstance(result.error, SbValidationError)
+```
+
+When a validation error occurs, no code executes -- `result.namespace` is empty, `result.stdout` is `""`, and `result.ticks` is `0`.
 
 ### Sandbox errors
 
@@ -82,7 +89,7 @@ All sandbox-specific errors inherit from `SbError`:
 
 ```
 SbError
-├── SbValidationError   # invalid AST (raised before execution)
+├── SbValidationError   # invalid AST (before execution)
 ├── SbTimeout           # wall-clock timeout exceeded
 ├── SbTickLimit         # tick limit exceeded
 └── SbCancelled         # sandbox.cancel() called
@@ -94,7 +101,7 @@ SbError
 from sblite import SbError, SbValidationError, SbTimeout, SbTickLimit, SbCancelled
 ```
 
-Catching `SbError` catches all sandbox-specific errors. Resource limit errors (`SbTimeout`, `SbTickLimit`, `SbCancelled`, `MemoryError`) appear on `result.error`. `SbValidationError` is raised directly since it occurs before execution begins.
+All errors appear on `result.error`. Check `isinstance(result.error, SbValidationError)` to distinguish code that was rejected before execution from code that failed at runtime.
 
 ## Cancellation
 

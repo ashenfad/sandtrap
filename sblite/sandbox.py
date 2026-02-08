@@ -12,6 +12,7 @@ from typing import Any, Literal
 
 from ._traceback import strip_internal_frames
 from .builtins import TailBuffer, make_print, make_safe_builtins
+from .errors import SbValidationError
 from .fs.protocol import FileSystem
 from .gates import _wrap_privileged, make_gates
 from .policy import Policy
@@ -265,7 +266,10 @@ class Sandbox:
         # 2. Rewrite (validate + transform)
         wrapped_mode = self.mode == "wrapped"
         rewriter = Rewriter(wrapped_mode=wrapped_mode)
-        tree = rewriter.visit(tree)
+        try:
+            tree = rewriter.visit(tree)
+        except SbValidationError as e:
+            return ExecResult(error=e)
 
         # 3. Fix missing locations
         ast.fix_missing_locations(tree)
@@ -385,7 +389,10 @@ class Sandbox:
         # 2. Rewrite (validate + transform)
         wrapped_mode = self.mode == "wrapped"
         rewriter = Rewriter(wrapped_mode=wrapped_mode)
-        tree = rewriter.visit(tree)
+        try:
+            tree = rewriter.visit(tree)
+        except SbValidationError as e:
+            return ExecResult(error=e)
 
         # 3. Wrap body in: async def __sb_aexec__(): ...; return __sb_locals__()
         return_locals = ast.Return(
