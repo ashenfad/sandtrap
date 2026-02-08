@@ -1,5 +1,6 @@
 """In-memory filesystem implementation."""
 
+import errno as _errno
 import os
 import posixpath
 import stat as stat_mod
@@ -25,7 +26,7 @@ class MemoryFS(FileSystem):
         path = self._resolve(path)
         if "r" in mode:
             if path not in self.files:
-                raise FileNotFoundError(f"No such file: '{path}'")
+                raise FileNotFoundError(_errno.ENOENT, "No such file", path)
             content = self.files[path]
             if "b" in mode:
                 if isinstance(content, str):
@@ -37,7 +38,7 @@ class MemoryFS(FileSystem):
         elif "w" in mode or "a" in mode:
             parent = posixpath.dirname(path)
             if parent != path and parent not in self.dirs:
-                raise FileNotFoundError(f"No such directory: '{parent}'")
+                raise FileNotFoundError(_errno.ENOENT, "No such directory", parent)
             is_binary = "b" in mode
             buf = BytesIO() if is_binary else StringIO()
             if "a" in mode and path in self.files:
@@ -73,12 +74,12 @@ class MemoryFS(FileSystem):
                 0, 0, 2, 1000, 1000,
                 0, 0, 0, 0,
             ))
-        raise FileNotFoundError(f"No such file or directory: '{path}'")
+        raise FileNotFoundError(_errno.ENOENT, "No such file or directory", path)
 
     def listdir(self, path: str) -> list[str]:
         path = self._resolve(path)
         if path not in self.dirs:
-            raise FileNotFoundError(f"No such directory: '{path}'")
+            raise FileNotFoundError(_errno.ENOENT, "No such directory", path)
         prefix = path.rstrip("/") + "/"
         entries: set[str] = set()
         for f in self.files:
@@ -115,7 +116,7 @@ class MemoryFS(FileSystem):
             raise FileExistsError(f"Directory exists: '{path}'")
         parent = posixpath.dirname(path)
         if parent != path and parent not in self.dirs:
-            raise FileNotFoundError(f"No such directory: '{parent}'")
+            raise FileNotFoundError(_errno.ENOENT, "No such directory", parent)
         self.dirs.add(path)
 
     def makedirs(self, path: str, *, exist_ok: bool = False) -> None:
@@ -129,7 +130,7 @@ class MemoryFS(FileSystem):
     def remove(self, path: str) -> None:
         path = self._resolve(path)
         if path not in self.files:
-            raise FileNotFoundError(f"No such file: '{path}'")
+            raise FileNotFoundError(_errno.ENOENT, "No such file", path)
         del self.files[path]
 
     def rename(self, src: str, dst: str) -> None:
@@ -150,7 +151,7 @@ class MemoryFS(FileSystem):
                 if f.startswith(src_prefix):
                     self.files[dst + f[len(src):]] = self.files.pop(f)
         else:
-            raise FileNotFoundError(f"No such file or directory: '{src}'")
+            raise FileNotFoundError(_errno.ENOENT, "No such file or directory", src)
 
     def getcwd(self) -> str:
         return self._cwd
@@ -158,7 +159,7 @@ class MemoryFS(FileSystem):
     def chdir(self, path: str) -> None:
         path = self._resolve(path)
         if path not in self.dirs:
-            raise FileNotFoundError(f"No such directory: '{path}'")
+            raise FileNotFoundError(_errno.ENOENT, "No such directory", path)
         self._cwd = path
 
     def _resolve(self, path: str) -> str:
