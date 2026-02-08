@@ -1,9 +1,12 @@
 """Main sandbox entry point."""
 
 import ast
+import asyncio
+import builtins as _builtins
 import itertools
 import linecache
 import threading
+import time
 import types
 from collections.abc import Mapping
 from contextlib import ExitStack
@@ -12,11 +15,17 @@ from typing import Any, Literal
 
 from ._traceback import strip_internal_frames
 from .builtins import TailBuffer, make_print, make_safe_builtins
-from .errors import SbValidationError
+from .errors import SbTimeout, SbValidationError
+from .fs.context import use_fs
+from .fs.patch import install as install_fs
 from .fs.protocol import FileSystem
-from .gates import _wrap_privileged, make_gates
+from .gates import make_gates, wrap_privileged
+from .net.context import deny_network
+from .net.patch import install as install_net
 from .policy import Policy
+from .resource_limits import get_rss_bytes
 from .rewriter import Rewriter
+from .wrappers import SbClass, SbFunction, SbInstance
 
 _exec_counter = itertools.count(1)
 _INTERNAL_KEYS = {"__builtins__", "__name__"}
@@ -77,12 +86,8 @@ class Sandbox:
 
         # Install patches eagerly so _build_namespace captures patched versions
         if filesystem is not None:
-            from .fs.patch import install as install_fs
-
             install_fs()
         if not policy.allow_network:
-            from .net.patch import install as install_net
-
             install_net()
 
 
@@ -107,8 +112,6 @@ class Sandbox:
         gates: dict[str, Any],
     ) -> None:
         """Auto-activate any inactive SbFunction/SbClass/SbInstance in namespace."""
-        from .wrappers import SbClass, SbFunction, SbInstance
-
         for v in list(ns.values()):
             if isinstance(v, SbFunction) and v._compiled is None:
                 v.activate(gates, sandbox=self, namespace=ns)
@@ -131,8 +134,6 @@ class Sandbox:
         Functions and classes created during exec() need these refs so
         that direct calls from host code get full sandbox protections.
         """
-        from .wrappers import SbClass, SbFunction
-
         for v in ns.values():
             if isinstance(v, SbFunction) and v._sandbox is None:
                 v._sandbox = self
@@ -153,8 +154,6 @@ class Sandbox:
         Resets checkpoint state (ticks, timeout, memory) and enters
         the sandbox context (fs/net patches) for the duration of the call.
         """
-        import time
-
         # Reset checkpoint state for this call
         gates["__sb_tick_counter__"][0] = 0
         gates["__sb_start_time__"][0] = time.monotonic()
@@ -190,7 +189,7 @@ class Sandbox:
         for fn_name, fn_reg in self.policy.functions.items():
             fn = fn_reg.func
             if fn_reg.network_access or fn_reg.host_fs_access:
-                fn = _wrap_privileged(
+                fn = wrap_privileged(
                     fn,
                     network_access=fn_reg.network_access,
                     host_fs_access=fn_reg.host_fs_access,
@@ -208,8 +207,6 @@ class Sandbox:
 
         # Provide open() if filesystem interception is active
         if self.filesystem is not None:
-            import builtins as _builtins
-
             ns["__builtins__"]["open"] = _builtins.open
 
         # Capture stdout
@@ -226,8 +223,6 @@ class Sandbox:
         """Return (memory_limit_bytes, start_rss) for checkpoint enforcement."""
         if self.policy.memory_limit is None:
             return None, None
-        from .resource_limits import get_rss_bytes
-
         return self.policy.memory_limit * 1024 * 1024, get_rss_bytes()
 
     def _make_stdout_buf(self) -> TailBuffer:
@@ -237,16 +232,10 @@ class Sandbox:
     def _enter_sandbox_context(self, stack: ExitStack) -> None:
         """Set up network denial and filesystem interception on the ExitStack."""
         if not self.policy.allow_network:
-            from .net.context import deny_network
-            from .net.patch import install as install_net
-
             install_net()
             stack.enter_context(deny_network())
 
         if self.filesystem is not None:
-            from .fs.context import use_fs
-            from .fs.patch import install as install_fs
-
             install_fs()
             stack.enter_context(use_fs(self.filesystem))
 
@@ -290,8 +279,6 @@ class Sandbox:
         code = compile(tree, filename, "exec")
 
         # 6. Build namespace
-        import time
-
         self._cancel_flag.clear()
         mem_limit_bytes, start_rss = self._memory_params()
         gates = make_gates(
@@ -355,8 +342,6 @@ class Sandbox:
         namespace: dict[str, Any] | None = None,
     ) -> None:
         """Activate an unpickled SbFunction/SbClass/SbInstance."""
-        from .wrappers import SbClass, SbFunction, SbInstance
-
         gates = make_gates(self.policy)
         if isinstance(obj, SbFunction):
             obj.activate(gates, sandbox=self, namespace=namespace)
@@ -377,9 +362,6 @@ class Sandbox:
         namespace: Mapping[str, Any] | None = None,
     ) -> ExecResult:
         """Execute source code asynchronously in the sandbox."""
-        import asyncio
-        import time
-
         # 1. Parse
         try:
             tree = ast.parse(source)
@@ -460,7 +442,6 @@ class Sandbox:
         self._auto_activate(ns, gates)
 
         # Inject locals() under an internal name for the async wrapper
-        import builtins as _builtins
         ns["__sb_locals__"] = _builtins.locals
 
         # 8. Execute to define __sb_aexec__, then await it
@@ -476,8 +457,6 @@ class Sandbox:
                 if result_locals is None:
                     result_locals = {}
             except asyncio.TimeoutError:
-                from .errors import SbTimeout
-
                 error = SbTimeout(
                     f"Execution exceeded {self.policy.timeout}s timeout"
                 )

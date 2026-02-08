@@ -1,7 +1,11 @@
 """Resource limit helpers for sandboxed execution."""
 
-import resource
 import sys
+
+try:
+    import resource
+except ImportError:
+    resource = None  # type: ignore[assignment]
 
 
 def get_rss_bytes() -> int:
@@ -17,6 +21,10 @@ def get_rss_bytes() -> int:
     execution, subsequent checkpoints will continue to trip even if
     memory has since been freed.
     """
+    if resource is None:
+        raise RuntimeError(
+            "Memory limits require the 'resource' module (Unix only)"
+        )
     usage = resource.getrusage(resource.RUSAGE_SELF)
     if sys.platform == "darwin":
         return usage.ru_maxrss  # already bytes

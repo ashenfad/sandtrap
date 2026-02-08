@@ -1,14 +1,24 @@
 """Gate functions injected into sandboxed code at compile time."""
 
+import ast
 import functools
+import posixpath
 import string as _string_mod
+import sys
 import threading
 import time
+import types
 from contextlib import ExitStack
-from typing import Any
+from typing import Any, cast
 
+from .builtins import make_safe_builtins
 from .errors import SbCancelled, SbTickLimit, SbTimeout
+from .fs.context import suspend_fs_interception
+from .net.context import allow_network
 from .policy import Policy
+from .resource_limits import get_rss_bytes
+from .rewriter import Rewriter
+from .wrappers import SbClass, SbFunction, SbInstance
 
 
 class _SafeFormatter(_string_mod.Formatter):
@@ -30,7 +40,7 @@ class _SafeFormatter(_string_mod.Formatter):
 _safe_formatter = _SafeFormatter()
 
 
-def _wrap_privileged(
+def wrap_privileged(
     fn: Any,
     *,
     network_access: bool = False,
@@ -42,12 +52,8 @@ def _wrap_privileged(
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         with ExitStack() as stack:
             if network_access:
-                from .net.context import allow_network
-
                 stack.enter_context(allow_network())
             if host_fs_access:
-                from .fs.context import suspend_fs_interception
-
                 stack.enter_context(suspend_fs_interception())
             return fn(*args, **kwargs)
 
@@ -71,8 +77,6 @@ def make_gates(
     Returns a dict of gate function names to implementations,
     suitable for injection into the execution namespace.
     """
-    from .wrappers import SbInstance
-
     # Gate dict — populated at the end, but closures reference it so
     # VFS module compilation can inject the same gates.
     gates: dict[str, Any] = {}
@@ -101,12 +105,6 @@ def make_gates(
         if not _filesystem.exists(path):
             return None
 
-        import ast as _ast
-        import types
-
-        from .builtins import make_safe_builtins
-        from .rewriter import Rewriter
-
         # Read source
         f = _filesystem.open(path, "r")
         source = f.read()
@@ -119,10 +117,10 @@ def make_gates(
 
         try:
             # Parse + rewrite (wrapped mode wraps functions/classes as SbFunction/SbClass)
-            tree = _ast.parse(source)
+            tree = ast.parse(source)
             rewriter = Rewriter(wrapped_mode=_wrapped_mode)
             tree = rewriter.visit(tree)
-            _ast.fix_missing_locations(tree)
+            ast.fix_missing_locations(tree)
             code = compile(tree, f"<sblite:vfs:{module_name}>", "exec")
 
             # Build namespace with same gates
@@ -136,13 +134,8 @@ def make_gates(
                 vfs_func_asts = rewriter._func_asts
 
                 def _vfs_defun(name: str, compiled_fn: Any, ast_ref: int | str) -> Any:
-                    from .wrappers import SbFunction
-
                     if isinstance(ast_ref, str):
-                        import ast as _ast
-                        from typing import cast
-
-                        func_ast = cast(_ast.FunctionDef, _ast.parse(ast_ref).body[0])
+                        func_ast = cast(ast.FunctionDef, ast.parse(ast_ref).body[0])
                     else:
                         func_ast = vfs_func_asts[ast_ref]
                     return SbFunction(name, compiled_fn, func_ast)
@@ -155,8 +148,6 @@ def make_gates(
                 def _vfs_defclass(
                     name: str, compiled_cls: Any, ast_idx: int, **frozen_refs: Any
                 ) -> Any:
-                    from .wrappers import SbClass
-
                     cls_ast = vfs_class_asts[ast_idx]
                     sb_cls = SbClass(name, compiled_cls, cls_ast, frozen_refs=frozen_refs)
                     sb_cls._sb_getattr_gate = __sb_getattr__
@@ -180,8 +171,6 @@ def make_gates(
 
     def _caller_lineno(depth: int = 2) -> int | None:
         """Get the line number of the sandboxed code that triggered a gate."""
-        import sys
-
         try:
             return sys._getframe(depth).f_lineno
         except (ValueError, AttributeError):
@@ -222,7 +211,7 @@ def make_gates(
                     needs_network = needs_network or spec.network_access
                     needs_host_fs = needs_host_fs or spec.host_fs_access
                 if needs_network or needs_host_fs:
-                    value = _wrap_privileged(
+                    value = wrap_privileged(
                         value,
                         network_access=needs_network,
                         host_fs_access=needs_host_fs,
@@ -274,9 +263,6 @@ def make_gates(
     def __sb_importfrom__(module_name: str, name: str, *, _level: int = 0) -> Any:
         if _level > 0:
             # Relative import — resolve against caller's __file__
-            import posixpath
-            import sys
-
             caller_file = sys._getframe(1).f_globals.get("__file__", "")
             base_dir = posixpath.dirname(caller_file)
             for _ in range(_level - 1):
@@ -336,14 +322,10 @@ def make_gates(
     def __sb_defun__(name: str, compiled_fn: Any, ast_ref: int | str) -> Any:
         if not _wrapped_mode:
             return compiled_fn
-        from .wrappers import SbFunction
 
         if isinstance(ast_ref, str):
             # Inner function: ast_ref is source string embedded by rewriter
-            import ast as _ast
-            from typing import cast
-
-            func_ast = cast(_ast.FunctionDef, _ast.parse(ast_ref).body[0])
+            func_ast = cast(ast.FunctionDef, ast.parse(ast_ref).body[0])
         else:
             if _func_asts is None:
                 return compiled_fn
@@ -355,7 +337,6 @@ def make_gates(
     ) -> Any:
         if not _wrapped_mode or _class_asts is None:
             return compiled_cls
-        from .wrappers import SbClass
 
         class_ast = _class_asts[ast_idx]
         sb_cls = SbClass(name, compiled_cls, class_ast, frozen_refs=frozen_refs)
@@ -382,8 +363,6 @@ def make_gates(
                     f"Execution exceeded {policy.timeout}s timeout"
                 )
         if _memory_box[0] is not None and _memory_box[1] is not None:
-            from .resource_limits import get_rss_bytes
-
             if get_rss_bytes() - _memory_box[1] > _memory_box[0]:
                 raise MemoryError(
                     f"Execution exceeded {policy.memory_limit}MB memory limit"

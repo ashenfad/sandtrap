@@ -1,11 +1,12 @@
 """Safe builtins for sandboxed execution."""
 
 import builtins as _builtins
+import sys
 from io import StringIO
 from typing import Any
 
 # Safe builtin functions (pass-through from real builtins).
-_SAFE_FN_NAMES = (
+SAFE_FN_NAMES = (
     "abs",
     "all",
     "any",
@@ -60,7 +61,7 @@ _SAFE_FN_NAMES = (
 )
 
 # Safe exception types available in sandbox.
-_SAFE_EXCEPTIONS = (
+SAFE_EXCEPTIONS = (
     "ArithmeticError",
     "AssertionError",
     "AttributeError",
@@ -125,10 +126,10 @@ _SAFE_EXCEPTIONS = (
 
 SAFE_BUILTINS: dict[str, Any] = {}
 
-for _name in _SAFE_FN_NAMES:
+for _name in SAFE_FN_NAMES:
     SAFE_BUILTINS[_name] = getattr(_builtins, _name)
 
-for _name in _SAFE_EXCEPTIONS:
+for _name in SAFE_EXCEPTIONS:
     _val = getattr(_builtins, _name, None)
     if _val is not None:
         SAFE_BUILTINS[_name] = _val
@@ -231,7 +232,6 @@ def make_safe_locals() -> Any:
     Returns a function that, when called, produces a filtered copy of
     the caller's local variables — excluding sandbox internals.
     """
-    import sys
 
     def _safe_locals() -> dict[str, Any]:
         frame = sys._getframe(1)
