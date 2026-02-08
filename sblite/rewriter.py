@@ -456,6 +456,16 @@ class Rewriter(ast.NodeTransformer):
         return [node, wrap_assign]
 
     def visit_ClassDef(self, node: ast.ClassDef) -> ast.AST | list[ast.stmt]:
+        # Reject __del__ — prevent pointers to the real runtime and
+        # ensure deterministic resource cleanup in sandboxed code.
+        for item in node.body:
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if item.name == "__del__":
+                    raise SbValidationError(
+                        "__del__ methods are not allowed in sandboxed classes",
+                        lineno=item.lineno,
+                        col=item.col_offset,
+                    )
         self._class_depth += 1
         try:
             node = cast(ast.ClassDef, self._recurse(node))
