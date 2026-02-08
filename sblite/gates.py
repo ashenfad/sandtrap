@@ -178,11 +178,23 @@ def make_gates(
 
         return mod
 
+    def _caller_lineno(depth: int = 2) -> int | None:
+        """Get the line number of the sandboxed code that triggered a gate."""
+        import sys
+
+        try:
+            return sys._getframe(depth).f_lineno
+        except (ValueError, AttributeError):
+            return None
+
     def __sb_getattr__(obj: Any, attr: str) -> Any:
         obj = _unwrap(obj)
         if not policy.is_attr_allowed(obj, attr):
+            lineno = _caller_lineno()
+            loc = f" (line {lineno})" if lineno else ""
             raise AttributeError(
-                f"'{type(obj).__name__}' has no attribute '{attr}'"
+                f"Attribute '{attr}' is not accessible on "
+                f"'{type(obj).__name__}'{loc}"
             )
 
         # Intercept str.format / str.format_map to block field traversal
@@ -221,16 +233,22 @@ def make_gates(
     def __sb_setattr__(obj: Any, attr: str, value: Any) -> None:
         obj = _unwrap(obj)
         if not policy.is_attr_allowed(obj, attr):
+            lineno = _caller_lineno()
+            loc = f" (line {lineno})" if lineno else ""
             raise AttributeError(
-                f"cannot set attribute '{attr}' on '{type(obj).__name__}'"
+                f"Cannot set attribute '{attr}' on "
+                f"'{type(obj).__name__}'{loc}"
             )
         setattr(obj, attr, value)
 
     def __sb_delattr__(obj: Any, attr: str) -> None:
         obj = _unwrap(obj)
         if not policy.is_attr_allowed(obj, attr):
+            lineno = _caller_lineno()
+            loc = f" (line {lineno})" if lineno else ""
             raise AttributeError(
-                f"cannot delete attribute '{attr}' on '{type(obj).__name__}'"
+                f"Cannot delete attribute '{attr}' on "
+                f"'{type(obj).__name__}'{loc}"
             )
         delattr(obj, attr)
 
@@ -247,7 +265,11 @@ def make_gates(
         if mod is not None:
             return mod
 
-        raise ImportError(f"Import of '{module_name}' is not allowed")
+        lineno = _caller_lineno()
+        loc = f" (line {lineno})" if lineno else ""
+        raise ImportError(
+            f"Import of '{module_name}' is not allowed{loc}"
+        )
 
     def __sb_importfrom__(module_name: str, name: str, *, _level: int = 0) -> Any:
         if _level > 0:
@@ -305,7 +327,11 @@ def make_gates(
         if sub is not None:
             return sub
 
-        raise ImportError(f"Import of '{module_name}' is not allowed")
+        lineno = _caller_lineno()
+        loc = f" (line {lineno})" if lineno else ""
+        raise ImportError(
+            f"Import of '{module_name}' is not allowed{loc}"
+        )
 
     def __sb_defun__(name: str, compiled_fn: Any, ast_ref: int | str) -> Any:
         if not _wrapped_mode:
