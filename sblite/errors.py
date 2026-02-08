@@ -1,4 +1,9 @@
-"""sblite error types."""
+"""sblite error types and traceback utilities."""
+
+import os
+import types
+
+_SBLITE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 class SbError(Exception):
@@ -32,3 +37,44 @@ class SbValidationError(SbError):
         self.lineno = lineno
         self.col = col
         super().__init__(message)
+
+
+def strip_internal_frames(exc: BaseException) -> BaseException:
+    """Strip leading sblite-internal frames from an exception's traceback.
+
+    Sets ``exc.__traceback__`` to the first frame that belongs to user
+    sandbox code or external code.  Frames that appear *after* the first
+    user frame are left intact (Python does not expose an API to relink
+    ``tb_next``).
+    """
+    tb = exc.__traceback__
+    if tb is None:
+        return exc
+
+    first_user = _find_first_user_frame(tb)
+    if first_user is not None:
+        exc.__traceback__ = first_user
+
+    return exc
+
+
+def _is_internal_frame(filename: str) -> bool:
+    """Check if a filename belongs to sblite internals."""
+    if filename.startswith("<sblite:"):
+        return False  # User sandbox code
+    try:
+        return os.path.abspath(filename).startswith(_SBLITE_DIR)
+    except (ValueError, OSError):
+        return False
+
+
+def _find_first_user_frame(
+    tb: types.TracebackType,
+) -> types.TracebackType | None:
+    """Find the first traceback frame that's not sblite internal code."""
+    current: types.TracebackType | None = tb
+    while current is not None:
+        if not _is_internal_frame(current.tb_frame.f_code.co_filename):
+            return current
+        current = current.tb_next
+    return tb  # Fallback: return original if all frames are internal
