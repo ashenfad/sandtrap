@@ -90,7 +90,7 @@ class Sandbox:
         return self
 
     def __exit__(self, *exc: Any) -> None:
-        pass
+        self._cancel_flag.clear()
 
     def cancel(self) -> None:
         """Cancel the currently running execution.
