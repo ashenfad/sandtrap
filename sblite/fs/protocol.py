@@ -42,12 +42,12 @@ class FileSystem(ABC):
         ...
 
     @abstractmethod
-    def mkdir(self, path: str, *, parents: bool = False, exist_ok: bool = False) -> None:
+    def mkdir(self, path: str, mode: int = 0o777, *, parents: bool = False, exist_ok: bool = False) -> None:
         """Create a directory."""
         ...
 
     @abstractmethod
-    def makedirs(self, path: str, *, exist_ok: bool = False) -> None:
+    def makedirs(self, path: str, mode: int = 0o777, *, exist_ok: bool = False) -> None:
         """Create a directory tree."""
         ...
 
