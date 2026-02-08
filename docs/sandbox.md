@@ -17,17 +17,14 @@ Options:
 
 ## Context manager
 
-`Sandbox` supports `with` for automatic cleanup of filesystem and network patches:
+`Sandbox` supports `with`:
 
 ```python
 with Sandbox(policy, filesystem=fs) as sandbox:
     result = sandbox.exec("x = 1")
-# patches are cleaned up here
 ```
 
-Patches are ref-counted, so overlapping sandboxes work correctly -- patches are only restored when the last sandbox exits.
-
-Without `with`, patches remain installed (harmless -- they're inert when no sandbox is executing).
+Filesystem and network patches are installed once on first use and remain active for the process lifetime. They are inert when no sandbox is executing -- calls fall through to the original functions transparently.
 
 ## Running code
 

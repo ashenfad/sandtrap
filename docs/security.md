@@ -63,3 +63,7 @@ Each checkpoint increments the tick counter and checks: cancellation flag, tick 
 sblite is a "walled garden" -- it controls what sandboxed code can access, not what the Python runtime can do. It is designed to prevent accidental or casual misuse by LLM-generated code.
 
 It is **not** a security boundary against a determined attacker with full CPython knowledge. It runs in-process and shares the same memory space as the host. If you need hard isolation, use process-level sandboxing (containers, seccomp, etc.) as an outer layer.
+
+## Process-global patches
+
+Filesystem and network interception works by monkey-patching `builtins.open`, `os.stat`, `socket.socket.connect`, etc. at the process level. Patches are installed once on first use and remain active permanently. They dispatch via `ContextVar` -- when no sandbox is executing, all calls fall through to the original functions transparently. This is necessary so that registered libraries (e.g., `pd.read_csv`) see the virtual filesystem during sandbox execution.

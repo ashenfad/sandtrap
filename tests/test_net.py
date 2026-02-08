@@ -122,16 +122,13 @@ def test_context_var_isolation():
     assert network_allowed.get() is True
 
 
-def test_net_install_uninstall_roundtrip():
-    """install/uninstall ref counting works correctly."""
+def test_net_install_idempotent():
+    """install() is idempotent -- calling it twice is safe."""
     from sblite.net import patch as net_patch
 
-    count_before = net_patch._install_count
-
-    # Extra install increments count
     net_patch.install()
-    assert net_patch._install_count == count_before + 1
+    assert net_patch._installed
 
-    # Uninstall decrements back
-    net_patch.uninstall()
-    assert net_patch._install_count == count_before
+    # Second call is a no-op
+    net_patch.install()
+    assert net_patch._installed

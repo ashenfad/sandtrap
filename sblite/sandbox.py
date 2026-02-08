@@ -89,14 +89,7 @@ class Sandbox:
         return self
 
     def __exit__(self, *exc: Any) -> None:
-        if self.filesystem is not None:
-            from .fs.patch import uninstall as uninstall_fs
-
-            uninstall_fs()
-        if not self.policy.allow_network:
-            from .net.patch import uninstall as uninstall_net
-
-            uninstall_net()
+        pass
 
     def cancel(self) -> None:
         """Cancel the currently running execution.
