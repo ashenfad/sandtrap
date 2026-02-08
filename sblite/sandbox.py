@@ -13,9 +13,8 @@ from contextlib import ExitStack
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from ._traceback import strip_internal_frames
 from .builtins import TailBuffer, make_print, make_safe_builtins
-from .errors import SbTimeout, SbValidationError
+from .errors import SbTimeout, SbValidationError, strip_internal_frames
 from .fs.context import use_fs
 from .fs.patch import install as install_fs
 from .fs.protocol import FileSystem
