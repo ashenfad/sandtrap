@@ -127,56 +127,56 @@ def test_builtins_not_assignable(sandbox):
 
 def test_sb_name_read_blocked(sandbox):
     """Reading __sb_* names is blocked at validation time."""
-    with pytest.raises(SbValidationError):
-        sandbox.exec("x = __sb_getattr__")
+    result = sandbox.exec("x = __sb_getattr__")
+    assert isinstance(result.error, SbValidationError)
 
 
 def test_sb_name_assign_blocked(sandbox):
-    with pytest.raises(SbValidationError):
-        sandbox.exec("__sb_getattr__ = lambda o, a: getattr(o, a)")
+    result = sandbox.exec("__sb_getattr__ = lambda o, a: getattr(o, a)")
+    assert isinstance(result.error, SbValidationError)
 
 
 def test_sb_name_delete_blocked(sandbox):
-    with pytest.raises(SbValidationError):
-        sandbox.exec("del __sb_checkpoint__")
+    result = sandbox.exec("del __sb_checkpoint__")
+    assert isinstance(result.error, SbValidationError)
 
 
 def test_sb_global_blocked(sandbox):
-    with pytest.raises(SbValidationError):
-        sandbox.exec("""\
+    result = sandbox.exec("""\
 def f():
     global __sb_getattr__
 """)
+    assert isinstance(result.error, SbValidationError)
 
 
 def test_sb_nonlocal_blocked(sandbox):
-    with pytest.raises(SbValidationError):
-        sandbox.exec("""\
+    result = sandbox.exec("""\
 def f():
     __sb_x = 1
     def g():
         nonlocal __sb_x
 """)
+    assert isinstance(result.error, SbValidationError)
 
 
 def test_assign_to_exec_blocked(sandbox):
-    with pytest.raises(SbValidationError):
-        sandbox.exec("exec = print")
+    result = sandbox.exec("exec = print")
+    assert isinstance(result.error, SbValidationError)
 
 
 def test_assign_to_eval_blocked(sandbox):
-    with pytest.raises(SbValidationError):
-        sandbox.exec("eval = print")
+    result = sandbox.exec("eval = print")
+    assert isinstance(result.error, SbValidationError)
 
 
 def test_assign_to_compile_blocked(sandbox):
-    with pytest.raises(SbValidationError):
-        sandbox.exec("compile = print")
+    result = sandbox.exec("compile = print")
+    assert isinstance(result.error, SbValidationError)
 
 
 def test_delete_exec_blocked(sandbox):
-    with pytest.raises(SbValidationError):
-        sandbox.exec("del exec")
+    result = sandbox.exec("del exec")
+    assert isinstance(result.error, SbValidationError)
 
 
 # --- Import shenanigans ---
@@ -208,8 +208,8 @@ def test_from_builtins_import(sandbox):
 
 
 def test_wildcard_import_blocked(sandbox):
-    with pytest.raises(SbValidationError):
-        sandbox.exec("from os import *")
+    result = sandbox.exec("from os import *")
+    assert isinstance(result.error, SbValidationError)
 
 
 # --- Format string traversal ---

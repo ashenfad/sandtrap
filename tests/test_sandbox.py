@@ -115,9 +115,9 @@ def test_syntax_error_captured(sandbox):
     assert isinstance(result.error, SyntaxError)
 
 
-def test_validation_error_propagates(sandbox):
-    with pytest.raises(SbValidationError):
-        sandbox.exec("__sb_foo = 1")
+def test_validation_error_on_result(sandbox):
+    result = sandbox.exec("__sb_foo = 1")
+    assert isinstance(result.error, SbValidationError)
 
 
 def test_error_traceback_has_sblite_filename(sandbox):
@@ -408,8 +408,9 @@ def test_type_three_arg_blocked(sandbox):
 
 def test_sb_name_read_blocked(sandbox):
     """Sandboxed code cannot read __sb_* names."""
-    with pytest.raises(SbValidationError, match="Cannot reference reserved name"):
-        sandbox.exec("x = __sb_getattr__")
+    result = sandbox.exec("x = __sb_getattr__")
+    assert isinstance(result.error, SbValidationError)
+    assert "Cannot reference reserved name" in str(result.error)
 
 
 def test_aexec_sb_locals_blocked():
@@ -417,8 +418,9 @@ def test_aexec_sb_locals_blocked():
     import asyncio
 
     sandbox = Sandbox(Policy())
-    with pytest.raises(SbValidationError, match="Cannot reference reserved name"):
-        asyncio.run(sandbox.aexec("x = __sb_locals__"))
+    result = asyncio.run(sandbox.aexec("x = __sb_locals__"))
+    assert isinstance(result.error, SbValidationError)
+    assert "Cannot reference reserved name" in str(result.error)
 
 
 def test_annassign_attr_goes_through_gate():
