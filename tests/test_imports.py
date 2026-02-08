@@ -2,8 +2,6 @@
 
 import math
 
-import pytest
-
 from sblite import Policy, Sandbox
 from sblite.errors import SbValidationError
 
