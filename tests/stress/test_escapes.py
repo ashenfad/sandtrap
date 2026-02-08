@@ -246,3 +246,48 @@ def test_type_one_arg_allowed(sandbox):
     result = sandbox.exec("t = type(42)")
     assert result.error is None
     assert result.namespace["t"] is int
+
+
+# --- Frame / generator internal access ---
+
+
+def test_generator_frame_access_blocked(sandbox):
+    """gi_frame should be blocked to prevent namespace tampering."""
+    result = sandbox.exec("""\
+def gen():
+    yield 1
+g = gen()
+f = g.gi_frame
+""")
+    assert result.error is not None
+
+
+def test_generator_code_access_blocked(sandbox):
+    result = sandbox.exec("""\
+def gen():
+    yield 1
+g = gen()
+c = g.gi_code
+""")
+    assert result.error is not None
+
+
+def test_coroutine_frame_access_blocked(sandbox):
+    result = sandbox.exec("""\
+async def coro():
+    return 1
+c = coro()
+f = c.cr_frame
+""")
+    assert result.error is not None
+
+
+def test_checkpoint_bypass_via_frame(sandbox):
+    """The full attack: reach f_globals and replace checkpoint gate."""
+    result = sandbox.exec("""\
+def gen():
+    yield 1
+g = gen()
+ns = g.gi_frame.f_globals
+""")
+    assert result.error is not None
