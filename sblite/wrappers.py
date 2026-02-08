@@ -3,12 +3,11 @@
 import ast
 import copy
 import inspect
-from collections.abc import Sequence
 from typing import Any
 
-from .builtins import _SAFE_EXCEPTIONS, _SAFE_FN_NAMES
+from .builtins import SAFE_EXCEPTIONS, SAFE_FN_NAMES, make_safe_builtins
 
-_SAFE_BUILTIN_NAMES = set(_SAFE_FN_NAMES) | set(_SAFE_EXCEPTIONS) | {
+_SAFE_BUILTIN_NAMES = set(SAFE_FN_NAMES) | set(SAFE_EXCEPTIONS) | {
     "True", "False", "None", "Ellipsis", "NotImplemented",
     "print", "getattr", "hasattr", "locals",
 }
@@ -27,15 +26,6 @@ def _collect_global_names(code: Any) -> set[str]:
             names.update(_collect_global_names(const))
     return names
 
-
-def _extract_names(nodes: Sequence[ast.AST]) -> set[str]:
-    """Extract all non-internal Name.id references from AST nodes."""
-    names: set[str] = set()
-    for node in nodes:
-        for child in ast.walk(node):
-            if isinstance(child, ast.Name) and not child.id.startswith("__sb_"):
-                names.add(child.id)
-    return names
 
 
 class SbFunction:
@@ -194,8 +184,6 @@ class SbFunction:
         sandbox: Any = None,
         namespace: dict[str, Any] | None = None,
     ) -> None:
-        from .builtins import make_safe_builtins
-
         ns: dict[str, Any] = {}
 
         frozen_globals = getattr(self, "_frozen_globals", None)
@@ -328,8 +316,6 @@ class SbClass:
         sandbox: Any = None,
         namespace: dict[str, Any] | None = None,
     ) -> None:
-        from .builtins import make_safe_builtins
-
         # Frozen refs first (lowest priority), then caller namespace overrides
         ns: dict[str, Any] = {}
         if self._frozen_refs:

@@ -1,12 +1,24 @@
 """AST rewriter: validates and transforms Python AST for sandboxed execution."""
 
 import ast
+import copy
 import sys
+from collections.abc import Sequence
 from typing import TypeVar, cast
 
 from .errors import SbValidationError
 
 _N = TypeVar("_N", bound=ast.AST)
+
+
+def _extract_names(nodes: Sequence[ast.AST]) -> set[str]:
+    """Extract all non-internal Name.id references from AST nodes."""
+    names: set[str] = set()
+    for node in nodes:
+        for child in ast.walk(node):
+            if isinstance(child, ast.Name) and not child.id.startswith("__sb_"):
+                names.add(child.id)
+    return names
 
 # Names that cannot be assigned to, deleted, or declared global/nonlocal.
 _BLOCKED_NAMES = frozenset({"exec", "eval", "compile", "__import__"})
@@ -427,8 +439,6 @@ class Rewriter(ast.NodeTransformer):
         self, node: ast.FunctionDef | ast.AsyncFunctionDef
     ) -> list[ast.stmt]:
         """Wrap a function def with __sb_defun__ for wrapped mode."""
-        import copy
-
         if self._func_depth > 0:
             # Inner function: embed source string (survives cross-turn activation)
             ast_ref = ast.Constant(value=ast.unparse(node))
@@ -477,10 +487,6 @@ class Rewriter(ast.NodeTransformer):
 
     def _wrap_defclass(self, node: ast.ClassDef) -> list[ast.stmt]:
         """Wrap a class def with __sb_defclass__ for wrapped mode."""
-        import copy
-
-        from .wrappers import _extract_names
-
         idx = len(self._class_asts)
         self._class_asts.append(copy.deepcopy(node))
 

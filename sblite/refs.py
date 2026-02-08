@@ -4,6 +4,8 @@ import ast
 from collections.abc import Mapping
 from typing import Any
 
+from .wrappers import SbFunction
+
 
 class _ModuleRefAnalyzer(ast.NodeVisitor):
     """Find names that module-level code reads from the namespace.
@@ -370,8 +372,6 @@ def _follow_transitive_deps(
     namespace: Mapping[str, Any],
 ) -> set[str]:
     """Expand refs by following SbFunction.global_refs transitively."""
-    from .wrappers import SbFunction
-
     all_refs = set(initial_refs)
     queue = [name for name in initial_refs if name in namespace]
     visited: set[str] = set()
