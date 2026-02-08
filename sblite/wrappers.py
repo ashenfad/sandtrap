@@ -49,7 +49,7 @@ class SbFunction:
         self,
         name: str,
         compiled_fn: Any,
-        func_ast: ast.FunctionDef,
+        func_ast: ast.FunctionDef | ast.AsyncFunctionDef,
     ) -> None:
         self._name = name
         self._compiled = compiled_fn

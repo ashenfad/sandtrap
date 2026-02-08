@@ -290,7 +290,7 @@ def test_find_refs_with_namespace_follows_deps():
     from sblite import Policy, Sandbox
 
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     result = sandbox.exec("""\
 def square(x): return x * x
@@ -310,7 +310,7 @@ def test_find_refs_transitive_chain():
     from sblite import Policy, Sandbox
 
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     result = sandbox.exec("""\
 def c(x): return x + 1
@@ -331,7 +331,7 @@ def test_find_refs_cycle_detection():
     from sblite import Policy, Sandbox
 
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     # Both reference each other as globals (even if it would recurse at runtime)
     result = sandbox.exec("""\

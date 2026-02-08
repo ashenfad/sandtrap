@@ -190,7 +190,7 @@ def test_super_respects_include_filter():
 
     policy = Policy()
     policy.cls(Base, include="allowed")
-    sandbox = Sandbox(policy, mode="service")
+    sandbox = Sandbox(policy, mode="raw")
 
     # Direct access to allowed method works
     result = sandbox.exec(

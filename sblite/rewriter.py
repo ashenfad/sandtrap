@@ -20,10 +20,10 @@ class Rewriter(ast.NodeTransformer):
     in generic_visit.
     """
 
-    def __init__(self, *, task_mode: bool = False) -> None:
+    def __init__(self, *, wrapped_mode: bool = False) -> None:
         super().__init__()
         self._tmp_counter = 0
-        self._task_mode = task_mode
+        self._wrapped_mode = wrapped_mode
         self._func_asts: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
         self._class_asts: list[ast.ClassDef] = []
         self._class_depth = 0
@@ -407,7 +407,7 @@ class Rewriter(ast.NodeTransformer):
             node = self._prepend_checkpoint(node)
         finally:
             self._func_depth -= 1
-        if not self._task_mode or self._class_depth > 0:
+        if not self._wrapped_mode or self._class_depth > 0:
             return node
         return self._wrap_defun(node)
 
@@ -419,14 +419,14 @@ class Rewriter(ast.NodeTransformer):
             node = self._prepend_checkpoint(node)
         finally:
             self._func_depth -= 1
-        if not self._task_mode or self._class_depth > 0:
+        if not self._wrapped_mode or self._class_depth > 0:
             return node
         return self._wrap_defun(node)
 
     def _wrap_defun(
         self, node: ast.FunctionDef | ast.AsyncFunctionDef
     ) -> list[ast.stmt]:
-        """Wrap a function def with __sb_defun__ for task mode."""
+        """Wrap a function def with __sb_defun__ for wrapped mode."""
         import copy
 
         if self._func_depth > 0:
@@ -461,12 +461,12 @@ class Rewriter(ast.NodeTransformer):
             node = cast(ast.ClassDef, self._recurse(node))
         finally:
             self._class_depth -= 1
-        if not self._task_mode or self._class_depth > 0:
+        if not self._wrapped_mode or self._class_depth > 0:
             return node
         return self._wrap_defclass(node)
 
     def _wrap_defclass(self, node: ast.ClassDef) -> list[ast.stmt]:
-        """Wrap a class def with __sb_defclass__ for task mode."""
+        """Wrap a class def with __sb_defclass__ for wrapped mode."""
         import copy
 
         from .wrappers import _extract_names

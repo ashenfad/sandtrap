@@ -32,7 +32,7 @@ print(result.ticks)        # 0 (no loops or function calls)
 - [Policy & Registration](docs/policy.md) -- configuring what sandboxed code can access
 - [Sandbox Execution](docs/sandbox.md) -- running code, results, error handling
 - [Filesystem & Network](docs/filesystem.md) -- VFS interception, network denial, VFS imports
-- [Task Mode & Pickling](docs/task-mode.md) -- serializable functions and classes
+- [Serialization](docs/serialization.md) -- pickling functions, classes, and state across turns
 - [Security Model](docs/security.md) -- how the sandbox works, what it blocks, threat model
 
 ## License

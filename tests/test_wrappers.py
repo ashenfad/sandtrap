@@ -10,17 +10,17 @@ from sblite.errors import SbCancelled, SbTickLimit, SbTimeout
 from sblite.wrappers import SbClass, SbFunction, SbInstance
 
 
-def test_task_mode_creates_sbfunction():
+def test_wrapped_mode_creates_sbfunction():
     policy = Policy()
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
     result = sandbox.exec("def f(x): return x + 1")
     assert result.error is None
     assert isinstance(result.namespace["f"], SbFunction)
 
 
-def test_service_mode_creates_regular_function():
+def test_raw_mode_creates_regular_function():
     policy = Policy()
-    sandbox = Sandbox(policy, mode="service")
+    sandbox = Sandbox(policy, mode="raw")
     result = sandbox.exec("def f(x): return x + 1")
     assert result.error is None
     assert not isinstance(result.namespace["f"], SbFunction)
@@ -29,7 +29,7 @@ def test_service_mode_creates_regular_function():
 
 def test_sbfunction_callable():
     policy = Policy()
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
     result = sandbox.exec("def double(x): return x * 2")
     assert result.error is None
     f = result.namespace["double"]
@@ -38,7 +38,7 @@ def test_sbfunction_callable():
 
 def test_sbfunction_metadata():
     policy = Policy()
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
     result = sandbox.exec('''\
 def greet(name: str, greeting: str = "Hello") -> str:
     """Greet someone."""
@@ -54,7 +54,7 @@ def greet(name: str, greeting: str = "Hello") -> str:
 
 def test_sbfunction_pickle_roundtrip():
     policy = Policy()
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
     result = sandbox.exec("def f(x): return x + 1")
     f = result.namespace["f"]
 
@@ -74,7 +74,7 @@ def test_sbfunction_pickle_roundtrip():
 
 def test_sbfunction_repr():
     policy = Policy()
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
     result = sandbox.exec("def f(x): return x")
     f = result.namespace["f"]
     assert "active" in repr(f)
@@ -86,7 +86,7 @@ def test_sbfunction_repr():
 
 def test_sbfunction_with_defaults():
     policy = Policy()
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
     result = sandbox.exec("def add(a, b=10): return a + b")
     f = result.namespace["add"]
     assert f(5) == 15
@@ -96,7 +96,7 @@ def test_sbfunction_with_defaults():
 def test_sbfunction_with_closure():
     """Functions that capture local scope variables."""
     policy = Policy()
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
     result = sandbox.exec("""\
 def make_adder(n):
     def add(x):
@@ -115,7 +115,7 @@ result = add5(3)
 def test_sbfunction_closure_pickle_roundtrip():
     """Closure variables are frozen and restored on pickle round-trip."""
     policy = Policy()
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
     result = sandbox.exec("""\
 def make_adder(n):
     def add(x):
@@ -145,7 +145,7 @@ add5 = make_adder(5)
 def test_sbfunction_closure_multiple_vars():
     """Multiple closure variables are all frozen."""
     policy = Policy()
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
     result = sandbox.exec("""\
 def make_fn(a, b, c):
     def compute(x):
@@ -166,7 +166,7 @@ quadratic = make_fn(2, 3, 1)
 
 def test_sbfunction_multiple_functions():
     policy = Policy()
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
     result = sandbox.exec("""\
 def add(a, b): return a + b
 def mul(a, b): return a * b
@@ -179,9 +179,9 @@ result = add(2, 3) + mul(4, 5)
 
 
 def test_sbfunction_with_class_method():
-    """Methods inside classes should work in task mode."""
+    """Methods inside classes should work in wrapped mode."""
     policy = Policy()
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
     result = sandbox.exec("""\
 class Calculator:
     def add(self, a, b):
@@ -197,19 +197,19 @@ result = c.add(3, 4)
 # --- SbClass / SbInstance tests ---
 
 
-def test_task_mode_creates_sbclass():
-    """Classes in task mode are wrapped in SbClass."""
+def test_wrapped_mode_creates_sbclass():
+    """Classes in wrapped mode are wrapped in SbClass."""
     policy = Policy()
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
     result = sandbox.exec("class Foo: pass")
     assert result.error is None
     assert isinstance(result.namespace["Foo"], SbClass)
 
 
-def test_service_mode_creates_regular_class():
-    """Classes in service mode are plain types."""
+def test_raw_mode_creates_regular_class():
+    """Classes in raw mode are plain types."""
     policy = Policy()
-    sandbox = Sandbox(policy, mode="service")
+    sandbox = Sandbox(policy, mode="raw")
     result = sandbox.exec("class Foo: pass")
     assert result.error is None
     assert isinstance(result.namespace["Foo"], type)
@@ -218,7 +218,7 @@ def test_service_mode_creates_regular_class():
 def test_sbclass_instantiation():
     """SbClass.__call__ creates SbInstance."""
     policy = Policy()
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
     result = sandbox.exec("""\
 class Point:
     def __init__(self, x, y):
@@ -236,7 +236,7 @@ result = p.x + p.y
 def test_sbclass_methods():
     """Methods on SbInstance delegate to the real instance."""
     policy = Policy()
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
     result = sandbox.exec("""\
 class Counter:
     def __init__(self):
@@ -259,7 +259,7 @@ result = c.value()
 def test_sbclass_dunders():
     """Dunder methods on SbInstance work via forwarding."""
     policy = Policy()
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
     result = sandbox.exec("""\
 class MyList:
     def __init__(self):
@@ -281,7 +281,7 @@ s = str(ml)
 def test_sbclass_pickle_roundtrip():
     """SbClass can be pickled and reactivated."""
     policy = Policy()
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
     result = sandbox.exec("""\
 class Adder:
     def __init__(self, n):
@@ -306,7 +306,7 @@ class Adder:
 def test_sbinstance_pickle_roundtrip():
     """SbInstance can be pickled and reactivated."""
     policy = Policy()
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
     result = sandbox.exec("""\
 class Point:
     def __init__(self, x, y):
@@ -335,7 +335,7 @@ p = Point(3, 4)
 def test_sbclass_with_decorator():
     """Class decorators work and refs are frozen for recompilation."""
     policy = Policy()
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
     result = sandbox.exec("""\
 def add_greet(cls):
     cls.greet = lambda self: f"Hello from {self.name}"
@@ -364,7 +364,7 @@ result = p.greet()
 def test_sbclass_with_inheritance():
     """Base class references are frozen for recompilation."""
     policy = Policy()
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
     result = sandbox.exec("""\
 class Base:
     def hello(self):
@@ -384,7 +384,7 @@ result = c.hello() + " " + c.world()
 def test_sbfunction_lambda_not_wrapped():
     """Lambdas are not wrapped (no FunctionDef)."""
     policy = Policy()
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
     result = sandbox.exec("f = lambda x: x + 1\nresult = f(5)")
     assert result.error is None
     assert result.namespace["result"] == 6
@@ -395,7 +395,7 @@ def test_sbfunction_lambda_not_wrapped():
 def test_sbfunction_decorated():
     """Decorated functions get wrapped after decoration."""
     policy = Policy()
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
     result = sandbox.exec("""\
 def decorator(fn):
     def wrapper(*args, **kwargs):
@@ -416,7 +416,7 @@ result = f(5)
 
 def test_sbclass_class_level_attribute():
     """SbClass proxies class-level attribute access."""
-    sandbox = Sandbox(Policy(), mode="task")
+    sandbox = Sandbox(Policy(), mode="wrapped")
     result = sandbox.exec("""\
 class Foo:
     X = 42
@@ -428,7 +428,7 @@ val = Foo.X
 
 def test_sbclass_static_method():
     """SbClass proxies static method access."""
-    sandbox = Sandbox(Policy(), mode="task")
+    sandbox = Sandbox(Policy(), mode="wrapped")
     result = sandbox.exec("""\
 class Calc:
     @staticmethod
@@ -442,7 +442,7 @@ result = Calc.add(3, 4)
 
 def test_sbclass_class_method():
     """SbClass proxies class method access."""
-    sandbox = Sandbox(Policy(), mode="task")
+    sandbox = Sandbox(Policy(), mode="wrapped")
     result = sandbox.exec("""\
 class Counter:
     count = 0
@@ -458,7 +458,7 @@ result = Counter.increment()
 
 def test_sbinstance_protocol_dunders_work():
     """SbInstance protocol dunder forwarders work directly (bypass gate)."""
-    sandbox = Sandbox(Policy(), mode="task")
+    sandbox = Sandbox(Policy(), mode="wrapped")
     result = sandbox.exec("""\
 class MyList:
     def __init__(self, items):
@@ -483,7 +483,7 @@ has_two = 2 in obj
 
 def test_sbinstance_operators_work():
     """SbInstance arithmetic/comparison dunder forwarders work."""
-    sandbox = Sandbox(Policy(), mode="task")
+    sandbox = Sandbox(Policy(), mode="wrapped")
     result = sandbox.exec("""\
 class Pair:
     def __init__(self, a, b):
@@ -511,7 +511,7 @@ eq = p == Pair(4, 6)
 def test_auto_activate_sbfunction_in_namespace():
     """Inactive SbFunction passed via namespace is auto-activated by exec()."""
     policy = Policy()
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     # Define and pickle a function
     result = sandbox.exec("def inc(x): return x + 1")
@@ -529,7 +529,7 @@ def test_auto_activate_sbfunction_in_namespace():
 def test_auto_activate_sbclass_in_namespace():
     """Inactive SbClass passed via namespace is auto-activated by exec()."""
     policy = Policy()
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     result = sandbox.exec("""\
 class Point:
@@ -552,7 +552,7 @@ class Point:
 def test_auto_activate_sbinstance_in_namespace():
     """Inactive SbInstance passed via namespace is auto-activated by exec()."""
     policy = Policy()
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     result = sandbox.exec("""\
 class Counter:
@@ -575,7 +575,7 @@ c = Counter(42)
 def test_auto_activate_multiple_wrappers():
     """Multiple inactive wrappers are all auto-activated."""
     policy = Policy()
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     result = sandbox.exec("""\
 def add(a, b): return a + b
@@ -602,7 +602,7 @@ def mul(a, b): return a * b
 def test_direct_call_enforces_tick_limit():
     """Direct SbFunction call respects tick_limit via _call_in_context."""
     policy = Policy(tick_limit=50)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     result = sandbox.exec("""\
 def count_high():
@@ -621,7 +621,7 @@ def count_high():
 def test_direct_call_enforces_timeout():
     """Direct SbFunction call respects timeout via _call_in_context."""
     policy = Policy(timeout=0.1)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     result = sandbox.exec("""\
 def spin():
@@ -638,7 +638,7 @@ def spin():
 def test_direct_call_enforces_cancellation():
     """Direct SbFunction call respects cancellation via _call_in_context."""
     policy = Policy(timeout=10.0)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     result = sandbox.exec("""\
 def spin():
@@ -660,7 +660,7 @@ def spin():
 def test_direct_call_resets_tick_counter():
     """Each direct call gets a fresh tick counter."""
     policy = Policy(tick_limit=100)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     result = sandbox.exec("""\
 def loop50():
@@ -678,7 +678,7 @@ def loop50():
 def test_direct_call_sbclass_enforces_tick_limit():
     """Direct SbClass construction respects tick_limit."""
     policy = Policy(tick_limit=50)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     result = sandbox.exec("""\
 class Heavy:
@@ -696,7 +696,7 @@ class Heavy:
 def test_direct_call_after_pickle_roundtrip():
     """Pickled + activated SbFunction gets full sandbox context on direct call."""
     policy = Policy(tick_limit=50)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     result = sandbox.exec("""\
 def count_high():
@@ -717,7 +717,7 @@ def count_high():
 def test_direct_call_succeeds_under_limits():
     """Direct SbFunction call succeeds when within limits."""
     policy = Policy(tick_limit=1000, timeout=10.0)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     result = sandbox.exec("""\
 def compute(n):
@@ -739,7 +739,7 @@ def compute(n):
 def test_frozen_globals_on_pickle():
     """Global SbFunction deps are frozen on pickle and restored on activate."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     result = sandbox.exec("""\
 def square(x): return x * x
@@ -766,7 +766,7 @@ def sum_squares(lst):
 def test_frozen_globals_namespace_overrides():
     """Caller namespace overrides frozen globals (late binding)."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     result = sandbox.exec("""\
 def square(x): return x * x
@@ -792,7 +792,7 @@ def apply(x):
 def test_frozen_globals_closure_wins_over_globals():
     """Closure vars take priority over frozen globals with the same name."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     result = sandbox.exec("""\
 def helper(x): return x + 100
@@ -818,7 +818,7 @@ add5 = make_fn(5)
 def test_global_refs_property():
     """global_refs returns names of global references."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     result = sandbox.exec("""\
 def square(x): return x * x
@@ -835,7 +835,7 @@ def sum_squares(lst):
 def test_global_refs_property_after_pickle():
     """global_refs works after pickle round-trip."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     result = sandbox.exec("""\
 def square(x): return x * x
@@ -853,7 +853,7 @@ def sum_squares(lst):
 def test_frozen_globals_auto_activate():
     """Frozen globals are auto-activated when the parent is activated."""
     policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="task")
+    sandbox = Sandbox(policy, mode="wrapped")
 
     result = sandbox.exec("""\
 def square(x): return x * x
