@@ -104,7 +104,7 @@ def make_gates(
         import ast as _ast
         import types
 
-        from .builtins import SAFE_BUILTINS
+        from .builtins import make_safe_builtins
         from .rewriter import Rewriter
 
         # Read source
@@ -127,7 +127,7 @@ def make_gates(
 
             # Build namespace with same gates
             ns = dict(mod.__dict__)
-            ns["__builtins__"] = dict(SAFE_BUILTINS)
+            ns["__builtins__"] = make_safe_builtins(__sb_getattr__)
             ns.update(gates)
 
             # Override defun/defclass gates with VFS-specific ones that

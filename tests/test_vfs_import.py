@@ -455,3 +455,42 @@ def test_vfs_function_pickle_roundtrip():
     # Activate and call
     sandbox.activate(restored)
     assert restored(21) == 42
+
+
+def test_vfs_module_getattr_gated():
+    """getattr() and hasattr() inside VFS modules go through the attribute policy."""
+
+    class Secret:
+        _hidden = 42
+        public = 99
+
+    policy = Policy(tick_limit=10_000)
+    policy.cls(Secret)
+    sandbox, fs = _make_sandbox(policy=policy)
+    fs.files["/probe.py"] = """\
+def read_private(obj):
+    return getattr(obj, '_hidden', 'blocked')
+
+def read_public(obj):
+    return getattr(obj, 'public', 'missing')
+
+def has_private(obj):
+    return hasattr(obj, '_hidden')
+
+def has_public(obj):
+    return hasattr(obj, 'public')
+"""
+
+    result = sandbox.exec("""\
+from probe import read_private, read_public, has_private, has_public
+obj = Secret()
+pub = read_public(obj)
+priv = read_private(obj)
+h_pub = has_public(obj)
+h_priv = has_private(obj)
+""")
+    assert result.error is None
+    assert result.namespace["pub"] == 99
+    assert result.namespace["priv"] == "blocked"
+    assert result.namespace["h_pub"] is True
+    assert result.namespace["h_priv"] is False
