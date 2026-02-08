@@ -113,29 +113,28 @@ def _patched_isdir(path: Any) -> bool:
     return _originals["isdir"](path)
 
 
-def _patched_mkdir(path: Any, *args: Any, **kwargs: Any) -> None:
+def _patched_mkdir(path: Any, mode: int = 0o777, **kwargs: Any) -> None:
     fs = _get_fs()
     if fs is not None:
         token = _in_fs_op.set(True)
         try:
-            fs.mkdir(str(path))
+            fs.mkdir(str(path), mode)
             return
         finally:
             _in_fs_op.reset(token)
-    return _originals["mkdir"](path, *args, **kwargs)
+    return _originals["mkdir"](path, mode, **kwargs)
 
 
-def _patched_makedirs(path: Any, *args: Any, **kwargs: Any) -> None:
+def _patched_makedirs(path: Any, mode: int = 0o777, *, exist_ok: bool = False) -> None:
     fs = _get_fs()
     if fs is not None:
         token = _in_fs_op.set(True)
         try:
-            exist_ok = kwargs.get("exist_ok", False)
-            fs.makedirs(str(path), exist_ok=exist_ok)
+            fs.makedirs(str(path), mode, exist_ok=exist_ok)
             return
         finally:
             _in_fs_op.reset(token)
-    return _originals["makedirs"](path, *args, **kwargs)
+    return _originals["makedirs"](path, mode, exist_ok=exist_ok)
 
 
 def _patched_remove(path: Any) -> None:
