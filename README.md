@@ -24,7 +24,7 @@ print(f"total = {total}")
 print(result.stdout)       # "total = 45\n"
 print(result.namespace)    # {"total": 45}
 print(result.error)        # None
-print(result.ticks)        # 0 (no loops or function calls)
+print(result.ticks)        # 3 (fn calls: range + sum + print)
 ```
 
 ## Documentation

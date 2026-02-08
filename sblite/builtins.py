@@ -60,6 +60,7 @@ SAFE_FN_NAMES = (
     "zip",
 )
 
+
 # Safe exception types available in sandbox.
 SAFE_EXCEPTIONS = (
     "ArithmeticError",
@@ -153,6 +154,57 @@ SAFE_BUILTINS["NotImplemented"] = NotImplemented
 SAFE_BUILTINS["__build_class__"] = _builtins.__build_class__
 
 
+class _GatedMeta(type):
+    """Metaclass for gated type proxies.
+
+    Each proxy is a real type (passes ``PyType_Check``), so it works
+    with ``match/case`` patterns, ``isinstance``, and ``issubclass``.
+    Attribute access (e.g. ``int.from_bytes``) delegates to the
+    wrapped type.  A custom ``__build_class__`` unwraps proxies when
+    used as base classes.
+    """
+
+    def __call__(cls, *args: Any, **kwargs: Any) -> Any:
+        real = cls.__gated_real__
+        if not cls.__gated_constructable__:
+            raise TypeError(
+                f"'{real.__name__}' is not constructable in the sandbox"
+            )
+        cls.__gated_checkpoint__()
+        return real(*args, **kwargs)
+
+    def __instancecheck__(cls, instance: Any) -> bool:
+        return isinstance(instance, cls.__gated_real__)
+
+    def __subclasscheck__(cls, subclass: type) -> bool:
+        real_sub = getattr(subclass, "__gated_real__", subclass)
+        return issubclass(real_sub, cls.__gated_real__)
+
+    def __getattr__(cls, name: str) -> Any:
+        return getattr(cls.__gated_real__, name)
+
+    def __repr__(cls) -> str:
+        return repr(cls.__gated_real__)
+
+
+def _make_gated_type(
+    real_type: type,
+    checkpoint: Any,
+    *,
+    constructable: bool = True,
+) -> type:
+    """Create a gated proxy type via ``_GatedMeta``."""
+    return _GatedMeta(
+        real_type.__name__,
+        (),
+        {
+            "__gated_real__": real_type,
+            "__gated_checkpoint__": staticmethod(checkpoint),
+            "__gated_constructable__": constructable,
+        },
+    )
+
+
 class TailBuffer:
     """A write-only string buffer that keeps only the most recent bytes.
 
@@ -196,14 +248,66 @@ def make_print(buffer: StringIO | TailBuffer) -> Any:
     return _print
 
 
-def make_safe_builtins(getattr_gate: Any) -> dict[str, Any]:
+def make_safe_builtins(
+    getattr_gate: Any,
+    checkpoint: Any = None,
+) -> dict[str, Any]:
     """Create a safe builtins dict with policy-gated getattr/hasattr/locals.
 
     This must be used everywhere sandboxed code executes (main exec,
     VFS modules, reactivated functions/classes) so that ``getattr()``
     and ``hasattr()`` always route through the attribute policy.
+
+    When *checkpoint* is provided, every callable builtin gets a gate
+    that fires one checkpoint (tick + resource check) before executing.
+    Types are wrapped with ``_GatedType`` so isinstance/issubclass
+    and attribute access (e.g. ``int.from_bytes``) still work.
     """
     builtins = dict(SAFE_BUILTINS)
+
+    if checkpoint is not None:
+        # super() uses frame magic (__class__ cell) — gating breaks it.
+        _ungated_types = frozenset({"super"})
+
+        for name in SAFE_FN_NAMES:
+            if name in _ungated_types:
+                continue
+            original = builtins[name]
+            if isinstance(original, type):
+                builtins[name] = _make_gated_type(original, checkpoint)
+            elif callable(original):
+                fn = original
+
+                def _gated(*args: Any, _fn: Any = fn, **kwargs: Any) -> Any:
+                    checkpoint()
+                    return _fn(*args, **kwargs)
+
+                _gated.__name__ = name
+                _gated.__qualname__ = name
+                builtins[name] = _gated
+
+        # type() is already restricted to single-arg form; gate it too
+        safe_type = builtins["type"]
+
+        def _gated_type(obj, /, _fn=safe_type):
+            checkpoint()
+            return _fn(obj)
+
+        builtins["type"] = _gated_type
+
+        # __build_class__ must unwrap gated bases
+        real_build_class = _builtins.__build_class__
+
+        def _gated_build_class(func, name, *bases, **kwargs):
+            unwrapped = tuple(
+                b.__gated_real__
+                if isinstance(type(b), _GatedMeta)
+                else b
+                for b in bases
+            )
+            return real_build_class(func, name, *unwrapped, **kwargs)
+
+        builtins["__build_class__"] = _gated_build_class
 
     def _safe_getattr(obj: Any, name: str, *default: Any) -> Any:
         try:

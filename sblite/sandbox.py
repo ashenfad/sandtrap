@@ -13,7 +13,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from .builtins import TailBuffer, make_print, make_safe_builtins
+from .builtins import TailBuffer, _make_gated_type, make_print, make_safe_builtins
 from .errors import SbTimeout, SbValidationError, strip_internal_frames
 from .fs.context import use_fs
 from .fs.patch import install as install_fs
@@ -30,28 +30,6 @@ _exec_counter = itertools.count(1)
 _INTERNAL_KEYS = {"__builtins__", "__name__"}
 
 
-class _NonConstructable:
-    """Proxy for a class registered with constructable=False.
-
-    Supports isinstance/issubclass checks but raises TypeError on call.
-    """
-
-    def __init__(self, cls: type) -> None:
-        self._cls = cls
-
-    def __instancecheck__(self, instance: Any) -> bool:
-        return isinstance(instance, self._cls)
-
-    def __subclasscheck__(self, subclass: type) -> bool:
-        return issubclass(subclass, self._cls)
-
-    def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        raise TypeError(
-            f"'{self._cls.__name__}' is not constructable in the sandbox"
-        )
-
-    def __repr__(self) -> str:
-        return f"<non-constructable '{self._cls.__name__}'>"
 
 
 @dataclass
@@ -180,7 +158,10 @@ class Sandbox:
         ns: dict[str, Any] = dict(namespace) if namespace else {}
         injected: dict[str, Any] = {}
 
-        ns["__builtins__"] = make_safe_builtins(gates["__sb_getattr__"])
+        ns["__builtins__"] = make_safe_builtins(
+            gates["__sb_getattr__"],
+            checkpoint=gates["__sb_checkpoint__"],
+        )
         ns.setdefault("__name__", "__sblite__")
         ns.update(gates)
 
@@ -201,15 +182,28 @@ class Sandbox:
             if cls_reg.constructable:
                 ns.setdefault(cls_name, cls_reg.cls)
             else:
-                ns.setdefault(cls_name, _NonConstructable(cls_reg.cls))
+                ns.setdefault(
+                    cls_name,
+                    _make_gated_type(
+                        cls_reg.cls,
+                        gates["__sb_checkpoint__"],
+                        constructable=False,
+                    ),
+                )
             injected[cls_name] = ns[cls_name]
 
         # Provide open() if filesystem interception is active
         if self.filesystem is not None:
             ns["__builtins__"]["open"] = _builtins.open
 
-        # Capture stdout
-        print_fn = make_print(stdout_buf)
+        # Capture stdout (gated for tick tracking)
+        checkpoint = gates["__sb_checkpoint__"]
+        raw_print = make_print(stdout_buf)
+
+        def print_fn(*args: Any, **kwargs: Any) -> None:
+            checkpoint()
+            raw_print(*args, **kwargs)
+
         ns["print"] = print_fn
         injected["print"] = print_fn
 
