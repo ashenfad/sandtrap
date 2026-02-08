@@ -7,6 +7,7 @@ They are inert when no sandbox filesystem is active (``current_fs`` is
 
 import builtins
 import contextvars
+import io
 import os
 import threading
 from typing import Any
@@ -117,7 +118,7 @@ def _patched_mkdir(path: Any, *args: Any, **kwargs: Any) -> None:
     if fs is not None:
         token = _in_fs_op.set(True)
         try:
-            fs.mkdir(str(path), *args, **kwargs)
+            fs.mkdir(str(path))
             return
         finally:
             _in_fs_op.reset(token)
@@ -205,6 +206,7 @@ def install() -> None:
 
         # Store originals
         _originals["open"] = builtins.open
+        _originals["io_open"] = io.open
         _originals["stat"] = os.stat
         _originals["lstat"] = os.lstat
         _originals["listdir"] = os.listdir
@@ -221,6 +223,7 @@ def install() -> None:
 
         # Install patches
         builtins.open = _patched_open
+        io.open = _patched_open
         os.stat = _patched_stat
         os.lstat = _patched_lstat
         os.listdir = _patched_listdir

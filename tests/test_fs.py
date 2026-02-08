@@ -1,6 +1,7 @@
 """Tests for filesystem interception (Phase 8)."""
 
 import os
+import pathlib
 
 import pytest
 
@@ -230,3 +231,147 @@ def test_memoryfs_open_write_validates_parent():
         assert False, "Should have raised FileNotFoundError"
     except FileNotFoundError:
         pass
+
+
+# --- pathlib interception ---
+
+
+def _pathlib_sandbox():
+    """Create a sandbox with pathlib registered and a populated VFS."""
+    fs = MemoryFS()
+    fs.files["/data.txt"] = "hello pathlib"
+    fs.files["/sub/nested.txt"] = "nested"
+    fs.dirs.add("/sub")
+    policy = Policy()
+    policy.module(pathlib)
+    return Sandbox(policy, filesystem=fs), fs
+
+
+def test_pathlib_read_text():
+    """Path.read_text() should read from the VFS."""
+    sandbox, _ = _pathlib_sandbox()
+    result = sandbox.exec("""\
+import pathlib
+content = pathlib.Path('/data.txt').read_text()
+""")
+    assert result.error is None
+    assert result.namespace["content"] == "hello pathlib"
+
+
+def test_pathlib_write_text():
+    """Path.write_text() should write to the VFS."""
+    sandbox, fs = _pathlib_sandbox()
+    result = sandbox.exec("""\
+import pathlib
+pathlib.Path('/output.txt').write_text('written via pathlib')
+""")
+    assert result.error is None
+    assert fs.files["/output.txt"] == "written via pathlib"
+
+
+def test_pathlib_exists():
+    """Path.exists() should check the VFS."""
+    sandbox, _ = _pathlib_sandbox()
+    result = sandbox.exec("""\
+import pathlib
+present = pathlib.Path('/data.txt').exists()
+missing = pathlib.Path('/nope.txt').exists()
+""")
+    assert result.error is None
+    assert result.namespace["present"] is True
+    assert result.namespace["missing"] is False
+
+
+def test_pathlib_is_file():
+    """Path.is_file() should check the VFS."""
+    sandbox, _ = _pathlib_sandbox()
+    result = sandbox.exec("""\
+import pathlib
+is_file = pathlib.Path('/data.txt').is_file()
+is_dir = pathlib.Path('/sub').is_file()
+""")
+    assert result.error is None
+    assert result.namespace["is_file"] is True
+    assert result.namespace["is_dir"] is False
+
+
+def test_pathlib_is_dir():
+    """Path.is_dir() should check the VFS."""
+    sandbox, _ = _pathlib_sandbox()
+    result = sandbox.exec("""\
+import pathlib
+is_dir = pathlib.Path('/sub').is_dir()
+is_file = pathlib.Path('/data.txt').is_dir()
+""")
+    assert result.error is None
+    assert result.namespace["is_dir"] is True
+    assert result.namespace["is_file"] is False
+
+
+def test_pathlib_iterdir():
+    """Path.iterdir() should list VFS contents."""
+    sandbox, _ = _pathlib_sandbox()
+    result = sandbox.exec("""\
+import pathlib
+names = sorted(p.name for p in pathlib.Path('/').iterdir())
+""")
+    assert result.error is None
+    assert "data.txt" in result.namespace["names"]
+
+
+def test_pathlib_mkdir():
+    """Path.mkdir() should create directories in the VFS."""
+    sandbox, fs = _pathlib_sandbox()
+    result = sandbox.exec("""\
+import pathlib
+pathlib.Path('/newdir').mkdir()
+""")
+    assert result.error is None
+    assert "/newdir" in fs.dirs
+
+
+def test_pathlib_unlink():
+    """Path.unlink() should remove files from the VFS."""
+    sandbox, fs = _pathlib_sandbox()
+    result = sandbox.exec("""\
+import pathlib
+pathlib.Path('/data.txt').unlink()
+""")
+    assert result.error is None
+    assert "/data.txt" not in fs.files
+
+
+def test_pathlib_rename():
+    """Path.rename() should rename files in the VFS."""
+    sandbox, fs = _pathlib_sandbox()
+    result = sandbox.exec("""\
+import pathlib
+pathlib.Path('/data.txt').rename('/moved.txt')
+""")
+    assert result.error is None
+    assert "/data.txt" not in fs.files
+    assert fs.files["/moved.txt"] == "hello pathlib"
+
+
+def test_pathlib_open_read():
+    """Path.open() should read from the VFS."""
+    sandbox, _ = _pathlib_sandbox()
+    result = sandbox.exec("""\
+import pathlib
+with pathlib.Path('/data.txt').open() as f:
+    content = f.read()
+""")
+    assert result.error is None
+    assert result.namespace["content"] == "hello pathlib"
+
+
+def test_pathlib_open_write():
+    """Path.open('w') should write to the VFS."""
+    sandbox, fs = _pathlib_sandbox()
+    result = sandbox.exec("""\
+import pathlib
+with pathlib.Path('/written.txt').open('w') as f:
+    f.write('via open')
+""")
+    assert result.error is None
+    assert fs.files["/written.txt"] == "via open"
