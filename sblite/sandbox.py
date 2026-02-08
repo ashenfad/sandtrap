@@ -232,20 +232,23 @@ class Sandbox:
             install_fs()
             stack.enter_context(use_fs(self.filesystem))
 
-    def exec(
-        self,
-        source: str,
-        *,
-        namespace: Mapping[str, Any] | None = None,
-    ) -> ExecResult:
-        """Execute source code synchronously in the sandbox."""
-        # 1. Parse
+    # ------------------------------------------------------------------
+    # Shared pipeline helpers
+    # ------------------------------------------------------------------
+
+    def _parse_and_rewrite(
+        self, source: str
+    ) -> tuple[ast.Module, Rewriter] | ExecResult:
+        """Parse source and run the AST rewriter.
+
+        Returns ``(tree, rewriter)`` on success, or an ``ExecResult``
+        with the error already populated on parse/validation failure.
+        """
         try:
             tree = ast.parse(source)
         except SyntaxError as e:
             return ExecResult(error=e)
 
-        # 2. Rewrite (validate + transform)
         wrapped_mode = self.mode == "wrapped"
         rewriter = Rewriter(wrapped_mode=wrapped_mode)
         try:
@@ -253,10 +256,21 @@ class Sandbox:
         except SbValidationError as e:
             return ExecResult(error=e)
 
-        # 3. Fix missing locations
+        return tree, rewriter
+
+    def _compile_and_setup(
+        self,
+        tree: ast.Module,
+        rewriter: Rewriter,
+        source: str,
+        namespace: Mapping[str, Any] | None,
+    ) -> tuple[Any, str, dict[str, Any], dict[str, Any], dict[str, Any], TailBuffer]:
+        """Fix locations, register linecache, compile, and build namespace.
+
+        Returns ``(code, filename, gates, ns, injected, stdout_buf)``.
+        """
         ast.fix_missing_locations(tree)
 
-        # 4. Register source in linecache for tracebacks
         filename = f"<sblite:{next(_exec_counter)}>"
         lines = source.splitlines(keepends=True)
         if lines and not lines[-1].endswith("\n"):
@@ -268,10 +282,9 @@ class Sandbox:
             filename,
         )
 
-        # 5. Compile
         code = compile(tree, filename, "exec")
 
-        # 6. Build namespace
+        wrapped_mode = self.mode == "wrapped"
         self._cancel_flag.clear()
         mem_limit_bytes, start_rss = self._memory_params()
         gates = make_gates(
@@ -287,11 +300,68 @@ class Sandbox:
         )
         stdout_buf = self._make_stdout_buf()
         ns, injected = self._build_namespace(namespace, gates, stdout_buf)
-
-        # 7. Auto-activate any inactive wrappers in the namespace
         self._auto_activate(ns, gates)
 
-        # 8. Execute with sandbox context
+        return code, filename, gates, ns, injected, stdout_buf
+
+    def _build_result(
+        self,
+        ns: dict[str, Any],
+        injected: dict[str, Any],
+        gates: dict[str, Any],
+        stdout_buf: TailBuffer,
+        filename: str,
+        error: BaseException | None,
+        extra_locals: dict[str, Any] | None = None,
+    ) -> ExecResult:
+        """Post-execution: attach refs, build result namespace, clean up."""
+        self._attach_sandbox_refs(ns, gates)
+
+        result_ns = {
+            k: v
+            for k, v in ns.items()
+            if k not in _INTERNAL_KEYS
+            and not k.startswith("__sb_")
+            and not (k in injected and v is injected[k])
+        }
+
+        if extra_locals:
+            for k, v in extra_locals.items():
+                if not k.startswith("__sb_"):
+                    result_ns[k] = v
+
+        tick_counter = gates.get("__sb_tick_counter__")
+        ticks = tick_counter[0] if tick_counter else 0
+
+        linecache.cache.pop(filename, None)
+
+        return ExecResult(
+            namespace=result_ns,
+            stdout=stdout_buf.getvalue(),
+            error=error,
+            ticks=ticks,
+        )
+
+    # ------------------------------------------------------------------
+    # Public execution methods
+    # ------------------------------------------------------------------
+
+    def exec(
+        self,
+        source: str,
+        *,
+        namespace: Mapping[str, Any] | None = None,
+    ) -> ExecResult:
+        """Execute source code synchronously in the sandbox."""
+        prepared = self._parse_and_rewrite(source)
+        if isinstance(prepared, ExecResult):
+            return prepared
+        tree, rewriter = prepared
+
+        code, filename, gates, ns, injected, stdout_buf = (
+            self._compile_and_setup(tree, rewriter, source, namespace)
+        )
+
         error = None
         with ExitStack() as stack:
             self._enter_sandbox_context(stack)
@@ -302,30 +372,8 @@ class Sandbox:
                     raise  # Real Ctrl-C from host
                 error = strip_internal_frames(e)
 
-        # 9. Attach sandbox refs to newly created wrappers for direct calls
-        self._attach_sandbox_refs(ns, gates)
-
-        # 10. Build clean result namespace (keep original ns intact for globals)
-        result_ns = {
-            k: v
-            for k, v in ns.items()
-            if k not in _INTERNAL_KEYS
-            and not k.startswith("__sb_")
-            and not (k in injected and v is injected[k])
-        }
-
-        # 11. Read tick count
-        tick_counter = gates.get("__sb_tick_counter__")
-        ticks = tick_counter[0] if tick_counter else 0
-
-        # 12. Clean up linecache entry
-        linecache.cache.pop(filename, None)
-
-        return ExecResult(
-            namespace=result_ns,
-            stdout=stdout_buf.getvalue(),
-            error=error,
-            ticks=ticks,
+        return self._build_result(
+            ns, injected, gates, stdout_buf, filename, error
         )
 
     def activate(
@@ -355,21 +403,12 @@ class Sandbox:
         namespace: Mapping[str, Any] | None = None,
     ) -> ExecResult:
         """Execute source code asynchronously in the sandbox."""
-        # 1. Parse
-        try:
-            tree = ast.parse(source)
-        except SyntaxError as e:
-            return ExecResult(error=e)
+        prepared = self._parse_and_rewrite(source)
+        if isinstance(prepared, ExecResult):
+            return prepared
+        tree, rewriter = prepared
 
-        # 2. Rewrite (validate + transform)
-        wrapped_mode = self.mode == "wrapped"
-        rewriter = Rewriter(wrapped_mode=wrapped_mode)
-        try:
-            tree = rewriter.visit(tree)
-        except SbValidationError as e:
-            return ExecResult(error=e)
-
-        # 3. Wrap body in: async def __sb_aexec__(): ...; return __sb_locals__()
+        # Wrap body in: async def __sb_aexec__(): ...; return __sb_locals__()
         return_locals = ast.Return(
             value=ast.Call(
                 func=ast.Name(id="__sb_locals__", ctx=ast.Load()),
@@ -396,48 +435,11 @@ class Sandbox:
         wrapper = ast.AsyncFunctionDef(**wrapper_kwargs)
         tree.body = [wrapper]
 
-        # 4. Fix missing locations
-        ast.fix_missing_locations(tree)
-
-        # 5. Register source in linecache
-        filename = f"<sblite:{next(_exec_counter)}>"
-        lines = source.splitlines(keepends=True)
-        if lines and not lines[-1].endswith("\n"):
-            lines[-1] += "\n"
-        linecache.cache[filename] = (
-            len(source),
-            None,
-            lines,
-            filename,
+        code, filename, gates, ns, injected, stdout_buf = (
+            self._compile_and_setup(tree, rewriter, source, namespace)
         )
-
-        # 6. Compile
-        code = compile(tree, filename, "exec")
-
-        # 7. Build namespace
-        self._cancel_flag.clear()
-        mem_limit_bytes, start_rss = self._memory_params()
-        gates = make_gates(
-            self.policy,
-            _start_time=time.monotonic(),
-            _cancel_flag=self._cancel_flag,
-            _func_asts=rewriter._func_asts if wrapped_mode else None,
-            _class_asts=rewriter._class_asts if wrapped_mode else None,
-            _wrapped_mode=wrapped_mode,
-            _memory_limit_bytes=mem_limit_bytes,
-            _start_rss=start_rss,
-            _filesystem=self.filesystem,
-        )
-        stdout_buf = self._make_stdout_buf()
-        ns, injected = self._build_namespace(namespace, gates, stdout_buf)
-
-        # Auto-activate any inactive wrappers in the namespace
-        self._auto_activate(ns, gates)
-
-        # Inject locals() under an internal name for the async wrapper
         ns["__sb_locals__"] = _builtins.locals
 
-        # 8. Execute to define __sb_aexec__, then await it
         error = None
         result_locals: dict[str, Any] = {}
         with ExitStack() as stack:
@@ -445,8 +447,9 @@ class Sandbox:
             try:
                 exec(code, ns)  # noqa: S102
                 coro = ns["__sb_aexec__"]()
-                timeout = self.policy.timeout
-                result_locals = await asyncio.wait_for(coro, timeout=timeout)
+                result_locals = await asyncio.wait_for(
+                    coro, timeout=self.policy.timeout
+                )
                 if result_locals is None:
                     result_locals = {}
             except asyncio.TimeoutError:
@@ -458,34 +461,7 @@ class Sandbox:
                     raise  # Real Ctrl-C from host
                 error = strip_internal_frames(e)
 
-        # 9. Attach sandbox refs to newly created wrappers for direct calls
-        self._attach_sandbox_refs(ns, gates)
-
-        # 10. Build result namespace from locals + globals
-        result_ns: dict[str, Any] = {}
-        # Include globals set by user code
-        for k, v in ns.items():
-            if (
-                k not in _INTERNAL_KEYS
-                and not k.startswith("__sb_")
-                and not (k in injected and v is injected[k])
-            ):
-                result_ns[k] = v
-        # Overlay with locals from the async wrapper
-        for k, v in result_locals.items():
-            if not k.startswith("__sb_"):
-                result_ns[k] = v
-
-        # 11. Read tick count
-        tick_counter = gates.get("__sb_tick_counter__")
-        ticks = tick_counter[0] if tick_counter else 0
-
-        # 12. Clean up linecache entry
-        linecache.cache.pop(filename, None)
-
-        return ExecResult(
-            namespace=result_ns,
-            stdout=stdout_buf.getvalue(),
-            error=error,
-            ticks=ticks,
+        return self._build_result(
+            ns, injected, gates, stdout_buf, filename, error,
+            extra_locals=result_locals,
         )
