@@ -277,7 +277,10 @@ def test_coroutine_frame_access_blocked(sandbox):
 async def coro():
     return 1
 c = coro()
-f = c.cr_frame
+try:
+    f = c.cr_frame
+finally:
+    c.close()
 """)
     assert result.error is not None
 
