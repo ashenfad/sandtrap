@@ -1,6 +1,6 @@
 # sblite
 
-A lightweight in-process Python sandbox using AST rewriting and compiled bytecode execution. Sandboxed code runs at near-native speed while attribute access, imports, and resource usage are controlled by a whitelist-based policy.
+A lightweight in-process Python sandbox using AST rewriting and compiled bytecode execution. Whitelist-based policies control attribute access, imports, and resource usage. Designed as a walled garden for cooperative code (e.g. agent-generated scripts), not for adversarial inputs.
 
 ## Install
 
