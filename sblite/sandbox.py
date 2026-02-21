@@ -105,7 +105,13 @@ class Sandbox:
                     v.activate(gates=gates, sandbox=self, namespace=ns)
             elif isinstance(v, ModuleRef) and import_gate is not None:
                 try:
-                    ns[k] = import_gate(v.name, alias=v.name)
+                    top = v.name.split(".")[0]
+                    if k == top:
+                        # Bare dotted import (import pkg.mod) — return top-level package
+                        ns[k] = import_gate(v.name)
+                    else:
+                        # Aliased import (import pkg.mod as m) — return leaf module
+                        ns[k] = import_gate(v.name, alias=k)
                 except Exception:
                     pass  # VFS file may no longer exist
 

@@ -3,7 +3,7 @@
 import pickle
 
 from sblite import MemoryFS, Policy, Sandbox
-from sblite.wrappers import SbClass, SbFunction
+from sblite.wrappers import ModuleRef, SbClass, SbFunction
 
 
 def _make_sandbox(**kwargs):
@@ -494,3 +494,65 @@ h_priv = has_private(obj)
     assert result.namespace["priv"] == "blocked"
     assert result.namespace["h_pub"] is True
     assert result.namespace["h_priv"] is False
+
+
+# ------------------------------------------------------------------
+# ModuleRef reactivation
+# ------------------------------------------------------------------
+
+
+def test_moduleref_bare_dotted_import_reactivation():
+    """ModuleRef for a bare dotted import (import pkg.mod) restores the package chain."""
+    sandbox, fs = _make_sandbox()
+    fs.files["/pkg/__init__.py"] = ""
+    fs.files["/pkg/mod.py"] = "X = 42"
+
+    # Simulate what happens after deserializing a namespace that had
+    # ``import pkg.mod`` — the key is "pkg" and the ModuleRef stores "pkg.mod"
+    ns = {"pkg": ModuleRef("pkg.mod")}
+    result = sandbox.exec("result = pkg.mod.X", namespace=ns)
+    assert result.error is None
+    assert result.namespace["result"] == 42
+
+
+def test_moduleref_aliased_dotted_import_reactivation():
+    """ModuleRef for an aliased dotted import (import pkg.mod as m) returns the leaf."""
+    sandbox, fs = _make_sandbox()
+    fs.files["/pkg/__init__.py"] = ""
+    fs.files["/pkg/mod.py"] = "Y = 99"
+
+    # Simulate ``import pkg.mod as m`` — key is "m", ModuleRef stores "pkg.mod"
+    ns = {"m": ModuleRef("pkg.mod")}
+    result = sandbox.exec("result = m.Y", namespace=ns)
+    assert result.error is None
+    assert result.namespace["result"] == 99
+
+
+def test_moduleref_simple_import_reactivation():
+    """ModuleRef for a simple import (import helpers) resolves correctly."""
+    sandbox, fs = _make_sandbox()
+    fs.files["/helpers.py"] = "Z = 7"
+
+    ns = {"helpers": ModuleRef("helpers")}
+    result = sandbox.exec("result = helpers.Z", namespace=ns)
+    assert result.error is None
+    assert result.namespace["result"] == 7
+
+
+# ------------------------------------------------------------------
+# VFS package __init__.py execution
+# ------------------------------------------------------------------
+
+
+def test_vfs_package_init_executes():
+    """__init__.py in a VFS package is executed during dotted import."""
+    sandbox, fs = _make_sandbox()
+    fs.files["/pkg/__init__.py"] = "PKG_LOADED = True"
+    fs.files["/pkg/mod.py"] = "VAL = 1"
+
+    result = sandbox.exec("""\
+import pkg.mod
+result = pkg.PKG_LOADED
+""")
+    assert result.error is None
+    assert result.namespace["result"] is True
