@@ -14,6 +14,7 @@ sandbox = Sandbox(policy)
 Options:
 - `mode` -- `"wrapped"` (default) wraps user-defined functions/classes for pickling. `"raw"` returns plain objects. See [serialization.md](serialization.md).
 - `filesystem` -- a `FileSystem` implementation for VFS interception (see [filesystem.md](filesystem.md)).
+- `print_handler` -- a callable replacing the default `print` output handler. Receives the same arguments as `print()`. When not set, output is captured to `result.stdout`.
 
 ## Context manager
 

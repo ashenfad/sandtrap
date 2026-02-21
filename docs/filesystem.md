@@ -23,12 +23,10 @@ When a filesystem is provided, all calls to `open()`, `os.stat()`, `os.listdir()
 
 ### FileSystem protocol
 
-Implement the `FileSystem` protocol to create a custom filesystem:
+`FileSystem` is a `typing.Protocol` -- any object with the right methods works, no subclassing required:
 
 ```python
-from sblite import FileSystem
-
-class MyFS(FileSystem):
+class MyFS:
     def open(self, path, mode="r", **kwargs): ...
     def stat(self, path): ...
     def listdir(self, path): ...
@@ -42,6 +40,8 @@ class MyFS(FileSystem):
     def getcwd(self): ...
     def chdir(self, path): ...
 ```
+
+You can also inherit from `FileSystem` for IDE autocompletion, but it's optional.
 
 ### MemoryFS
 
