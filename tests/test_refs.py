@@ -168,7 +168,7 @@ def test_builtins_excluded():
     assert "None" not in refs
 
 
-def test_sb_names_excluded():
+def test_st_names_excluded():
     """Internal __st_* names are not reported."""
     refs = find_refs("__st_getattr__(x, 'y')")
     assert "__st_getattr__" not in refs
@@ -286,7 +286,7 @@ def test_starred_unpack_binds():
 
 
 def test_find_refs_with_namespace_follows_deps():
-    """find_refs with namespace follows SbFunction.global_refs."""
+    """find_refs with namespace follows StFunction.global_refs."""
     from sandtrap import Policy, Sandbox
 
     policy = Policy(tick_limit=10_000)

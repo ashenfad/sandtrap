@@ -3,7 +3,7 @@
 import socket as _socket
 from typing import Any
 
-from ..errors import SbError
+from ..errors import StError
 from .context import network_allowed
 
 _NETWORK_FAMILIES = {_socket.AF_INET, _socket.AF_INET6}
@@ -27,7 +27,7 @@ def _check_network(operation: str, sock: _socket.socket | None = None) -> None:
     if sock is not None and not _is_network_socket(sock):
         return
     if not network_allowed.get():
-        raise SbError(
+        raise StError(
             f"Network access denied: {operation}() blocked by sandbox. "
             f"Register with network_access=True to allow."
         )

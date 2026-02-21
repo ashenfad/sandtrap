@@ -50,7 +50,7 @@ Sandboxed code gets a restricted `__builtins__` (frozen via `MappingProxyType`):
 - **`__builtins__` mutation** -- frozen with `MappingProxyType`
 - **`__st_*` names** -- reserved namespace rejected at validation time
 - **`globals()`** -- not available
-- **Bare `except:`** -- automatically rewritten to `except Exception:` so sandboxed code cannot catch `BaseException` subclasses like `SbTimeout` or `SbCancelled`
+- **Bare `except:`** -- automatically rewritten to `except Exception:` so sandboxed code cannot catch `BaseException` subclasses like `StTimeout` or `StCancelled`
 
 ## Checkpoint enforcement
 

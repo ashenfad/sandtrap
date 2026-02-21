@@ -123,7 +123,7 @@ def test_traceback_shows_user_code():
     assert "<sandtrap:" in tb_text
 
 
-def test_error_no_sb_names():
+def test_error_no_st_names():
     """Error messages should not expose __st_* gate names."""
     policy = Policy()
     sandbox = Sandbox(policy)

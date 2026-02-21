@@ -3,7 +3,7 @@
 import pytest
 
 from sandtrap import Policy, Sandbox
-from sandtrap.errors import SbValidationError
+from sandtrap.errors import StValidationError
 
 
 @pytest.fixture
@@ -125,58 +125,58 @@ def test_builtins_not_assignable(sandbox):
 # --- Gate evasion ---
 
 
-def test_sb_name_read_blocked(sandbox):
+def test_st_name_read_blocked(sandbox):
     """Reading __st_* names is blocked at validation time."""
     result = sandbox.exec("x = __st_getattr__")
-    assert isinstance(result.error, SbValidationError)
+    assert isinstance(result.error, StValidationError)
 
 
-def test_sb_name_assign_blocked(sandbox):
+def test_st_name_assign_blocked(sandbox):
     result = sandbox.exec("__st_getattr__ = lambda o, a: getattr(o, a)")
-    assert isinstance(result.error, SbValidationError)
+    assert isinstance(result.error, StValidationError)
 
 
-def test_sb_name_delete_blocked(sandbox):
+def test_st_name_delete_blocked(sandbox):
     result = sandbox.exec("del __st_checkpoint__")
-    assert isinstance(result.error, SbValidationError)
+    assert isinstance(result.error, StValidationError)
 
 
-def test_sb_global_blocked(sandbox):
+def test_st_global_blocked(sandbox):
     result = sandbox.exec("""\
 def f():
     global __st_getattr__
 """)
-    assert isinstance(result.error, SbValidationError)
+    assert isinstance(result.error, StValidationError)
 
 
-def test_sb_nonlocal_blocked(sandbox):
+def test_st_nonlocal_blocked(sandbox):
     result = sandbox.exec("""\
 def f():
     __st_x = 1
     def g():
         nonlocal __st_x
 """)
-    assert isinstance(result.error, SbValidationError)
+    assert isinstance(result.error, StValidationError)
 
 
 def test_assign_to_exec_blocked(sandbox):
     result = sandbox.exec("exec = print")
-    assert isinstance(result.error, SbValidationError)
+    assert isinstance(result.error, StValidationError)
 
 
 def test_assign_to_eval_blocked(sandbox):
     result = sandbox.exec("eval = print")
-    assert isinstance(result.error, SbValidationError)
+    assert isinstance(result.error, StValidationError)
 
 
 def test_assign_to_compile_blocked(sandbox):
     result = sandbox.exec("compile = print")
-    assert isinstance(result.error, SbValidationError)
+    assert isinstance(result.error, StValidationError)
 
 
 def test_delete_exec_blocked(sandbox):
     result = sandbox.exec("del exec")
-    assert isinstance(result.error, SbValidationError)
+    assert isinstance(result.error, StValidationError)
 
 
 # --- Import shenanigans ---
@@ -209,7 +209,7 @@ def test_from_builtins_import(sandbox):
 
 def test_wildcard_import_blocked(sandbox):
     result = sandbox.exec("from os import *")
-    assert isinstance(result.error, SbValidationError)
+    assert isinstance(result.error, StValidationError)
 
 
 # --- Format string traversal ---

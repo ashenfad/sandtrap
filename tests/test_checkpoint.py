@@ -3,7 +3,7 @@
 import threading
 
 from sandtrap import Policy, Sandbox
-from sandtrap.errors import SbCancelled, SbTickLimit, SbTimeout
+from sandtrap.errors import StCancelled, StTickLimit, StTimeout
 
 
 def test_while_true_times_out():
@@ -11,7 +11,7 @@ def test_while_true_times_out():
     policy.timeout = 0.1
     sandbox = Sandbox(policy)
     result = sandbox.exec("while True: pass")
-    assert isinstance(result.error, SbTimeout)
+    assert isinstance(result.error, StTimeout)
 
 
 def test_nested_loops_time_out():
@@ -23,7 +23,7 @@ while True:
     for i in range(1000):
         pass
 """)
-    assert isinstance(result.error, SbTimeout)
+    assert isinstance(result.error, StTimeout)
 
 
 def test_fast_code_no_timeout():
@@ -59,8 +59,8 @@ def test_cancellation_via_flag():
     # Test with direct gate call
     try:
         gates["__st_checkpoint__"]()
-        assert False, "Should have raised SbCancelled"
-    except SbCancelled:
+        assert False, "Should have raised StCancelled"
+    except StCancelled:
         pass
 
 
@@ -94,7 +94,7 @@ def infinite():
 for x in infinite():
     pass
 """)
-    assert isinstance(result.error, SbTimeout)
+    assert isinstance(result.error, StTimeout)
 
 
 def test_no_timeout_when_none():
@@ -126,18 +126,18 @@ for i in range(10_000_000):
     pass
 """)
     timer.cancel()
-    assert isinstance(result.error, SbCancelled)
+    assert isinstance(result.error, StCancelled)
 
 
 def test_tick_limit_triggers():
-    """Loop exceeding tick limit raises SbTickLimit."""
+    """Loop exceeding tick limit raises StTickLimit."""
     policy = Policy(tick_limit=50)
     sandbox = Sandbox(policy)
     result = sandbox.exec("""\
 for i in range(200):
     pass
 """)
-    assert isinstance(result.error, SbTickLimit)
+    assert isinstance(result.error, StTickLimit)
 
 
 def test_tick_limit_allows_fast_code():
@@ -183,4 +183,4 @@ def test_comprehension_respects_tick_limit():
     policy = Policy(tick_limit=50)
     sandbox = Sandbox(policy)
     result = sandbox.exec("[i for i in range(200)]")
-    assert isinstance(result.error, SbTickLimit)
+    assert isinstance(result.error, StTickLimit)

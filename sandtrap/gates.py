@@ -12,13 +12,13 @@ from contextlib import ExitStack
 from typing import Any, cast
 
 from .builtins import make_safe_builtins
-from .errors import SbCancelled, SbTickLimit, SbTimeout
+from .errors import StCancelled, StTickLimit, StTimeout
 from .fs.context import suspend_fs_interception
 from .net.context import allow_network
 from .policy import Policy
 from .resource_limits import get_rss_bytes
 from .rewriter import Rewriter
-from .wrappers import SbClass, SbFunction, SbInstance
+from .wrappers import StClass, StFunction, StInstance
 
 
 class _SafeFormatter(_string_mod.Formatter):
@@ -85,9 +85,9 @@ def make_gates(
     _vfs_module_cache: dict[str, Any] = {}
 
     def _unwrap(obj: Any) -> Any:
-        """Unwrap SbInstance to access the real underlying instance."""
-        if isinstance(obj, SbInstance):
-            real = object.__getattribute__(obj, "_sb_instance")
+        """Unwrap StInstance to access the real underlying instance."""
+        if isinstance(obj, StInstance):
+            real = object.__getattribute__(obj, "_st_instance")
             if real is not None:
                 return real
         return obj
@@ -116,7 +116,7 @@ def make_gates(
         _vfs_module_cache[module_name] = mod
 
         try:
-            # Parse + rewrite (wrapped mode wraps functions/classes as SbFunction/SbClass)
+            # Parse + rewrite (wrapped mode wraps functions/classes as StFunction/StClass)
             tree = ast.parse(source)
             rewriter = Rewriter(wrapped_mode=_wrapped_mode)
             tree = rewriter.visit(tree)
@@ -140,7 +140,7 @@ def make_gates(
                         func_ast = cast(ast.FunctionDef, ast.parse(ast_ref).body[0])
                     else:
                         func_ast = vfs_func_asts[ast_ref]
-                    return SbFunction(name, compiled_fn, func_ast)
+                    return StFunction(name, compiled_fn, func_ast)
 
                 ns["__st_defun__"] = _vfs_defun
 
@@ -151,8 +151,8 @@ def make_gates(
                     name: str, compiled_cls: Any, ast_idx: int, **frozen_refs: Any
                 ) -> Any:
                     cls_ast = vfs_class_asts[ast_idx]
-                    sb_cls = SbClass(name, compiled_cls, cls_ast, frozen_refs=frozen_refs)
-                    sb_cls._sb_getattr_gate = __st_getattr__
+                    sb_cls = StClass(name, compiled_cls, cls_ast, frozen_refs=frozen_refs)
+                    sb_cls._st_getattr_gate = __st_getattr__
                     return sb_cls
 
                 ns["__st_defclass__"] = _vfs_defclass
@@ -406,7 +406,7 @@ def make_gates(
             if _func_asts is None:
                 return compiled_fn
             func_ast = _func_asts[ast_ref]
-        return SbFunction(name, compiled_fn, func_ast)
+        return StFunction(name, compiled_fn, func_ast)
 
     def __st_defclass__(
         name: str, compiled_cls: Any, ast_idx: int, **frozen_refs: Any
@@ -415,8 +415,8 @@ def make_gates(
             return compiled_cls
 
         class_ast = _class_asts[ast_idx]
-        sb_cls = SbClass(name, compiled_cls, class_ast, frozen_refs=frozen_refs)
-        sb_cls._sb_getattr_gate = __st_getattr__
+        sb_cls = StClass(name, compiled_cls, class_ast, frozen_refs=frozen_refs)
+        sb_cls._st_getattr_gate = __st_getattr__
         return sb_cls
 
     # Mutable boxes so checkpoint state can be reset for direct calls
@@ -427,15 +427,15 @@ def make_gates(
 
     def __st_checkpoint__() -> None:
         if _cancel_flag_box[0] is not None and _cancel_flag_box[0].is_set():
-            raise SbCancelled("Execution cancelled")
+            raise StCancelled("Execution cancelled")
         _tick_counter[0] += 1
         if policy.tick_limit is not None and _tick_counter[0] > policy.tick_limit:
-            raise SbTickLimit(
+            raise StTickLimit(
                 f"Execution exceeded {policy.tick_limit} tick limit"
             )
         if _start_time_box[0] is not None and policy.timeout is not None:
             if time.monotonic() - _start_time_box[0] > policy.timeout:
-                raise SbTimeout(
+                raise StTimeout(
                     f"Execution exceeded {policy.timeout}s timeout"
                 )
         if _memory_box[0] is not None and _memory_box[1] is not None:

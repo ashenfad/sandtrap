@@ -5,8 +5,8 @@ import pickle
 import pytest
 
 from sandtrap import MemoryFS, Policy, Sandbox, find_refs
-from sandtrap.errors import SbTickLimit
-from sandtrap.wrappers import SbClass, SbFunction
+from sandtrap.errors import StTickLimit
+from sandtrap.wrappers import StClass, StFunction
 
 # --- Function pickle + reuse ---
 
@@ -297,7 +297,7 @@ def spin():
     assert r2.error is None
 
     spin = r2.namespace["spin"]
-    with pytest.raises(SbTickLimit):
+    with pytest.raises(StTickLimit):
         spin()
 
 
@@ -364,7 +364,7 @@ def apply(x):
 
 
 def test_vfs_module_function_survives_pickle():
-    """VFS module function (SbFunction in wrapped mode) survives pickle."""
+    """VFS module function (StFunction in wrapped mode) survives pickle."""
     fs = MemoryFS()
     fs.files["/mathlib.py"] = "def double(x): return x * 2"
 
@@ -378,13 +378,13 @@ def quadruple(x):
     return double(double(x))
 """)
     assert r1.error is None
-    assert isinstance(r1.namespace["double"], SbFunction)
+    assert isinstance(r1.namespace["double"], StFunction)
 
     # Pickle only quadruple
     data = pickle.dumps(r1.namespace["quadruple"])
     restored = pickle.loads(data)
 
-    # Activate standalone — frozen double (SbFunction from VFS) makes it work
+    # Activate standalone — frozen double (StFunction from VFS) makes it work
     sandbox.activate(restored)
     assert restored(5) == 20
 
@@ -413,7 +413,7 @@ def dot(xs, ys):
 
     # Pickle the namespace
     ns_data = {k: pickle.dumps(v) for k, v in r1.namespace.items()
-               if isinstance(v, SbFunction)}
+               if isinstance(v, StFunction)}
 
     # Turn 2: restore only dot and use it
     dot = pickle.loads(ns_data["dot"])
@@ -616,7 +616,7 @@ def sum_squares(lst):
 
     # Pickle everything
     pickled = {k: pickle.dumps(v) for k, v in r1.namespace.items()
-               if isinstance(v, SbFunction)}
+               if isinstance(v, StFunction)}
 
     # Turn 2: only need sum_squares — use find_refs to discover deps
     source = "result = sum_squares([1, 2, 3])"
@@ -658,9 +658,9 @@ add20 = make_adder(20)
 """)
     assert r1.error is None
 
-    # Inner functions are SbFunction (pickleable)
-    assert isinstance(r1.namespace["add10"], SbFunction)
-    assert isinstance(r1.namespace["add20"], SbFunction)
+    # Inner functions are StFunction (pickleable)
+    assert isinstance(r1.namespace["add10"], StFunction)
+    assert isinstance(r1.namespace["add20"], StFunction)
 
     # Pickle and restore in turn 2
     add10 = pickle.loads(pickle.dumps(r1.namespace["add10"]))
@@ -689,7 +689,7 @@ def inc(x):
 tripled = triple(inc)
 """)
     assert r1.error is None
-    assert isinstance(r1.namespace["tripled"], SbFunction)
+    assert isinstance(r1.namespace["tripled"], StFunction)
 
     data = pickle.dumps(r1.namespace["tripled"])
     restored = pickle.loads(data)
@@ -742,7 +742,7 @@ async def double(x):
     return x * 2
 """)
     assert r1.error is None
-    assert isinstance(r1.namespace["double"], SbFunction)
+    assert isinstance(r1.namespace["double"], StFunction)
 
     data = pickle.dumps(r1.namespace["double"])
     restored = pickle.loads(data)
@@ -769,7 +769,7 @@ def make_async_adder(n):
 add10 = make_async_adder(10)
 """)
     assert r1.error is None
-    assert isinstance(r1.namespace["add10"], SbFunction)
+    assert isinstance(r1.namespace["add10"], StFunction)
 
     data = pickle.dumps(r1.namespace["add10"])
     restored = pickle.loads(data)
@@ -862,7 +862,7 @@ async def arange(start, stop):
         i += 1
 """)
     assert r1.error is None
-    assert isinstance(r1.namespace["arange"], SbFunction)
+    assert isinstance(r1.namespace["arange"], StFunction)
 
     data = pickle.dumps(r1.namespace["arange"])
     restored = pickle.loads(data)
@@ -895,7 +895,7 @@ async def compute(x):
 logged_compute = with_logging(compute)
 """)
     assert r1.error is None
-    assert isinstance(r1.namespace["logged_compute"], SbFunction)
+    assert isinstance(r1.namespace["logged_compute"], StFunction)
 
     data = pickle.dumps(r1.namespace["logged_compute"])
     restored = pickle.loads(data)
@@ -948,7 +948,7 @@ await log.append("turn1")
 
 
 def test_sbinstance_getattr_gate_restored_after_pickle():
-    """Private attrs blocked by policy on SbInstance after pickle round-trip."""
+    """Private attrs blocked by policy on StInstance after pickle round-trip."""
     policy = Policy(tick_limit=10_000)
     sandbox = Sandbox(policy, mode="wrapped")
 
@@ -962,7 +962,7 @@ o = Obj()
     assert r1.error is None
 
     # Set a private attr on the real instance from host code
-    real = object.__getattribute__(r1.namespace["o"], "_sb_instance")
+    real = object.__getattribute__(r1.namespace["o"], "_st_instance")
     real._secret = "hidden"
 
     # Before pickle: gate blocks _secret access in sandbox
@@ -987,11 +987,11 @@ o = Obj()
     assert isinstance(r3.error, AttributeError)
 
 
-# --- Regression: mutual SbFunction refs don't cause infinite activation ---
+# --- Regression: mutual StFunction refs don't cause infinite activation ---
 
 
 def test_mutual_sbfunction_refs_no_infinite_loop():
-    """Mutually referencing SbFunctions activate without RecursionError."""
+    """Mutually referencing StFunctions activate without RecursionError."""
     policy = Policy(tick_limit=10_000)
     sandbox = Sandbox(policy, mode="wrapped")
 
@@ -1029,7 +1029,7 @@ result_odd = is_odd(3)
 
 
 def test_vfs_class_pickle_round_trip():
-    """SbClass imported from VFS survives pickle and works in a later turn."""
+    """StClass imported from VFS survives pickle and works in a later turn."""
     fs = MemoryFS()
     fs.files["/shapes.py"] = """\
 class Circle:
@@ -1044,7 +1044,7 @@ class Circle:
 
     r1 = sandbox.exec("from shapes import Circle")
     assert r1.error is None
-    assert isinstance(r1.namespace["Circle"], SbClass)
+    assert isinstance(r1.namespace["Circle"], StClass)
 
     data = pickle.dumps(r1.namespace["Circle"])
     restored = pickle.loads(data)
@@ -1172,11 +1172,11 @@ result = c.greet() + " " + c.farewell()
     assert r2.namespace["result"] == "hello bye"
 
 
-# --- Closure SbFunction + global SbFunction both need activation ---
+# --- Closure StFunction + global StFunction both need activation ---
 
 
 def test_closure_and_global_sbfunction_deps():
-    """Function with SbFunction in closure AND a global SbFunction dep."""
+    """Function with StFunction in closure AND a global StFunction dep."""
     policy = Policy(tick_limit=10_000)
     sandbox = Sandbox(policy, mode="wrapped")
 
@@ -1261,11 +1261,11 @@ def a(x): return b(x) * 3
     assert restored(5) == 66
 
 
-# --- find_refs with inactive (pickled) SbFunctions ---
+# --- find_refs with inactive (pickled) StFunctions ---
 
 
 def test_find_refs_with_pickled_inactive_namespace():
-    """find_refs follows transitive deps through inactive (pickled) SbFunctions."""
+    """find_refs follows transitive deps through inactive (pickled) StFunctions."""
     policy = Policy(tick_limit=10_000)
     sandbox = Sandbox(policy, mode="wrapped")
 
@@ -1276,10 +1276,10 @@ def main(x): return process(x) + 100
 """)
     assert r1.error is None
 
-    # Pickle everything — SbFunctions are inactive (_compiled=None)
+    # Pickle everything — StFunctions are inactive (_compiled=None)
     ns = {k: pickle.loads(pickle.dumps(v))
           for k, v in r1.namespace.items()
-          if isinstance(v, SbFunction)}
+          if isinstance(v, StFunction)}
 
     # find_refs should still discover transitive deps via _global_ref_names
     refs = find_refs("result = main(5)", namespace=ns)
@@ -1288,11 +1288,11 @@ def main(x): return process(x) + 100
     assert "helper" in refs
 
 
-# --- SbInstance with nested SbInstance in attrs ---
+# --- StInstance with nested StInstance in attrs ---
 
 
 def test_nested_sbinstance_in_attrs():
-    """SbInstance whose attrs contain another SbInstance, pickled across turns."""
+    """StInstance whose attrs contain another StInstance, pickled across turns."""
     policy = Policy(tick_limit=10_000)
     sandbox = Sandbox(policy, mode="wrapped")
 
@@ -1322,11 +1322,11 @@ root = Node("a", mid)
     assert r2.namespace["result"] == ["a", "b", "c"]
 
 
-# --- SbFunction stored as instance attribute ---
+# --- StFunction stored as instance attribute ---
 
 
 def test_sbfunction_as_instance_attr():
-    """SbInstance with an SbFunction stored as an attribute, pickled across turns."""
+    """StInstance with an StFunction stored as an attribute, pickled across turns."""
     policy = Policy(tick_limit=10_000)
     sandbox = Sandbox(policy, mode="wrapped")
 
@@ -1354,7 +1354,7 @@ p = Processor(double)
     assert r2.namespace["result"] == 42
 
 
-# --- SbInstance dunder protocols after pickle ---
+# --- StInstance dunder protocols after pickle ---
 
 
 def test_sbinstance_dunder_protocols_after_pickle():
@@ -1401,11 +1401,11 @@ collected = [x for x in ml]
     assert r2.namespace["collected"] == [10, 20, 30]
 
 
-# --- Direct SbClass construction after pickle ---
+# --- Direct StClass construction after pickle ---
 
 
 def test_direct_sbclass_construction_after_pickle():
-    """SbClass constructed via direct call (not sandbox.exec) after pickle."""
+    """StClass constructed via direct call (not sandbox.exec) after pickle."""
     policy = Policy(tick_limit=100)
     sandbox = Sandbox(policy, mode="wrapped")
 
@@ -1427,12 +1427,12 @@ class Adder:
     assert instance.add(5) == 15
 
 
-# --- Async: SbClass pickled alone, construct + await in later turn ---
+# --- Async: StClass pickled alone, construct + await in later turn ---
 
 
 @pytest.mark.asyncio
 async def test_async_class_pickle_and_construct_later():
-    """Async SbClass methods work after class-only pickle and later construction."""
+    """Async StClass methods work after class-only pickle and later construction."""
     policy = Policy(tick_limit=10_000)
     sandbox = Sandbox(policy, mode="wrapped")
 
@@ -1456,12 +1456,12 @@ result = await c.compute(5)
     assert r2.namespace["result"] == 125
 
 
-# --- Async fn with sync SbFunction in closure ---
+# --- Async fn with sync StFunction in closure ---
 
 
 @pytest.mark.asyncio
 async def test_async_fn_with_sync_closure_dep():
-    """Async function captures a sync SbFunction in closure, pickled across turns."""
+    """Async function captures a sync StFunction in closure, pickled across turns."""
     policy = Policy(tick_limit=10_000)
     sandbox = Sandbox(policy, mode="wrapped")
 
@@ -1477,7 +1477,7 @@ def make_async_mapper(fn):
 async_square = make_async_mapper(square)
 """)
     assert r1.error is None
-    assert isinstance(r1.namespace["async_square"], SbFunction)
+    assert isinstance(r1.namespace["async_square"], StFunction)
 
     data = pickle.dumps(r1.namespace["async_square"])
     restored = pickle.loads(data)
@@ -1494,7 +1494,7 @@ async_square = make_async_mapper(square)
 
 
 def test_double_activation_no_crash():
-    """Activating the same SbFunction twice doesn't crash or corrupt state."""
+    """Activating the same StFunction twice doesn't crash or corrupt state."""
     policy = Policy(tick_limit=10_000)
     sandbox = Sandbox(policy, mode="wrapped")
 

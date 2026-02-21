@@ -6,7 +6,7 @@ import sys
 from collections.abc import Sequence
 from typing import TypeVar, cast
 
-from .errors import SbValidationError
+from .errors import StValidationError
 
 _N = TypeVar("_N", bound=ast.AST)
 
@@ -52,7 +52,7 @@ class Rewriter(ast.NodeTransformer):
 
     def generic_visit(self, node: ast.AST) -> ast.AST:
         """Reject any AST node type not explicitly handled."""
-        raise SbValidationError(
+        raise StValidationError(
             f"Unsupported syntax: {type(node).__name__}",
             lineno=getattr(node, "lineno", None),
             col=getattr(node, "col_offset", None),
@@ -65,13 +65,13 @@ class Rewriter(ast.NodeTransformer):
     def _check_name_store(self, name: str, node: ast.AST) -> None:
         """Block assignment/deletion of reserved names."""
         if name.startswith("__st_"):
-            raise SbValidationError(
+            raise StValidationError(
                 f"Cannot assign to reserved name '{name}'",
                 lineno=getattr(node, "lineno", None),
                 col=getattr(node, "col_offset", None),
             )
         if name in _BLOCKED_NAMES:
-            raise SbValidationError(
+            raise StValidationError(
                 f"Cannot assign to '{name}'",
                 lineno=getattr(node, "lineno", None),
                 col=getattr(node, "col_offset", None),
@@ -80,13 +80,13 @@ class Rewriter(ast.NodeTransformer):
     def _check_name_del(self, name: str, node: ast.AST) -> None:
         """Block deletion of reserved names."""
         if name.startswith("__st_"):
-            raise SbValidationError(
+            raise StValidationError(
                 f"Cannot delete reserved name '{name}'",
                 lineno=getattr(node, "lineno", None),
                 col=getattr(node, "col_offset", None),
             )
         if name in _BLOCKED_NAMES:
-            raise SbValidationError(
+            raise StValidationError(
                 f"Cannot delete '{name}'",
                 lineno=getattr(node, "lineno", None),
                 col=getattr(node, "col_offset", None),
@@ -157,7 +157,7 @@ class Rewriter(ast.NodeTransformer):
         elif isinstance(target, (ast.Tuple, ast.List)):
             for i, elt in enumerate(target.elts):
                 if isinstance(elt, ast.Starred):
-                    raise SbValidationError(
+                    raise StValidationError(
                         "Starred unpacking with attribute targets not yet supported",
                         lineno=getattr(loc, "lineno", None),
                         col=getattr(loc, "col_offset", None),
@@ -323,7 +323,7 @@ class Rewriter(ast.NodeTransformer):
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> ast.AST | list[ast.stmt]:
         if node.names and any(alias.name == "*" for alias in node.names):
-            raise SbValidationError(
+            raise StValidationError(
                 "Wildcard imports are not allowed",
                 lineno=node.lineno,
                 col=node.col_offset,
@@ -363,7 +363,7 @@ class Rewriter(ast.NodeTransformer):
     def visit_Global(self, node: ast.Global) -> ast.AST:
         for name in node.names:
             if name.startswith("__st_"):
-                raise SbValidationError(
+                raise StValidationError(
                     f"Cannot declare '{name}' as global",
                     lineno=node.lineno,
                     col=node.col_offset,
@@ -373,7 +373,7 @@ class Rewriter(ast.NodeTransformer):
     def visit_Nonlocal(self, node: ast.Nonlocal) -> ast.AST:
         for name in node.names:
             if name.startswith("__st_"):
-                raise SbValidationError(
+                raise StValidationError(
                     f"Cannot declare '{name}' as nonlocal",
                     lineno=node.lineno,
                     col=node.col_offset,
@@ -471,7 +471,7 @@ class Rewriter(ast.NodeTransformer):
         for item in node.body:
             if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 if item.name == "__del__":
-                    raise SbValidationError(
+                    raise StValidationError(
                         "__del__ methods are not allowed in sandboxed classes",
                         lineno=item.lineno,
                         col=item.col_offset,
@@ -528,7 +528,7 @@ class Rewriter(ast.NodeTransformer):
 
     def visit_For(self, node: ast.For) -> ast.AST:
         if self._has_attr_in_target(node.target):
-            raise SbValidationError(
+            raise StValidationError(
                 "Attribute targets in for loops are not supported",
                 lineno=node.lineno,
                 col=node.col_offset,
@@ -540,7 +540,7 @@ class Rewriter(ast.NodeTransformer):
 
     def visit_AsyncFor(self, node: ast.AsyncFor) -> ast.AST:
         if self._has_attr_in_target(node.target):
-            raise SbValidationError(
+            raise StValidationError(
                 "Attribute targets in for loops are not supported",
                 lineno=node.lineno,
                 col=node.col_offset,
@@ -552,7 +552,7 @@ class Rewriter(ast.NodeTransformer):
             if item.optional_vars is not None and self._has_attr_in_target(
                 item.optional_vars
             ):
-                raise SbValidationError(
+                raise StValidationError(
                     "Attribute targets in with statements are not supported",
                     lineno=node.lineno,
                     col=node.col_offset,
@@ -564,7 +564,7 @@ class Rewriter(ast.NodeTransformer):
             if item.optional_vars is not None and self._has_attr_in_target(
                 item.optional_vars
             ):
-                raise SbValidationError(
+                raise StValidationError(
                     "Attribute targets in with statements are not supported",
                     lineno=node.lineno,
                     col=node.col_offset,
@@ -607,7 +607,7 @@ class Rewriter(ast.NodeTransformer):
 
     def visit_Name(self, node: ast.Name) -> ast.AST:
         if isinstance(node.ctx, ast.Load) and node.id.startswith("__st_"):
-            raise SbValidationError(
+            raise StValidationError(
                 f"Cannot reference reserved name '{node.id}'",
                 lineno=getattr(node, "lineno", None),
                 col=getattr(node, "col_offset", None),

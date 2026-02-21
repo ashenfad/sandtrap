@@ -4,7 +4,7 @@ import ast
 from collections.abc import Mapping
 from typing import Any
 
-from .wrappers import SbFunction
+from .wrappers import StFunction
 
 
 class _ModuleRefAnalyzer(ast.NodeVisitor):
@@ -371,7 +371,7 @@ def _follow_transitive_deps(
     initial_refs: set[str],
     namespace: Mapping[str, Any],
 ) -> set[str]:
-    """Expand refs by following SbFunction.global_refs transitively."""
+    """Expand refs by following StFunction.global_refs transitively."""
     all_refs = set(initial_refs)
     queue = [name for name in initial_refs if name in namespace]
     visited: set[str] = set()
@@ -388,7 +388,7 @@ def _follow_transitive_deps(
             # Lazy containers (e.g. kvit stores) may raise on
             # unpicklable or corrupted entries.  Skip gracefully.
             continue
-        if isinstance(val, SbFunction):
+        if isinstance(val, StFunction):
             for dep in val.global_refs:
                 all_refs.add(dep)
                 if dep not in visited and dep in namespace:
@@ -411,8 +411,8 @@ def find_refs(
     2. Use the same set to check for mutations after execution.
 
     When *namespace* is provided, also follows transitive dependencies
-    through ``SbFunction.global_refs``: if the source references ``A`` and
-    ``A`` is an ``SbFunction`` whose ``global_refs`` include ``B``, then
+    through ``StFunction.global_refs``: if the source references ``A`` and
+    ``A`` is an ``StFunction`` whose ``global_refs`` include ``B``, then
     ``B`` is added to the result (and so on recursively).
 
     *namespace* can be any ``Mapping`` — including lazy containers that

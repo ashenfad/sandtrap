@@ -1,7 +1,7 @@
 """Stress tests: resource abuse that should be caught by limits."""
 
 from sandtrap import Policy, Sandbox
-from sandtrap.errors import SbTickLimit, SbTimeout
+from sandtrap.errors import StTickLimit, StTimeout
 
 # --- Infinite loops ---
 
@@ -9,7 +9,7 @@ from sandtrap.errors import SbTickLimit, SbTimeout
 def test_while_true():
     sandbox = Sandbox(Policy(timeout=0.2))
     result = sandbox.exec("while True: pass")
-    assert isinstance(result.error, SbTimeout)
+    assert isinstance(result.error, StTimeout)
 
 
 def test_infinite_recursion():
@@ -30,7 +30,7 @@ def gen():
 for x in gen():
     pass
 """)
-    assert isinstance(result.error, SbTickLimit)
+    assert isinstance(result.error, StTickLimit)
 
 
 def test_infinite_comprehension():
@@ -43,7 +43,7 @@ def gen():
         i += 1
 x = [i for i in gen()]
 """)
-    assert isinstance(result.error, SbTickLimit)
+    assert isinstance(result.error, StTickLimit)
 
 
 # --- Exponential growth ---
@@ -94,7 +94,7 @@ def fib(n):
     return fib(n-1) + fib(n-2)
 fib(100)
 """)
-    assert isinstance(result.error, SbTickLimit)
+    assert isinstance(result.error, StTickLimit)
 
 
 def test_mutual_recursion_hits_limit():
@@ -106,7 +106,7 @@ def g(n):
     return f(n)
 f(0)
 """)
-    assert isinstance(result.error, (SbTickLimit, RecursionError))
+    assert isinstance(result.error, (StTickLimit, RecursionError))
 
 
 # --- CPU-intensive loops ---
@@ -120,7 +120,7 @@ for i in range(10000):
     for j in range(10000):
         total += 1
 """)
-    assert isinstance(result.error, SbTickLimit)
+    assert isinstance(result.error, StTickLimit)
 
 
 def test_deeply_nested_loops():
@@ -131,4 +131,4 @@ for a in range(100):
         for c in range(100):
             pass
 """)
-    assert isinstance(result.error, SbTickLimit)
+    assert isinstance(result.error, StTickLimit)

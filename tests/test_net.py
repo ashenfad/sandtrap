@@ -54,7 +54,7 @@ def test_network_allowed_for_registered_function():
     policy = Policy()
 
     def do_network():
-        """Create a socket and close it (proves no SbError raised)."""
+        """Create a socket and close it (proves no StError raised)."""
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.close()
         return True

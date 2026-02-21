@@ -27,13 +27,13 @@ sandbox = Sandbox(policy)                  # wrapped mode (default)
 sandbox = Sandbox(policy, mode="raw")      # raw mode
 ```
 
-**Wrapped mode** wraps sandbox-defined functions, classes, and instances in serializable containers (`SbFunction`, `SbClass`, `SbInstance`). These store the rewritten AST so they can be pickled and recompiled later.
+**Wrapped mode** wraps sandbox-defined functions, classes, and instances in serializable containers (`StFunction`, `StClass`, `StInstance`). These store the rewritten AST so they can be pickled and recompiled later.
 
 **Raw mode** returns plain Python objects. Use this when you don't need serialization.
 
 ## What gets wrapped
 
-Functions become `SbFunction`, classes become `SbClass`, and class instances become `SbInstance`. All three are callable/usable like their plain equivalents and support `pickle.dumps` / `pickle.loads`. `SbInstance` proxies attribute access and forwards protocol dunders (`__len__`, `__iter__`, `__add__`, etc.).
+Functions become `StFunction`, classes become `StClass`, and class instances become `StInstance`. All three are callable/usable like their plain equivalents and support `pickle.dumps` / `pickle.loads`. `StInstance` proxies attribute access and forwards protocol dunders (`__len__`, `__iter__`, `__add__`, etc.).
 
 ## Activation
 
@@ -91,7 +91,7 @@ refs = find_refs("y = process(data)")
 # refs == {"process", "data"}
 ```
 
-Pass a namespace to follow transitive dependencies through `SbFunction.global_refs`:
+Pass a namespace to follow transitive dependencies through `StFunction.global_refs`:
 
 ```python
 refs = find_refs("result = sum_squares([1, 2, 3])", namespace=state)
@@ -102,6 +102,6 @@ The namespace can be any `Mapping`, including lazy containers that deserialize o
 
 ## Known limitations
 
-- **Policy-hosted functions** (`policy.fn()`, `policy.module()`) are real Python functions, not `SbFunction`. They're injected automatically during `exec()` but must be provided explicitly for standalone direct calls after pickle.
+- **Policy-hosted functions** (`policy.fn()`, `policy.module()`) are real Python functions, not `StFunction`. They're injected automatically during `exec()` but must be provided explicitly for standalone direct calls after pickle.
 - **Classes with `__slots__`** are not supported for pickle round-trips (instance serialization assumes `__dict__`).
 - **Class-level mutable state** (e.g., `data = []` at class scope) is not preserved across pickle -- it lives on the class object, which is recompiled from AST.
