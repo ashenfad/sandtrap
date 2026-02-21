@@ -4,7 +4,7 @@ In wrapped mode (the default), everything your sandbox code defines is serializa
 
 ```python
 import pickle
-from sblite import Policy, Sandbox
+from sandtrap import Policy, Sandbox
 
 sandbox = Sandbox(Policy())
 
@@ -85,7 +85,7 @@ This also works for functions imported from VFS modules -- they're wrapped in th
 When you have a large serialized state, `find_refs` tells you which names a code snippet needs:
 
 ```python
-from sblite import find_refs
+from sandtrap import find_refs
 
 refs = find_refs("y = process(data)")
 # refs == {"process", "data"}

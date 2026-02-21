@@ -16,7 +16,7 @@ def _extract_names(nodes: Sequence[ast.AST]) -> set[str]:
     names: set[str] = set()
     for node in nodes:
         for child in ast.walk(node):
-            if isinstance(child, ast.Name) and not child.id.startswith("__sb_"):
+            if isinstance(child, ast.Name) and not child.id.startswith("__st_"):
                 names.add(child.id)
     return names
 
@@ -42,7 +42,7 @@ class Rewriter(ast.NodeTransformer):
         self._func_depth = 0
 
     def _new_tmp(self) -> str:
-        name = f"__sb_tmp_{self._tmp_counter}"
+        name = f"__st_tmp_{self._tmp_counter}"
         self._tmp_counter += 1
         return name
 
@@ -64,7 +64,7 @@ class Rewriter(ast.NodeTransformer):
 
     def _check_name_store(self, name: str, node: ast.AST) -> None:
         """Block assignment/deletion of reserved names."""
-        if name.startswith("__sb_"):
+        if name.startswith("__st_"):
             raise SbValidationError(
                 f"Cannot assign to reserved name '{name}'",
                 lineno=getattr(node, "lineno", None),
@@ -79,7 +79,7 @@ class Rewriter(ast.NodeTransformer):
 
     def _check_name_del(self, name: str, node: ast.AST) -> None:
         """Block deletion of reserved names."""
-        if name.startswith("__sb_"):
+        if name.startswith("__st_"):
             raise SbValidationError(
                 f"Cannot delete reserved name '{name}'",
                 lineno=getattr(node, "lineno", None),
@@ -115,9 +115,9 @@ class Rewriter(ast.NodeTransformer):
         return False
 
     def _make_getattr(self, obj: ast.expr, attr: str, loc: ast.AST) -> ast.Call:
-        """Build __sb_getattr__(obj, attr) call node."""
+        """Build __st_getattr__(obj, attr) call node."""
         call = ast.Call(
-            func=ast.Name(id="__sb_getattr__", ctx=ast.Load()),
+            func=ast.Name(id="__st_getattr__", ctx=ast.Load()),
             args=[obj, ast.Constant(value=attr)],
             keywords=[],
         )
@@ -126,18 +126,18 @@ class Rewriter(ast.NodeTransformer):
     def _make_setattr(
         self, obj: ast.expr, attr: str, value: ast.expr, loc: ast.AST
     ) -> ast.Expr:
-        """Build Expr(__sb_setattr__(obj, attr, value)) statement node."""
+        """Build Expr(__st_setattr__(obj, attr, value)) statement node."""
         call = ast.Call(
-            func=ast.Name(id="__sb_setattr__", ctx=ast.Load()),
+            func=ast.Name(id="__st_setattr__", ctx=ast.Load()),
             args=[obj, ast.Constant(value=attr), value],
             keywords=[],
         )
         return ast.copy_location(ast.Expr(value=call), loc)
 
     def _make_delattr(self, obj: ast.expr, attr: str, loc: ast.AST) -> ast.Expr:
-        """Build Expr(__sb_delattr__(obj, attr)) statement node."""
+        """Build Expr(__st_delattr__(obj, attr)) statement node."""
         call = ast.Call(
-            func=ast.Name(id="__sb_delattr__", ctx=ast.Load()),
+            func=ast.Name(id="__st_delattr__", ctx=ast.Load()),
             args=[obj, ast.Constant(value=attr)],
             keywords=[],
         )
@@ -186,7 +186,7 @@ class Rewriter(ast.NodeTransformer):
     visit_Expr = _recurse
     def visit_AnnAssign(self, node: ast.AnnAssign) -> ast.AST | list[ast.stmt]:
         if isinstance(node.target, ast.Attribute) and node.value is not None:
-            # obj.attr: annotation = value → __sb_setattr__(obj, 'attr', value)
+            # obj.attr: annotation = value → __st_setattr__(obj, 'attr', value)
             obj = self.visit(node.target.value)
             value = self.visit(node.value)
             return self._make_setattr(obj, node.target.attr, value, node)
@@ -237,8 +237,8 @@ class Rewriter(ast.NodeTransformer):
             return self._recurse(node)
 
         # obj.attr OP= value →
-        #   __sb_tmp = obj
-        #   __sb_setattr__(__sb_tmp, 'attr', __sb_getattr__(__sb_tmp, 'attr') OP value)
+        #   __st_tmp = obj
+        #   __st_setattr__(__st_tmp, 'attr', __st_getattr__(__st_tmp, 'attr') OP value)
         obj = self.visit(node.target.value)
         value = self.visit(node.value)
         attr_name = node.target.attr
@@ -257,13 +257,13 @@ class Rewriter(ast.NodeTransformer):
         )
         tmp_ref = ast.Name(id=tmp, ctx=ast.Load())
 
-        # __sb_getattr__(tmp, 'attr') OP value
+        # __st_getattr__(tmp, 'attr') OP value
         get_call = self._make_getattr(tmp_ref, attr_name, node)
         binop = ast.copy_location(
             ast.BinOp(left=get_call, op=node.op, right=value), node
         )
 
-        # __sb_setattr__(tmp, 'attr', result)
+        # __st_setattr__(tmp, 'attr', result)
         stmts.append(self._make_setattr(tmp_ref, attr_name, binop, node))
 
         return stmts
@@ -290,10 +290,10 @@ class Rewriter(ast.NodeTransformer):
         return stmts
 
     def visit_Import(self, node: ast.Import) -> ast.AST | list[ast.stmt]:
-        # import math → math = __sb_import__('math')
-        # import math as m → m = __sb_import__('math', alias='m')
-        # import a.b → a = __sb_import__('a.b')
-        # import a.b as x → x = __sb_import__('a.b', alias='x')
+        # import math → math = __st_import__('math')
+        # import math as m → m = __st_import__('math', alias='m')
+        # import a.b → a = __st_import__('a.b')
+        # import a.b as x → x = __st_import__('a.b', alias='x')
         stmts: list[ast.stmt] = []
         for alias in node.names:
             keywords = []
@@ -307,7 +307,7 @@ class Rewriter(ast.NodeTransformer):
                 bind_name = alias.name.split(".")[0]
 
             call = ast.Call(
-                func=ast.Name(id="__sb_import__", ctx=ast.Load()),
+                func=ast.Name(id="__st_import__", ctx=ast.Load()),
                 args=[ast.Constant(value=alias.name)],
                 keywords=keywords,
             )
@@ -329,9 +329,9 @@ class Rewriter(ast.NodeTransformer):
                 col=node.col_offset,
             )
 
-        # from math import sqrt → sqrt = __sb_importfrom__('math', 'sqrt')
-        # from math import sqrt as s → s = __sb_importfrom__('math', 'sqrt')
-        # from .foo import bar → bar = __sb_importfrom__('foo', 'bar', _level=1)
+        # from math import sqrt → sqrt = __st_importfrom__('math', 'sqrt')
+        # from math import sqrt as s → s = __st_importfrom__('math', 'sqrt')
+        # from .foo import bar → bar = __st_importfrom__('foo', 'bar', _level=1)
         module_name = node.module or ""
         level = node.level or 0
         stmts: list[ast.stmt] = []
@@ -343,7 +343,7 @@ class Rewriter(ast.NodeTransformer):
                     ast.keyword(arg="_level", value=ast.Constant(value=level))
                 )
             call = ast.Call(
-                func=ast.Name(id="__sb_importfrom__", ctx=ast.Load()),
+                func=ast.Name(id="__st_importfrom__", ctx=ast.Load()),
                 args=[
                     ast.Constant(value=module_name),
                     ast.Constant(value=alias.name),
@@ -362,7 +362,7 @@ class Rewriter(ast.NodeTransformer):
 
     def visit_Global(self, node: ast.Global) -> ast.AST:
         for name in node.names:
-            if name.startswith("__sb_"):
+            if name.startswith("__st_"):
                 raise SbValidationError(
                     f"Cannot declare '{name}' as global",
                     lineno=node.lineno,
@@ -372,7 +372,7 @@ class Rewriter(ast.NodeTransformer):
 
     def visit_Nonlocal(self, node: ast.Nonlocal) -> ast.AST:
         for name in node.names:
-            if name.startswith("__sb_"):
+            if name.startswith("__st_"):
                 raise SbValidationError(
                     f"Cannot declare '{name}' as nonlocal",
                     lineno=node.lineno,
@@ -385,7 +385,7 @@ class Rewriter(ast.NodeTransformer):
     # ------------------------------------------------------------------
 
     def _prepend_checkpoint(self, node: _N) -> _N:
-        """Recurse into node, then insert __sb_checkpoint__() into its body.
+        """Recurse into node, then insert __st_checkpoint__() into its body.
 
         Preserves docstrings by inserting after any leading string literal.
         """
@@ -393,7 +393,7 @@ class Rewriter(ast.NodeTransformer):
         checkpoint = ast.copy_location(
             ast.Expr(
                 value=ast.Call(
-                    func=ast.Name(id="__sb_checkpoint__", ctx=ast.Load()),
+                    func=ast.Name(id="__st_checkpoint__", ctx=ast.Load()),
                     args=[],
                     keywords=[],
                 )
@@ -438,7 +438,7 @@ class Rewriter(ast.NodeTransformer):
     def _wrap_defun(
         self, node: ast.FunctionDef | ast.AsyncFunctionDef
     ) -> list[ast.stmt]:
-        """Wrap a function def with __sb_defun__ for wrapped mode."""
+        """Wrap a function def with __st_defun__ for wrapped mode."""
         if self._func_depth > 0:
             # Inner function: embed source string (survives cross-turn activation)
             ast_ref = ast.Constant(value=ast.unparse(node))
@@ -448,9 +448,9 @@ class Rewriter(ast.NodeTransformer):
             self._func_asts.append(copy.deepcopy(node))
             ast_ref = ast.Constant(value=idx)
 
-        # name = __sb_defun__(name, name_ref, ast_ref)
+        # name = __st_defun__(name, name_ref, ast_ref)
         wrap_call = ast.Call(
-            func=ast.Name(id="__sb_defun__", ctx=ast.Load()),
+            func=ast.Name(id="__st_defun__", ctx=ast.Load()),
             args=[
                 ast.Constant(value=node.name),
                 ast.Name(id=node.name, ctx=ast.Load()),
@@ -486,7 +486,7 @@ class Rewriter(ast.NodeTransformer):
         return self._wrap_defclass(node)
 
     def _wrap_defclass(self, node: ast.ClassDef) -> list[ast.stmt]:
-        """Wrap a class def with __sb_defclass__ for wrapped mode."""
+        """Wrap a class def with __st_defclass__ for wrapped mode."""
         idx = len(self._class_asts)
         self._class_asts.append(copy.deepcopy(node))
 
@@ -503,7 +503,7 @@ class Rewriter(ast.NodeTransformer):
         ]
 
         wrap_call = ast.Call(
-            func=ast.Name(id="__sb_defclass__", ctx=ast.Load()),
+            func=ast.Name(id="__st_defclass__", ctx=ast.Load()),
             args=[
                 ast.Constant(value=node.name),
                 ast.Name(id=node.name, ctx=ast.Load()),
@@ -598,7 +598,7 @@ class Rewriter(ast.NodeTransformer):
         node.value = self.visit(node.value)
 
         if isinstance(node.ctx, ast.Load):
-            # obj.attr → __sb_getattr__(obj, 'attr')
+            # obj.attr → __st_getattr__(obj, 'attr')
             return self._make_getattr(node.value, node.attr, node)
 
         # Store/Del context — return with visited .value.
@@ -606,7 +606,7 @@ class Rewriter(ast.NodeTransformer):
         return node
 
     def visit_Name(self, node: ast.Name) -> ast.AST:
-        if isinstance(node.ctx, ast.Load) and node.id.startswith("__sb_"):
+        if isinstance(node.ctx, ast.Load) and node.id.startswith("__st_"):
             raise SbValidationError(
                 f"Cannot reference reserved name '{node.id}'",
                 lineno=getattr(node, "lineno", None),
@@ -674,9 +674,9 @@ class Rewriter(ast.NodeTransformer):
         return self._recurse(node)
     def visit_comprehension(self, node: ast.comprehension) -> ast.AST:
         node = cast(ast.comprehension, self._recurse(node))
-        # Inject checkpoint as an always-true filter: __sb_checkpoint__() or True
+        # Inject checkpoint as an always-true filter: __st_checkpoint__() or True
         checkpoint = ast.Call(
-            func=ast.Name(id="__sb_checkpoint__", ctx=ast.Load()),
+            func=ast.Name(id="__st_checkpoint__", ctx=ast.Load()),
             args=[],
             keywords=[],
         )

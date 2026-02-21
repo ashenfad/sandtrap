@@ -1,7 +1,7 @@
 """Stress tests: resource abuse that should be caught by limits."""
 
-from sblite import Policy, Sandbox
-from sblite.errors import SbTickLimit, SbTimeout
+from sandtrap import Policy, Sandbox
+from sandtrap.errors import SbTickLimit, SbTimeout
 
 # --- Infinite loops ---
 

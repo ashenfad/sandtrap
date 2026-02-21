@@ -92,7 +92,7 @@ class SbFunction:
         if self._compiled is not None and hasattr(self._compiled, "__code__"):
             return {
                 n for n in _collect_global_names(self._compiled.__code__)
-                if not n.startswith("__sb_")
+                if not n.startswith("__st_")
                 and n not in _SAFE_BUILTIN_NAMES
                 and n != self._name
             }
@@ -110,7 +110,7 @@ class SbFunction:
             freevars = compiled.__code__.co_freevars
             frozen: dict[str, Any] = {}
             for name, cell in zip(freevars, compiled.__closure__):
-                if name.startswith("__sb_"):
+                if name.startswith("__st_"):
                     continue  # Gates are re-injected on activate
                 try:
                     frozen[name] = cell.cell_contents
@@ -127,7 +127,7 @@ class SbFunction:
             frozen_globals: dict[str, Any] = {}
             global_ref_names: set[str] = set()
             for name in _collect_global_names(compiled.__code__):
-                if name.startswith("__sb_"):
+                if name.startswith("__st_"):
                     continue
                 if name in _SAFE_BUILTIN_NAMES:
                     continue
@@ -198,8 +198,8 @@ class SbFunction:
             ns.update(frozen_closure)
 
         ns.update(gates)
-        ns["__builtins__"] = make_safe_builtins(gates["__sb_getattr__"])
-        ns["__name__"] = "__sblite__"
+        ns["__builtins__"] = make_safe_builtins(gates["__st_getattr__"])
+        ns["__name__"] = "__sandtrap__"
 
         # Auto-activate frozen globals and frozen closure values
         for source in (frozen_globals, frozen_closure):
@@ -211,7 +211,7 @@ class SbFunction:
                         val.activate(gates, sandbox=sandbox, namespace=ns)
 
         # Resolve ModuleRef objects in the namespace via the import gate
-        import_gate = gates.get("__sb_import__")
+        import_gate = gates.get("__st_import__")
         if import_gate is not None:
             for k, v in list(ns.items()):
                 if isinstance(v, ModuleRef):
@@ -229,7 +229,7 @@ class SbFunction:
         module = ast.Module(body=[func_copy], type_ignores=[])
         ast.fix_missing_locations(module)
 
-        code = compile(module, f"<sblite:fn:{self._name}>", "exec")
+        code = compile(module, f"<sandtrap:fn:{self._name}>", "exec")
         exec(code, ns)  # noqa: S102
 
         self._compiled = ns[self._name]
@@ -337,8 +337,8 @@ class SbClass:
         if namespace:
             ns.update(namespace)
         ns.update(gates)
-        ns["__builtins__"] = make_safe_builtins(gates["__sb_getattr__"])
-        ns["__name__"] = "__sblite__"
+        ns["__builtins__"] = make_safe_builtins(gates["__st_getattr__"])
+        ns["__name__"] = "__sandtrap__"
 
         # Auto-activate frozen ref deps — use the values from ns (which
         # may be namespace overrides of frozen refs) so the compiled class
@@ -355,11 +355,11 @@ class SbClass:
         module = ast.Module(body=[class_copy], type_ignores=[])
         ast.fix_missing_locations(module)
 
-        code = compile(module, f"<sblite:cls:{self._name}>", "exec")
+        code = compile(module, f"<sandtrap:cls:{self._name}>", "exec")
         exec(code, ns)  # noqa: S102
 
         self._compiled_cls = ns[self._name]
-        self._sb_getattr_gate = gates.get("__sb_getattr__")
+        self._sb_getattr_gate = gates.get("__st_getattr__")
         self._sandbox = sandbox
         self._gates = gates
 
@@ -512,7 +512,7 @@ class ModuleRef:
 
     Python modules can't survive pickle.  This ref stores just the module
     name so ``Sandbox._auto_activate`` can re-import it via the
-    ``__sb_import__`` gate on the next turn.  Works for both VFS modules
+    ``__st_import__`` gate on the next turn.  Works for both VFS modules
     and policy-registered modules (including aliased imports like
     ``import math as m``).
     """

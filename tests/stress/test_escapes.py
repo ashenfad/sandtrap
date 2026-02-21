@@ -2,8 +2,8 @@
 
 import pytest
 
-from sblite import Policy, Sandbox
-from sblite.errors import SbValidationError
+from sandtrap import Policy, Sandbox
+from sandtrap.errors import SbValidationError
 
 
 @pytest.fixture
@@ -126,25 +126,25 @@ def test_builtins_not_assignable(sandbox):
 
 
 def test_sb_name_read_blocked(sandbox):
-    """Reading __sb_* names is blocked at validation time."""
-    result = sandbox.exec("x = __sb_getattr__")
+    """Reading __st_* names is blocked at validation time."""
+    result = sandbox.exec("x = __st_getattr__")
     assert isinstance(result.error, SbValidationError)
 
 
 def test_sb_name_assign_blocked(sandbox):
-    result = sandbox.exec("__sb_getattr__ = lambda o, a: getattr(o, a)")
+    result = sandbox.exec("__st_getattr__ = lambda o, a: getattr(o, a)")
     assert isinstance(result.error, SbValidationError)
 
 
 def test_sb_name_delete_blocked(sandbox):
-    result = sandbox.exec("del __sb_checkpoint__")
+    result = sandbox.exec("del __st_checkpoint__")
     assert isinstance(result.error, SbValidationError)
 
 
 def test_sb_global_blocked(sandbox):
     result = sandbox.exec("""\
 def f():
-    global __sb_getattr__
+    global __st_getattr__
 """)
     assert isinstance(result.error, SbValidationError)
 
@@ -152,9 +152,9 @@ def f():
 def test_sb_nonlocal_blocked(sandbox):
     result = sandbox.exec("""\
 def f():
-    __sb_x = 1
+    __st_x = 1
     def g():
-        nonlocal __sb_x
+        nonlocal __st_x
 """)
     assert isinstance(result.error, SbValidationError)
 

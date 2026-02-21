@@ -1,4 +1,4 @@
-"""Filesystem interception for sblite sandbox."""
+"""Filesystem interception for sandtrap sandbox."""
 
 from .context import current_fs, suspend_fs_interception, use_fs
 from .patch import install

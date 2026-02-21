@@ -20,7 +20,7 @@ _originals: dict[str, Any] = {}
 
 # Recursion guard: prevents re-interception when FS internals do real I/O.
 _in_fs_op: contextvars.ContextVar[bool] = contextvars.ContextVar(
-    "sblite_in_fs_op", default=False
+    "sandtrap_in_fs_op", default=False
 )
 
 

@@ -1,6 +1,6 @@
 """Stress tests: complex but valid code that should work correctly."""
 
-from sblite import Policy, Sandbox
+from sandtrap import Policy, Sandbox
 
 
 def sandbox():

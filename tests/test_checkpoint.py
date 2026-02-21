@@ -2,8 +2,8 @@
 
 import threading
 
-from sblite import Policy, Sandbox
-from sblite.errors import SbCancelled, SbTickLimit, SbTimeout
+from sandtrap import Policy, Sandbox
+from sandtrap.errors import SbCancelled, SbTickLimit, SbTimeout
 
 
 def test_while_true_times_out():
@@ -50,7 +50,7 @@ def test_cancellation_via_flag():
     # Inject cancel flag via internal API
     import time
 
-    from sblite.gates import make_gates
+    from sandtrap.gates import make_gates
 
     gates = make_gates(policy, _start_time=time.monotonic(), _cancel_flag=cancel)
 
@@ -58,7 +58,7 @@ def test_cancellation_via_flag():
 
     # Test with direct gate call
     try:
-        gates["__sb_checkpoint__"]()
+        gates["__st_checkpoint__"]()
         assert False, "Should have raised SbCancelled"
     except SbCancelled:
         pass

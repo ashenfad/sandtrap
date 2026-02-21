@@ -2,7 +2,7 @@
 
 import pytest
 
-from sblite import Policy, Sandbox
+from sandtrap import Policy, Sandbox
 
 
 @pytest.fixture
@@ -11,7 +11,7 @@ def sandbox():
 
 
 def test_attr_read(sandbox):
-    """obj.attr in Load context goes through __sb_getattr__."""
+    """obj.attr in Load context goes through __st_getattr__."""
     result = sandbox.exec("""\
 class Obj:
     x = 42
@@ -23,7 +23,7 @@ result = o.x
 
 
 def test_attr_write(sandbox):
-    """obj.attr = value goes through __sb_setattr__."""
+    """obj.attr = value goes through __st_setattr__."""
     result = sandbox.exec("""\
 class Obj:
     pass
@@ -36,7 +36,7 @@ result = o.x
 
 
 def test_attr_delete(sandbox):
-    """del obj.attr goes through __sb_delattr__."""
+    """del obj.attr goes through __st_delattr__."""
     result = sandbox.exec("""\
 class Obj:
     pass
@@ -50,7 +50,7 @@ result = hasattr(o, 'x')
 
 
 def test_chained_attr_read(sandbox):
-    """a.b.c chains through multiple __sb_getattr__ calls."""
+    """a.b.c chains through multiple __st_getattr__ calls."""
     result = sandbox.exec("""\
 class Inner:
     val = 10
@@ -225,11 +225,11 @@ size = s.size()
 
 
 def test_gate_names_not_in_namespace(sandbox):
-    """Gate function names (__sb_*) are cleaned from result namespace."""
+    """Gate function names (__st_*) are cleaned from result namespace."""
     result = sandbox.exec("x = 1")
     assert result.error is None
     for key in result.namespace:
-        assert not key.startswith("__sb_"), f"Gate name leaked: {key}"
+        assert not key.startswith("__st_"), f"Gate name leaked: {key}"
 
 
 def test_attr_on_builtin_types(sandbox):

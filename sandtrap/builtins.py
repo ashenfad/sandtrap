@@ -342,7 +342,7 @@ def make_safe_locals() -> Any:
         return {
             k: v
             for k, v in frame.f_locals.items()
-            if not k.startswith("__sb_")
+            if not k.startswith("__st_")
             and k != "__builtins__"
             and k != "__name__"
             and k != "print"

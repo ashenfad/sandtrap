@@ -1,17 +1,17 @@
-# sblite
+# sandtrap ⛳
 
 A lightweight in-process Python sandbox using AST rewriting and compiled bytecode execution. Whitelist-based policies control attribute access, imports, and resource usage. Designed as a walled garden for cooperative code (e.g. agent-generated scripts), not for adversarial inputs.
 
 ## Install
 
 ```
-pip install sblite
+pip install sandtrap
 ```
 
 ## Quick start
 
 ```python
-from sblite import Policy, Sandbox
+from sandtrap import Policy, Sandbox
 
 policy = Policy(timeout=5.0, tick_limit=100_000)
 

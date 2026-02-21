@@ -3,7 +3,7 @@
 import math
 import traceback
 
-from sblite import Policy, Sandbox
+from sandtrap import Policy, Sandbox
 
 
 class Robot:
@@ -109,7 +109,7 @@ math.cos(0)
 
 
 def test_traceback_shows_user_code():
-    """Error tracebacks should reference user source, not sblite internals."""
+    """Error tracebacks should reference user source, not sandtrap internals."""
     policy = Policy()
     sandbox = Sandbox(policy)
     result = sandbox.exec("x = 1\ny = 1/0\nz = 3")
@@ -120,11 +120,11 @@ def test_traceback_shows_user_code():
             type(result.error), result.error, result.error.__traceback__
         )
     )
-    assert "<sblite:" in tb_text
+    assert "<sandtrap:" in tb_text
 
 
 def test_error_no_sb_names():
-    """Error messages should not expose __sb_* gate names."""
+    """Error messages should not expose __st_* gate names."""
     policy = Policy()
     sandbox = Sandbox(policy)
     result = sandbox.exec("""\
@@ -135,7 +135,7 @@ o._private = 1
 """)
     assert result.error is not None
     msg = str(result.error)
-    assert "__sb_" not in msg
+    assert "__st_" not in msg
 
 
 def test_class_default_private_blocked():

@@ -419,7 +419,7 @@ def find_refs(
     deserialize on ``get()``.  The BFS only touches values that are part
     of the dependency chain, so untouched entries stay serialized.
 
-    Returns a set of name strings.  Builtins and ``__sb_*`` internal names
+    Returns a set of name strings.  Builtins and ``__st_*`` internal names
     are excluded.
     """
     tree = ast.parse(source)
@@ -431,7 +431,7 @@ def find_refs(
     refs.discard("True")
     refs.discard("False")
     refs.discard("None")
-    refs = {r for r in refs if not r.startswith("__sb_")}
+    refs = {r for r in refs if not r.startswith("__st_")}
 
     if namespace is not None:
         refs = _follow_transitive_deps(refs, namespace)

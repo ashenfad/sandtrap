@@ -2,8 +2,8 @@
 
 import pickle
 
-from sblite import MemoryFS, Policy, Sandbox
-from sblite.wrappers import ModuleRef, SbClass, SbFunction
+from sandtrap import MemoryFS, Policy, Sandbox
+from sandtrap.wrappers import ModuleRef, SbClass, SbFunction
 
 
 def _make_sandbox(**kwargs):
@@ -98,7 +98,7 @@ def test_vfs_module_uses_checkpoints():
     sandbox, fs = _make_sandbox(policy=policy)
     fs.files["/slow.py"] = "while True: pass"
 
-    from sblite.errors import SbTimeout
+    from sandtrap.errors import SbTimeout
     result = sandbox.exec("import slow")
     assert result.error is not None
     assert isinstance(result.error, SbTimeout)

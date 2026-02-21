@@ -4,9 +4,9 @@ import socket
 
 import pytest
 
-from sblite import Policy, Sandbox
-from sblite.net.context import allow_network, deny_network, network_allowed
-from sblite.net.patch import install as install_net
+from sandtrap import Policy, Sandbox
+from sandtrap.net.context import allow_network, deny_network, network_allowed
+from sandtrap.net.patch import install as install_net
 
 
 @pytest.fixture(autouse=True)
@@ -124,7 +124,7 @@ def test_context_var_isolation():
 
 def test_net_install_idempotent():
     """install() is idempotent -- calling it twice is safe."""
-    from sblite.net import patch as net_patch
+    from sandtrap.net import patch as net_patch
 
     net_patch.install()
     assert net_patch._installed

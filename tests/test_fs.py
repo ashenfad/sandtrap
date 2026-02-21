@@ -5,9 +5,9 @@ import pathlib
 
 import pytest
 
-from sblite import MemoryFS, Policy, Sandbox
-from sblite.fs.context import current_fs, suspend_fs_interception, use_fs
-from sblite.fs.patch import install as install_fs
+from sandtrap import MemoryFS, Policy, Sandbox
+from sandtrap.fs.context import current_fs, suspend_fs_interception, use_fs
+from sandtrap.fs.patch import install as install_fs
 
 
 @pytest.fixture(autouse=True)
@@ -127,7 +127,7 @@ cwd = os.getcwd()
 
 def test_fs_install_idempotent():
     """install() is idempotent -- calling it twice is safe."""
-    from sblite.fs import patch as fs_patch
+    from sandtrap.fs import patch as fs_patch
 
     fs_patch.install()
     assert fs_patch._installed

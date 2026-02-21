@@ -5,7 +5,7 @@
 Provide a `FileSystem` implementation to intercept all file I/O during sandboxed execution:
 
 ```python
-from sblite import MemoryFS, Policy, Sandbox
+from sandtrap import MemoryFS, Policy, Sandbox
 
 fs = MemoryFS()
 fs.files["/data.txt"] = "hello world"

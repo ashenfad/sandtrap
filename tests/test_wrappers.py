@@ -5,9 +5,9 @@ import threading
 
 import pytest
 
-from sblite import Policy, Sandbox
-from sblite.errors import SbCancelled, SbTickLimit, SbTimeout
-from sblite.wrappers import SbClass, SbFunction, SbInstance
+from sandtrap import Policy, Sandbox
+from sandtrap.errors import SbCancelled, SbTickLimit, SbTimeout
+from sandtrap.wrappers import SbClass, SbFunction, SbInstance
 
 
 def test_wrapped_mode_creates_sbfunction():
@@ -410,7 +410,7 @@ result = f(5)
 """)
     assert result.error is None
     assert result.namespace["result"] == 12
-    # f is wrapped by __sb_defun__ AFTER decoration
+    # f is wrapped by __st_defun__ AFTER decoration
     assert isinstance(result.namespace["f"], SbFunction)
 
 

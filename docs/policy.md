@@ -5,7 +5,7 @@ The `Policy` object defines what sandboxed code is allowed to access. The sandbo
 ## Policy options
 
 ```python
-from sblite import Policy
+from sandtrap import Policy
 
 policy = Policy(
     timeout=30.0,        # wall-clock seconds (default 30, None to disable)
@@ -126,7 +126,7 @@ Defaults: `include="*"` (everything), `exclude="_*"` (private attributes hidden)
 Use `MemberSpec` in the `configure` dict for fine-grained control:
 
 ```python
-from sblite import MemberSpec
+from sandtrap import MemberSpec
 
 policy.module(
     my_module,
