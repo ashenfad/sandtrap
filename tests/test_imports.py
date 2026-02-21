@@ -3,7 +3,7 @@
 import math
 
 from sandtrap import Policy, Sandbox
-from sandtrap.errors import SbValidationError
+from sandtrap.errors import StValidationError
 
 
 def test_import_allowed_module():
@@ -98,7 +98,7 @@ def test_wildcard_import_blocked():
     policy.module(math)
     sandbox = Sandbox(policy)
     result = sandbox.exec("from math import *")
-    assert isinstance(result.error, SbValidationError)
+    assert isinstance(result.error, StValidationError)
     assert "Wildcard imports" in str(result.error)
 
 

@@ -4,7 +4,7 @@
 import pytest
 
 from sandtrap import Policy, Sandbox
-from sandtrap.errors import SbTimeout
+from sandtrap.errors import StTimeout
 
 
 @pytest.fixture
@@ -66,7 +66,7 @@ async def test_async_timeout():
 import asyncio
 await asyncio.sleep(10)
 """)
-    assert isinstance(result.error, SbTimeout)
+    assert isinstance(result.error, StTimeout)
 
 
 @pytest.mark.asyncio
@@ -120,7 +120,7 @@ async def test_async_cancellation():
     """Cancelling an async sandbox execution via sandbox.cancel()."""
     import threading
 
-    from sandtrap.errors import SbCancelled
+    from sandtrap.errors import StCancelled
 
     policy = Policy()
     sandbox = Sandbox(policy)
@@ -133,4 +133,4 @@ async def test_async_cancellation():
     finally:
         timer.cancel()
     assert result.error is not None
-    assert isinstance(result.error, SbCancelled)
+    assert isinstance(result.error, StCancelled)

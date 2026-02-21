@@ -28,7 +28,7 @@ def _collect_global_names(code: Any) -> set[str]:
 
 
 
-class SbFunction:
+class StFunction:
     """Callable, pickleable wrapper for a sandbox-defined function.
 
     Stores the rewritten AST so the function can be serialized and
@@ -70,7 +70,7 @@ class SbFunction:
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         if self._compiled is None:
             raise RuntimeError(
-                f"SbFunction '{self._name}' is not active "
+                f"StFunction '{self._name}' is not active "
                 f"-- call activate() with gate functions first"
             )
         if self._sandbox is not None and self._gates is not None:
@@ -81,7 +81,7 @@ class SbFunction:
 
     def __repr__(self) -> str:
         status = "active" if self._compiled is not None else "inactive"
-        return f"<SbFunction '{self._name}' ({status})>"
+        return f"<StFunction '{self._name}' ({status})>"
 
     @property
     def global_refs(self) -> set[str]:
@@ -105,7 +105,7 @@ class SbFunction:
         state.pop("_gates", None)
 
         # Freeze closure variables from the compiled function
-        # (skip if _compiled is a wrapper like SbFunction, not a raw function)
+        # (skip if _compiled is a wrapper like StFunction, not a raw function)
         if compiled is not None and hasattr(compiled, "__closure__") and compiled.__closure__:
             freevars = compiled.__code__.co_freevars
             frozen: dict[str, Any] = {}
@@ -119,9 +119,9 @@ class SbFunction:
             if frozen:
                 state["_frozen_closure"] = frozen
 
-        # Freeze global references (SbFunction/SbClass only) and store
+        # Freeze global references (StFunction/StClass only) and store
         # all global ref names for introspection via global_refs property
-        # (skip if _compiled is a wrapper like SbFunction, not a raw function)
+        # (skip if _compiled is a wrapper like StFunction, not a raw function)
         if compiled is not None and hasattr(compiled, "__globals__"):
             globs = compiled.__globals__
             frozen_globals: dict[str, Any] = {}
@@ -134,7 +134,7 @@ class SbFunction:
                 if name == self._name:
                     continue
                 global_ref_names.add(name)
-                if name in globs and isinstance(globs[name], (SbFunction, SbClass)):
+                if name in globs and isinstance(globs[name], (StFunction, StClass)):
                     frozen_globals[name] = globs[name]
             if frozen_globals:
                 state["_frozen_globals"] = frozen_globals
@@ -205,9 +205,9 @@ class SbFunction:
         for source in (frozen_globals, frozen_closure):
             if source:
                 for val in source.values():
-                    if isinstance(val, SbFunction) and val._compiled is None:
+                    if isinstance(val, StFunction) and val._compiled is None:
                         val.activate(gates, sandbox=sandbox, namespace=ns)
-                    elif isinstance(val, SbClass) and val._compiled_cls is None:
+                    elif isinstance(val, StClass) and val._compiled_cls is None:
                         val.activate(gates, sandbox=sandbox, namespace=ns)
 
         # Resolve ModuleRef objects in the namespace via the import gate
@@ -237,7 +237,7 @@ class SbFunction:
         self._gates = gates
 
 
-class SbClass:
+class StClass:
     """Pickleable wrapper for a sandbox-defined class.
 
     Stores the rewritten AST and frozen references to decorators/bases
@@ -255,14 +255,14 @@ class SbClass:
         self._compiled_cls = compiled_cls
         self._class_ast = class_ast
         self._frozen_refs = frozen_refs or {}
-        self._sb_getattr_gate: Any = None
+        self._st_getattr_gate: Any = None
         self._sandbox: Any = None
         self._gates: dict[str, Any] | None = None
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         if self._compiled_cls is None:
             raise RuntimeError(
-                f"SbClass '{self._name}' is not active "
+                f"StClass '{self._name}' is not active "
                 f"-- call activate() first"
             )
         if self._sandbox is not None and self._gates is not None:
@@ -271,10 +271,10 @@ class SbClass:
             )
         else:
             instance = self._compiled_cls(*args, **kwargs)
-        return SbInstance(self, instance, self._sb_getattr_gate)
+        return StInstance(self, instance, self._st_getattr_gate)
 
     def __mro_entries__(self, bases: tuple) -> tuple:
-        """Allow SbClass to be used as a base class in class statements."""
+        """Allow StClass to be used as a base class in class statements."""
         return (self._compiled_cls,)
 
     def __getattr__(self, name: str) -> Any:
@@ -283,19 +283,19 @@ class SbClass:
         compiled = self.__dict__.get("_compiled_cls")
         if compiled is None:
             raise RuntimeError(
-                f"SbClass '{self._name}' is not active "
+                f"StClass '{self._name}' is not active "
                 f"-- call activate() first"
             )
         return getattr(compiled, name)
 
     def __repr__(self) -> str:
         status = "active" if self._compiled_cls is not None else "inactive"
-        return f"<SbClass '{self._name}' ({status})>"
+        return f"<StClass '{self._name}' ({status})>"
 
     def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
         state.pop("_compiled_cls", None)
-        state.pop("_sb_getattr_gate", None)
+        state.pop("_st_getattr_gate", None)
         state.pop("_sandbox", None)
         state.pop("_gates", None)
         return state
@@ -303,7 +303,7 @@ class SbClass:
     def __setstate__(self, state: dict[str, Any]) -> None:
         self.__dict__.update(state)
         self._compiled_cls = None
-        self._sb_getattr_gate = None
+        self._st_getattr_gate = None
         self._sandbox = None
         self._gates = None
 
@@ -346,9 +346,9 @@ class SbClass:
         if self._frozen_refs:
             for name in self._frozen_refs:
                 val = ns.get(name)
-                if isinstance(val, SbFunction) and val._compiled is None:
+                if isinstance(val, StFunction) and val._compiled is None:
                     val.activate(gates, sandbox=sandbox, namespace=ns)
-                elif isinstance(val, SbClass) and val._compiled_cls is None:
+                elif isinstance(val, StClass) and val._compiled_cls is None:
                     val.activate(gates, sandbox=sandbox, namespace=ns)
 
         class_copy = copy.deepcopy(self._class_ast)
@@ -359,75 +359,75 @@ class SbClass:
         exec(code, ns)  # noqa: S102
 
         self._compiled_cls = ns[self._name]
-        self._sb_getattr_gate = gates.get("__st_getattr__")
+        self._st_getattr_gate = gates.get("__st_getattr__")
         self._sandbox = sandbox
         self._gates = gates
 
 
-class SbInstance:
+class StInstance:
     """Pickleable wrapper for an instance of a sandbox-defined class.
 
     Proxies attribute access to the underlying real instance and stores
-    the SbClass reference + instance __dict__ for serialization.
+    the StClass reference + instance __dict__ for serialization.
     """
 
-    __slots__ = ("_sb_class", "_sb_instance", "_frozen_attrs", "_sb_getattr_gate")
+    __slots__ = ("_st_class", "_st_instance", "_frozen_attrs", "_st_getattr_gate")
 
-    def __init__(self, sb_class: SbClass, instance: Any, getattr_gate: Any = None) -> None:
-        object.__setattr__(self, "_sb_class", sb_class)
-        object.__setattr__(self, "_sb_instance", instance)
-        object.__setattr__(self, "_sb_getattr_gate", getattr_gate)
+    def __init__(self, sb_class: StClass, instance: Any, getattr_gate: Any = None) -> None:
+        object.__setattr__(self, "_st_class", sb_class)
+        object.__setattr__(self, "_st_instance", instance)
+        object.__setattr__(self, "_st_getattr_gate", getattr_gate)
 
     def __getattr__(self, name: str) -> Any:
-        instance = object.__getattribute__(self, "_sb_instance")
+        instance = object.__getattribute__(self, "_st_instance")
         if instance is None:
             raise RuntimeError(
-                "SbInstance is not active -- call activate() first"
+                "StInstance is not active -- call activate() first"
             )
-        gate = object.__getattribute__(self, "_sb_getattr_gate")
+        gate = object.__getattribute__(self, "_st_getattr_gate")
         if gate is not None:
             return gate(instance, name)
         return getattr(instance, name)
 
     def __setattr__(self, name: str, value: Any) -> None:
-        instance = object.__getattribute__(self, "_sb_instance")
+        instance = object.__getattribute__(self, "_st_instance")
         if instance is None:
             raise RuntimeError(
-                "SbInstance is not active -- call activate() first"
+                "StInstance is not active -- call activate() first"
             )
         setattr(instance, name, value)
 
     def __delattr__(self, name: str) -> None:
-        instance = object.__getattribute__(self, "_sb_instance")
+        instance = object.__getattribute__(self, "_st_instance")
         if instance is None:
             raise RuntimeError(
-                "SbInstance is not active -- call activate() first"
+                "StInstance is not active -- call activate() first"
             )
         delattr(instance, name)
 
     def __repr__(self) -> str:
         try:
-            instance = object.__getattribute__(self, "_sb_instance")
+            instance = object.__getattribute__(self, "_st_instance")
             if instance is not None:
                 return repr(instance)
         except AttributeError:
             pass
-        sb_class = object.__getattribute__(self, "_sb_class")
-        return f"<SbInstance of '{sb_class._name}' (inactive)>"
+        sb_class = object.__getattribute__(self, "_st_class")
+        return f"<StInstance of '{sb_class._name}' (inactive)>"
 
     def __getstate__(self) -> dict[str, Any]:
-        instance = object.__getattribute__(self, "_sb_instance")
+        instance = object.__getattribute__(self, "_st_instance")
         attrs = instance.__dict__.copy() if instance is not None else {}
         return {
-            "sb_class": object.__getattribute__(self, "_sb_class"),
+            "st_class": object.__getattribute__(self, "_st_class"),
             "attrs": attrs,
         }
 
     def __setstate__(self, state: dict[str, Any]) -> None:
-        object.__setattr__(self, "_sb_class", state["sb_class"])
-        object.__setattr__(self, "_sb_instance", None)
+        object.__setattr__(self, "_st_class", state["st_class"])
+        object.__setattr__(self, "_st_instance", None)
         object.__setattr__(self, "_frozen_attrs", state["attrs"])
-        object.__setattr__(self, "_sb_getattr_gate", None)
+        object.__setattr__(self, "_st_getattr_gate", None)
 
     def activate(
         self,
@@ -438,14 +438,14 @@ class SbInstance:
     ) -> None:
         """Restore the real instance from frozen attrs.
 
-        The SbClass must be activated before calling this.
-        When gates/sandbox/namespace are provided, nested SbFunction/SbClass/
-        SbInstance values in frozen attrs are auto-activated.
+        The StClass must be activated before calling this.
+        When gates/sandbox/namespace are provided, nested StFunction/StClass/
+        StInstance values in frozen attrs are auto-activated.
         """
-        sb_class = object.__getattribute__(self, "_sb_class")
+        sb_class = object.__getattribute__(self, "_st_class")
         if sb_class._compiled_cls is None:
             raise RuntimeError(
-                "SbClass must be activated before its instances"
+                "StClass must be activated before its instances"
             )
         cls = sb_class._compiled_cls
         instance = cls.__new__(cls)
@@ -454,40 +454,40 @@ class SbInstance:
         # Auto-activate nested wrappers in frozen attrs
         if gates is not None:
             for val in frozen.values():
-                if isinstance(val, SbFunction) and val._compiled is None:
+                if isinstance(val, StFunction) and val._compiled is None:
                     val.activate(gates, sandbox=sandbox, namespace=namespace)
-                elif isinstance(val, SbClass) and val._compiled_cls is None:
+                elif isinstance(val, StClass) and val._compiled_cls is None:
                     val.activate(gates, sandbox=sandbox, namespace=namespace)
-                elif isinstance(val, SbInstance):
-                    nested_class = object.__getattribute__(val, "_sb_class")
+                elif isinstance(val, StInstance):
+                    nested_class = object.__getattribute__(val, "_st_class")
                     if nested_class._compiled_cls is None:
                         nested_class.activate(gates, sandbox=sandbox, namespace=namespace)
-                    if object.__getattribute__(val, "_sb_instance") is None:
+                    if object.__getattribute__(val, "_st_instance") is None:
                         val.activate(gates=gates, sandbox=sandbox, namespace=namespace)
 
         instance.__dict__.update(frozen)
-        object.__setattr__(self, "_sb_instance", instance)
-        object.__setattr__(self, "_sb_getattr_gate", sb_class._sb_getattr_gate)
+        object.__setattr__(self, "_st_instance", instance)
+        object.__setattr__(self, "_st_getattr_gate", sb_class._st_getattr_gate)
 
 
 def _make_dunder_forwarder(name: str):
-    """Create a forwarding method for a dunder on SbInstance.
+    """Create a forwarding method for a dunder on StInstance.
 
     These go directly to the underlying instance, bypassing the attr gate.
     Protocol dunders (__len__, __iter__, __add__, etc.) are safe — they only
     operate on the object's own data and don't expose interpreter internals.
     """
     def forwarder(self, *args, **kwargs):
-        instance = object.__getattribute__(self, "_sb_instance")
+        instance = object.__getattribute__(self, "_st_instance")
         return getattr(instance, name)(*args, **kwargs)
     forwarder.__name__ = name
-    forwarder.__qualname__ = f"SbInstance.{name}"
+    forwarder.__qualname__ = f"StInstance.{name}"
     return forwarder
 
 
 # Dunders that need forwarding for implicit protocol dispatch (str(), len(), etc.).
 # __repr__ is handled explicitly above; __init__/__getattr__/__setattr__/__delattr__
-# are part of SbInstance's own proxy machinery.
+# are part of StInstance's own proxy machinery.
 _FORWARDED_DUNDERS = [
     "__str__", "__len__", "__bool__", "__hash__",
     "__iter__", "__next__", "__contains__",
@@ -504,7 +504,7 @@ _FORWARDED_DUNDERS = [
 ]
 
 for _dname in _FORWARDED_DUNDERS:
-    setattr(SbInstance, _dname, _make_dunder_forwarder(_dname))
+    setattr(StInstance, _dname, _make_dunder_forwarder(_dname))
 
 
 class ModuleRef:

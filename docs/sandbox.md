@@ -79,30 +79,30 @@ This includes validation errors (unsupported syntax, reserved names, etc.):
 
 ```python
 result = sandbox.exec("from os import *")
-assert isinstance(result.error, SbValidationError)
+assert isinstance(result.error, StValidationError)
 ```
 
 When a validation error occurs, no code executes -- `result.namespace` is empty, `result.stdout` is `""`, and `result.ticks` is `0`.
 
 ### Sandbox errors
 
-All sandbox-specific errors inherit from `SbError`:
+All sandbox-specific errors inherit from `StError`:
 
 ```
-SbError
-├── SbValidationError   # invalid AST (before execution)
-├── SbTimeout           # wall-clock timeout exceeded
-├── SbTickLimit         # tick limit exceeded
-└── SbCancelled         # sandbox.cancel() called
+StError
+├── StValidationError   # invalid AST (before execution)
+├── StTimeout           # wall-clock timeout exceeded
+├── StTickLimit         # tick limit exceeded
+└── StCancelled         # sandbox.cancel() called
 ```
 
 `MemoryError` (stdlib) is raised when the memory limit is exceeded.
 
 ```python
-from sandtrap import SbError, SbValidationError, SbTimeout, SbTickLimit, SbCancelled
+from sandtrap import StError, StValidationError, StTimeout, StTickLimit, StCancelled
 ```
 
-All errors appear on `result.error`. Check `isinstance(result.error, SbValidationError)` to distinguish code that was rejected before execution from code that failed at runtime.
+All errors appear on `result.error`. Check `isinstance(result.error, StValidationError)` to distinguish code that was rejected before execution from code that failed at runtime.
 
 ## Cancellation
 
@@ -115,10 +115,10 @@ timer = threading.Timer(1.0, sandbox.cancel)
 timer.start()
 
 result = sandbox.exec("while True: pass")
-assert isinstance(result.error, SbCancelled)
+assert isinstance(result.error, StCancelled)
 ```
 
-`cancel()` is safe to call from any thread. The sandbox raises `SbCancelled` at the next checkpoint.
+`cancel()` is safe to call from any thread. The sandbox raises `StCancelled` at the next checkpoint.
 
 ## Reactivation
 
@@ -137,11 +137,11 @@ refs = find_refs("y = x + math.sqrt(4)")
 
 This enables lazy deserialization -- only load the state entries the code actually needs.
 
-Pass a `namespace` (any `Mapping`) to follow transitive dependencies through `SbFunction.global_refs`:
+Pass a `namespace` (any `Mapping`) to follow transitive dependencies through `StFunction.global_refs`:
 
 ```python
 refs = find_refs("result = process(data)", namespace=state)
-# Discovers process + all SbFunction deps process references
+# Discovers process + all StFunction deps process references
 ```
 
 The namespace can be a lazy container that deserializes on `get()` -- only values in the dependency chain are touched.

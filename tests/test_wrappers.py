@@ -1,4 +1,4 @@
-"""Tests for SbFunction and SbClass wrappers."""
+"""Tests for StFunction and StClass wrappers."""
 
 import pickle
 import threading
@@ -6,8 +6,8 @@ import threading
 import pytest
 
 from sandtrap import Policy, Sandbox
-from sandtrap.errors import SbCancelled, SbTickLimit, SbTimeout
-from sandtrap.wrappers import SbClass, SbFunction, SbInstance
+from sandtrap.errors import StCancelled, StTickLimit, StTimeout
+from sandtrap.wrappers import StClass, StFunction, StInstance
 
 
 def test_wrapped_mode_creates_sbfunction():
@@ -15,7 +15,7 @@ def test_wrapped_mode_creates_sbfunction():
     sandbox = Sandbox(policy, mode="wrapped")
     result = sandbox.exec("def f(x): return x + 1")
     assert result.error is None
-    assert isinstance(result.namespace["f"], SbFunction)
+    assert isinstance(result.namespace["f"], StFunction)
 
 
 def test_raw_mode_creates_regular_function():
@@ -23,7 +23,7 @@ def test_raw_mode_creates_regular_function():
     sandbox = Sandbox(policy, mode="raw")
     result = sandbox.exec("def f(x): return x + 1")
     assert result.error is None
-    assert not isinstance(result.namespace["f"], SbFunction)
+    assert not isinstance(result.namespace["f"], StFunction)
     assert callable(result.namespace["f"])
 
 
@@ -63,7 +63,7 @@ def test_sbfunction_pickle_roundtrip():
     f2 = pickle.loads(data)
 
     # Should be inactive after unpickle
-    assert isinstance(f2, SbFunction)
+    assert isinstance(f2, StFunction)
     with pytest.raises(RuntimeError, match="not active"):
         f2(1)
 
@@ -108,8 +108,8 @@ result = add5(3)
 """)
     assert result.error is None
     assert result.namespace["result"] == 8
-    # Inner function is also an SbFunction
-    assert isinstance(result.namespace["add5"], SbFunction)
+    # Inner function is also an StFunction
+    assert isinstance(result.namespace["add5"], StFunction)
 
 
 def test_sbfunction_closure_pickle_roundtrip():
@@ -132,7 +132,7 @@ add5 = make_adder(5)
     data = pickle.dumps(add5)
     add5_restored = pickle.loads(data)
 
-    assert isinstance(add5_restored, SbFunction)
+    assert isinstance(add5_restored, StFunction)
     with pytest.raises(RuntimeError, match="not active"):
         add5_restored(3)
 
@@ -174,8 +174,8 @@ result = add(2, 3) + mul(4, 5)
 """)
     assert result.error is None
     assert result.namespace["result"] == 25
-    assert isinstance(result.namespace["add"], SbFunction)
-    assert isinstance(result.namespace["mul"], SbFunction)
+    assert isinstance(result.namespace["add"], StFunction)
+    assert isinstance(result.namespace["mul"], StFunction)
 
 
 def test_sbfunction_with_class_method():
@@ -194,16 +194,16 @@ result = c.add(3, 4)
     assert result.namespace["result"] == 7
 
 
-# --- SbClass / SbInstance tests ---
+# --- StClass / StInstance tests ---
 
 
 def test_wrapped_mode_creates_sbclass():
-    """Classes in wrapped mode are wrapped in SbClass."""
+    """Classes in wrapped mode are wrapped in StClass."""
     policy = Policy()
     sandbox = Sandbox(policy, mode="wrapped")
     result = sandbox.exec("class Foo: pass")
     assert result.error is None
-    assert isinstance(result.namespace["Foo"], SbClass)
+    assert isinstance(result.namespace["Foo"], StClass)
 
 
 def test_raw_mode_creates_regular_class():
@@ -216,7 +216,7 @@ def test_raw_mode_creates_regular_class():
 
 
 def test_sbclass_instantiation():
-    """SbClass.__call__ creates SbInstance."""
+    """StClass.__call__ creates StInstance."""
     policy = Policy()
     sandbox = Sandbox(policy, mode="wrapped")
     result = sandbox.exec("""\
@@ -230,11 +230,11 @@ result = p.x + p.y
 """)
     assert result.error is None
     assert result.namespace["result"] == 7
-    assert isinstance(result.namespace["p"], SbInstance)
+    assert isinstance(result.namespace["p"], StInstance)
 
 
 def test_sbclass_methods():
-    """Methods on SbInstance delegate to the real instance."""
+    """Methods on StInstance delegate to the real instance."""
     policy = Policy()
     sandbox = Sandbox(policy, mode="wrapped")
     result = sandbox.exec("""\
@@ -257,7 +257,7 @@ result = c.value()
 
 
 def test_sbclass_dunders():
-    """Dunder methods on SbInstance work via forwarding."""
+    """Dunder methods on StInstance work via forwarding."""
     policy = Policy()
     sandbox = Sandbox(policy, mode="wrapped")
     result = sandbox.exec("""\
@@ -279,7 +279,7 @@ s = str(ml)
 
 
 def test_sbclass_pickle_roundtrip():
-    """SbClass can be pickled and reactivated."""
+    """StClass can be pickled and reactivated."""
     policy = Policy()
     sandbox = Sandbox(policy, mode="wrapped")
     result = sandbox.exec("""\
@@ -294,17 +294,17 @@ class Adder:
 
     data = pickle.dumps(cls)
     cls2 = pickle.loads(data)
-    assert isinstance(cls2, SbClass)
+    assert isinstance(cls2, StClass)
 
     # Activate and use
     sandbox.activate(cls2)
     obj = cls2(10)
-    assert isinstance(obj, SbInstance)
+    assert isinstance(obj, StInstance)
     assert obj.add(5) == 15
 
 
 def test_sbinstance_pickle_roundtrip():
-    """SbInstance can be pickled and reactivated."""
+    """StInstance can be pickled and reactivated."""
     policy = Policy()
     sandbox = Sandbox(policy, mode="wrapped")
     result = sandbox.exec("""\
@@ -323,7 +323,7 @@ p = Point(3, 4)
 
     data = pickle.dumps(p)
     p2 = pickle.loads(data)
-    assert isinstance(p2, SbInstance)
+    assert isinstance(p2, StInstance)
 
     # Activate (also activates the class)
     sandbox.activate(p2)
@@ -388,8 +388,8 @@ def test_sbfunction_lambda_not_wrapped():
     result = sandbox.exec("f = lambda x: x + 1\nresult = f(5)")
     assert result.error is None
     assert result.namespace["result"] == 6
-    # Lambda is NOT an SbFunction (it's a Lambda, not FunctionDef)
-    assert not isinstance(result.namespace["f"], SbFunction)
+    # Lambda is NOT an StFunction (it's a Lambda, not FunctionDef)
+    assert not isinstance(result.namespace["f"], StFunction)
 
 
 def test_sbfunction_decorated():
@@ -411,11 +411,11 @@ result = f(5)
     assert result.error is None
     assert result.namespace["result"] == 12
     # f is wrapped by __st_defun__ AFTER decoration
-    assert isinstance(result.namespace["f"], SbFunction)
+    assert isinstance(result.namespace["f"], StFunction)
 
 
 def test_sbclass_class_level_attribute():
-    """SbClass proxies class-level attribute access."""
+    """StClass proxies class-level attribute access."""
     sandbox = Sandbox(Policy(), mode="wrapped")
     result = sandbox.exec("""\
 class Foo:
@@ -427,7 +427,7 @@ val = Foo.X
 
 
 def test_sbclass_static_method():
-    """SbClass proxies static method access."""
+    """StClass proxies static method access."""
     sandbox = Sandbox(Policy(), mode="wrapped")
     result = sandbox.exec("""\
 class Calc:
@@ -441,7 +441,7 @@ result = Calc.add(3, 4)
 
 
 def test_sbclass_class_method():
-    """SbClass proxies class method access."""
+    """StClass proxies class method access."""
     sandbox = Sandbox(Policy(), mode="wrapped")
     result = sandbox.exec("""\
 class Counter:
@@ -457,7 +457,7 @@ result = Counter.increment()
 
 
 def test_sbinstance_protocol_dunders_work():
-    """SbInstance protocol dunder forwarders work directly (bypass gate)."""
+    """StInstance protocol dunder forwarders work directly (bypass gate)."""
     sandbox = Sandbox(Policy(), mode="wrapped")
     result = sandbox.exec("""\
 class MyList:
@@ -482,7 +482,7 @@ has_two = 2 in obj
 
 
 def test_sbinstance_operators_work():
-    """SbInstance arithmetic/comparison dunder forwarders work."""
+    """StInstance arithmetic/comparison dunder forwarders work."""
     sandbox = Sandbox(Policy(), mode="wrapped")
     result = sandbox.exec("""\
 class Pair:
@@ -509,7 +509,7 @@ eq = p == Pair(4, 6)
 
 
 def test_auto_activate_sbfunction_in_namespace():
-    """Inactive SbFunction passed via namespace is auto-activated by exec()."""
+    """Inactive StFunction passed via namespace is auto-activated by exec()."""
     policy = Policy()
     sandbox = Sandbox(policy, mode="wrapped")
 
@@ -527,7 +527,7 @@ def test_auto_activate_sbfunction_in_namespace():
 
 
 def test_auto_activate_sbclass_in_namespace():
-    """Inactive SbClass passed via namespace is auto-activated by exec()."""
+    """Inactive StClass passed via namespace is auto-activated by exec()."""
     policy = Policy()
     sandbox = Sandbox(policy, mode="wrapped")
 
@@ -550,7 +550,7 @@ class Point:
 
 
 def test_auto_activate_sbinstance_in_namespace():
-    """Inactive SbInstance passed via namespace is auto-activated by exec()."""
+    """Inactive StInstance passed via namespace is auto-activated by exec()."""
     policy = Policy()
     sandbox = Sandbox(policy, mode="wrapped")
 
@@ -600,7 +600,7 @@ def mul(a, b): return a * b
 
 
 def test_direct_call_enforces_tick_limit():
-    """Direct SbFunction call respects tick_limit via _call_in_context."""
+    """Direct StFunction call respects tick_limit via _call_in_context."""
     policy = Policy(tick_limit=50)
     sandbox = Sandbox(policy, mode="wrapped")
 
@@ -614,12 +614,12 @@ def count_high():
     assert result.error is None
     f = result.namespace["count_high"]
 
-    with pytest.raises(SbTickLimit):
+    with pytest.raises(StTickLimit):
         f()
 
 
 def test_direct_call_enforces_timeout():
-    """Direct SbFunction call respects timeout via _call_in_context."""
+    """Direct StFunction call respects timeout via _call_in_context."""
     policy = Policy(timeout=0.1)
     sandbox = Sandbox(policy, mode="wrapped")
 
@@ -631,12 +631,12 @@ def spin():
     assert result.error is None
     f = result.namespace["spin"]
 
-    with pytest.raises(SbTimeout):
+    with pytest.raises(StTimeout):
         f()
 
 
 def test_direct_call_enforces_cancellation():
-    """Direct SbFunction call respects cancellation via _call_in_context."""
+    """Direct StFunction call respects cancellation via _call_in_context."""
     policy = Policy(timeout=10.0)
     sandbox = Sandbox(policy, mode="wrapped")
 
@@ -652,7 +652,7 @@ def spin():
     timer = threading.Timer(0.05, sandbox.cancel)
     timer.start()
 
-    with pytest.raises(SbCancelled):
+    with pytest.raises(StCancelled):
         f()
     timer.cancel()
 
@@ -676,7 +676,7 @@ def loop50():
 
 
 def test_direct_call_sbclass_enforces_tick_limit():
-    """Direct SbClass construction respects tick_limit."""
+    """Direct StClass construction respects tick_limit."""
     policy = Policy(tick_limit=50)
     sandbox = Sandbox(policy, mode="wrapped")
 
@@ -689,12 +689,12 @@ class Heavy:
     assert result.error is None
     cls = result.namespace["Heavy"]
 
-    with pytest.raises(SbTickLimit):
+    with pytest.raises(StTickLimit):
         cls()
 
 
 def test_direct_call_after_pickle_roundtrip():
-    """Pickled + activated SbFunction gets full sandbox context on direct call."""
+    """Pickled + activated StFunction gets full sandbox context on direct call."""
     policy = Policy(tick_limit=50)
     sandbox = Sandbox(policy, mode="wrapped")
 
@@ -710,12 +710,12 @@ def count_high():
     sandbox.activate(f2)
 
     # Direct call should enforce tick limit
-    with pytest.raises(SbTickLimit):
+    with pytest.raises(StTickLimit):
         f2()
 
 
 def test_direct_call_succeeds_under_limits():
-    """Direct SbFunction call succeeds when within limits."""
+    """Direct StFunction call succeeds when within limits."""
     policy = Policy(tick_limit=1000, timeout=10.0)
     sandbox = Sandbox(policy, mode="wrapped")
 
@@ -737,7 +737,7 @@ def compute(n):
 
 
 def test_frozen_globals_on_pickle():
-    """Global SbFunction deps are frozen on pickle and restored on activate."""
+    """Global StFunction deps are frozen on pickle and restored on activate."""
     policy = Policy(tick_limit=10_000)
     sandbox = Sandbox(policy, mode="wrapped")
 
@@ -756,7 +756,7 @@ def sum_squares(lst):
     # _frozen_globals should contain square
     assert hasattr(restored, "_frozen_globals")
     assert "square" in restored._frozen_globals
-    assert isinstance(restored._frozen_globals["square"], SbFunction)
+    assert isinstance(restored._frozen_globals["square"], StFunction)
 
     # Activate without providing square — frozen globals make it work
     sandbox.activate(restored)

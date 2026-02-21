@@ -5,7 +5,7 @@ import sys
 import pytest
 
 from sandtrap import Policy, Sandbox
-from sandtrap.errors import SbValidationError
+from sandtrap.errors import StValidationError
 
 
 @pytest.fixture
@@ -119,7 +119,7 @@ def test_syntax_error_captured(sandbox):
 
 def test_validation_error_on_result(sandbox):
     result = sandbox.exec("__st_foo = 1")
-    assert isinstance(result.error, SbValidationError)
+    assert isinstance(result.error, StValidationError)
 
 
 def test_error_traceback_has_sandtrap_filename(sandbox):
@@ -420,20 +420,20 @@ def test_type_three_arg_blocked(sandbox):
     assert isinstance(result.error, TypeError)
 
 
-def test_sb_name_read_blocked(sandbox):
+def test_st_name_read_blocked(sandbox):
     """Sandboxed code cannot read __st_* names."""
     result = sandbox.exec("x = __st_getattr__")
-    assert isinstance(result.error, SbValidationError)
+    assert isinstance(result.error, StValidationError)
     assert "Cannot reference reserved name" in str(result.error)
 
 
-def test_aexec_sb_locals_blocked():
+def test_aexec_st_locals_blocked():
     """Sandboxed code in aexec cannot call __st_locals__."""
     import asyncio
 
     sandbox = Sandbox(Policy())
     result = asyncio.run(sandbox.aexec("x = __st_locals__"))
-    assert isinstance(result.error, SbValidationError)
+    assert isinstance(result.error, StValidationError)
     assert "Cannot reference reserved name" in str(result.error)
 
 
@@ -466,13 +466,13 @@ result = f.x
 
 def test_comprehension_respects_timeout():
     """Comprehensions respect the timeout via checkpoint."""
-    from sandtrap.errors import SbTimeout
+    from sandtrap.errors import StTimeout
 
     policy = Policy()
     policy.timeout = 0.1
     sandbox = Sandbox(policy)
     result = sandbox.exec("[i for i in range(10_000_000_000)]")
-    assert isinstance(result.error, SbTimeout)
+    assert isinstance(result.error, StTimeout)
 
 
 def test_fstring_attribute_gated():

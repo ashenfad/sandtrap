@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from .builtins import TailBuffer, _make_gated_type, make_print, make_safe_builtins
-from .errors import SbTimeout, SbValidationError, strip_internal_frames
+from .errors import StTimeout, StValidationError, strip_internal_frames
 from .fs.context import use_fs
 from .fs.patch import install as install_fs
 from .fs.protocol import FileSystem
@@ -24,7 +24,7 @@ from .net.patch import install as install_net
 from .policy import Policy
 from .resource_limits import get_rss_bytes
 from .rewriter import Rewriter
-from .wrappers import ModuleRef, SbClass, SbFunction, SbInstance
+from .wrappers import ModuleRef, StClass, StFunction, StInstance
 
 _exec_counter = itertools.count(1)
 _INTERNAL_KEYS = {"__builtins__", "__name__"}
@@ -80,7 +80,7 @@ class Sandbox:
         """Cancel the currently running execution.
 
         Safe to call from any thread.  The sandbox will raise
-        ``SbCancelled`` at the next checkpoint (loop iteration or
+        ``StCancelled`` at the next checkpoint (loop iteration or
         function entry).
         """
         self._cancel_flag.set()
@@ -90,18 +90,18 @@ class Sandbox:
         ns: dict[str, Any],
         gates: dict[str, Any],
     ) -> None:
-        """Auto-activate any inactive SbFunction/SbClass/SbInstance in namespace."""
+        """Auto-activate any inactive StFunction/StClass/StInstance in namespace."""
         import_gate = gates.get("__st_import__")
         for k, v in list(ns.items()):
-            if isinstance(v, SbFunction) and v._compiled is None:
+            if isinstance(v, StFunction) and v._compiled is None:
                 v.activate(gates, sandbox=self, namespace=ns)
-            elif isinstance(v, SbClass) and v._compiled_cls is None:
+            elif isinstance(v, StClass) and v._compiled_cls is None:
                 v.activate(gates, sandbox=self, namespace=ns)
-            elif isinstance(v, SbInstance):
-                sb_class = object.__getattribute__(v, "_sb_class")
+            elif isinstance(v, StInstance):
+                sb_class = object.__getattribute__(v, "_st_class")
                 if sb_class._compiled_cls is None:
                     sb_class.activate(gates, sandbox=self, namespace=ns)
-                if object.__getattribute__(v, "_sb_instance") is None:
+                if object.__getattribute__(v, "_st_instance") is None:
                     v.activate(gates=gates, sandbox=self, namespace=ns)
             elif isinstance(v, ModuleRef) and import_gate is not None:
                 try:
@@ -126,10 +126,10 @@ class Sandbox:
         that direct calls from host code get full sandbox protections.
         """
         for v in ns.values():
-            if isinstance(v, SbFunction) and v._sandbox is None:
+            if isinstance(v, StFunction) and v._sandbox is None:
                 v._sandbox = self
                 v._gates = gates
-            elif isinstance(v, SbClass) and v._sandbox is None:
+            elif isinstance(v, StClass) and v._sandbox is None:
                 v._sandbox = self
                 v._gates = gates
 
@@ -275,7 +275,7 @@ class Sandbox:
         rewriter = Rewriter(wrapped_mode=wrapped_mode)
         try:
             tree = rewriter.visit(tree)
-        except SbValidationError as e:
+        except StValidationError as e:
             return ExecResult(error=e)
 
         return tree, rewriter
@@ -404,14 +404,14 @@ class Sandbox:
         *,
         namespace: dict[str, Any] | None = None,
     ) -> None:
-        """Activate an unpickled SbFunction/SbClass/SbInstance."""
+        """Activate an unpickled StFunction/StClass/StInstance."""
         gates = make_gates(self.policy)
-        if isinstance(obj, SbFunction):
+        if isinstance(obj, StFunction):
             obj.activate(gates, sandbox=self, namespace=namespace)
-        elif isinstance(obj, SbClass):
+        elif isinstance(obj, StClass):
             obj.activate(gates, sandbox=self, namespace=namespace)
-        elif isinstance(obj, SbInstance):
-            sb_class = object.__getattribute__(obj, "_sb_class")
+        elif isinstance(obj, StInstance):
+            sb_class = object.__getattribute__(obj, "_st_class")
             if sb_class._compiled_cls is None:
                 sb_class.activate(gates, sandbox=self, namespace=namespace)
             obj.activate(gates=gates, sandbox=self, namespace=namespace)
@@ -520,7 +520,7 @@ class Sandbox:
                 if result_locals is None:
                     result_locals = {}
             except asyncio.TimeoutError:
-                error = SbTimeout(
+                error = StTimeout(
                     f"Execution exceeded {self.policy.timeout}s timeout"
                 )
             except BaseException as e:

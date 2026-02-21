@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from sandtrap.errors import SbValidationError
+from sandtrap.errors import StValidationError
 from sandtrap.rewriter import Rewriter
 
 
@@ -19,48 +19,48 @@ def test_simple_pass_through():
     assert isinstance(tree, ast.Module)
 
 
-def test_block_sb_assignment():
-    with pytest.raises(SbValidationError, match="Cannot assign to reserved name"):
+def test_block_st_assignment():
+    with pytest.raises(StValidationError, match="Cannot assign to reserved name"):
         _rewrite("__st_foo = 1")
 
 
-def test_block_sb_tuple_unpack():
-    with pytest.raises(SbValidationError, match="Cannot assign to reserved name"):
+def test_block_st_tuple_unpack():
+    with pytest.raises(StValidationError, match="Cannot assign to reserved name"):
         _rewrite("a, __st_x = 1, 2")
 
 
-def test_block_sb_delete():
-    with pytest.raises(SbValidationError, match="Cannot delete reserved name"):
+def test_block_st_delete():
+    with pytest.raises(StValidationError, match="Cannot delete reserved name"):
         _rewrite("del __st_foo")
 
 
 def test_block_exec_assignment():
-    with pytest.raises(SbValidationError, match="Cannot assign to 'exec'"):
+    with pytest.raises(StValidationError, match="Cannot assign to 'exec'"):
         _rewrite("exec = 1")
 
 
 def test_block_eval_assignment():
-    with pytest.raises(SbValidationError, match="Cannot assign to 'eval'"):
+    with pytest.raises(StValidationError, match="Cannot assign to 'eval'"):
         _rewrite("eval = lambda x: x")
 
 
 def test_block_compile_assignment():
-    with pytest.raises(SbValidationError, match="Cannot assign to 'compile'"):
+    with pytest.raises(StValidationError, match="Cannot assign to 'compile'"):
         _rewrite("compile = None")
 
 
 def test_block_import_assignment():
-    with pytest.raises(SbValidationError, match="Cannot assign to '__import__'"):
+    with pytest.raises(StValidationError, match="Cannot assign to '__import__'"):
         _rewrite("__import__ = None")
 
 
-def test_block_sb_global():
-    with pytest.raises(SbValidationError, match="Cannot declare.*global"):
+def test_block_st_global():
+    with pytest.raises(StValidationError, match="Cannot declare.*global"):
         _rewrite("global __st_foo")
 
 
-def test_block_sb_nonlocal():
-    with pytest.raises(SbValidationError, match="Cannot declare.*nonlocal"):
+def test_block_st_nonlocal():
+    with pytest.raises(StValidationError, match="Cannot declare.*nonlocal"):
         _rewrite("""\
 def f():
     nonlocal __st_foo
@@ -68,7 +68,7 @@ def f():
 
 
 def test_block_wildcard_import():
-    with pytest.raises(SbValidationError, match="Wildcard imports"):
+    with pytest.raises(StValidationError, match="Wildcard imports"):
         _rewrite("from os import *")
 
 
@@ -158,44 +158,44 @@ def test_allowed_name_read():
     _rewrite("y = eval")
 
 
-def test_block_sb_name_load():
+def test_block_st_name_load():
     """Reading __st_* names is blocked."""
-    with pytest.raises(SbValidationError, match="Cannot reference reserved name"):
+    with pytest.raises(StValidationError, match="Cannot reference reserved name"):
         _rewrite("x = __st_getattr__")
 
 
-def test_block_sb_name_load_in_call():
+def test_block_st_name_load_in_call():
     """Calling __st_* names directly is blocked."""
-    with pytest.raises(SbValidationError, match="Cannot reference reserved name"):
+    with pytest.raises(StValidationError, match="Cannot reference reserved name"):
         _rewrite("__st_checkpoint__()")
 
 
 def test_block_del_exec():
     """Deleting blocked names like exec/eval is rejected."""
-    with pytest.raises(SbValidationError, match="Cannot delete 'exec'"):
+    with pytest.raises(StValidationError, match="Cannot delete 'exec'"):
         _rewrite("del exec")
 
 
 def test_block_del_eval():
-    with pytest.raises(SbValidationError, match="Cannot delete 'eval'"):
+    with pytest.raises(StValidationError, match="Cannot delete 'eval'"):
         _rewrite("del eval")
 
 
 def test_block_for_attr_target():
     """For loops with attribute targets are rejected."""
-    with pytest.raises(SbValidationError, match="Attribute targets in for"):
+    with pytest.raises(StValidationError, match="Attribute targets in for"):
         _rewrite("for obj.x in items: pass")
 
 
 def test_block_for_tuple_attr_target():
     """For loops with attribute inside tuple target are rejected."""
-    with pytest.raises(SbValidationError, match="Attribute targets in for"):
+    with pytest.raises(StValidationError, match="Attribute targets in for"):
         _rewrite("for a, obj.x in items: pass")
 
 
 def test_block_with_attr_target():
     """With statements with attribute targets are rejected."""
-    with pytest.raises(SbValidationError, match="Attribute targets in with"):
+    with pytest.raises(StValidationError, match="Attribute targets in with"):
         _rewrite("with cm() as obj.x: pass")
 
 
@@ -213,7 +213,7 @@ def test_relative_import_parent_passes_level():
 
 def test_block_del_method():
     """__del__ methods in classes are rejected."""
-    with pytest.raises(SbValidationError, match="__del__ methods are not allowed"):
+    with pytest.raises(StValidationError, match="__del__ methods are not allowed"):
         _rewrite("""\
 class Foo:
     def __del__(self):
@@ -223,7 +223,7 @@ class Foo:
 
 def test_block_async_del_method():
     """async __del__ methods are also rejected."""
-    with pytest.raises(SbValidationError, match="__del__ methods are not allowed"):
+    with pytest.raises(StValidationError, match="__del__ methods are not allowed"):
         _rewrite("""\
 class Foo:
     async def __del__(self):

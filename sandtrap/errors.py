@@ -6,31 +6,31 @@ import types
 _SBLITE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-class SbError(Exception):
+class StError(Exception):
     """Base exception for all sandtrap sandbox errors."""
 
     pass
 
 
-class SbTimeout(SbError):
+class StTimeout(StError):
     """Raised when sandbox execution exceeds the configured timeout."""
 
     pass
 
 
-class SbCancelled(SbError):
+class StCancelled(StError):
     """Raised when sandbox execution is cancelled externally."""
 
     pass
 
 
-class SbTickLimit(SbError):
+class StTickLimit(StError):
     """Raised when sandbox execution exceeds the configured tick limit."""
 
     pass
 
 
-class SbValidationError(SbError):
+class StValidationError(StError):
     """Raised when AST validation rejects code before compilation."""
 
     def __init__(self, message: str, lineno: int | None = None, col: int | None = None):

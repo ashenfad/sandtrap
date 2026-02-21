@@ -3,7 +3,7 @@
 import pickle
 
 from sandtrap import MemoryFS, Policy, Sandbox
-from sandtrap.wrappers import ModuleRef, SbClass, SbFunction
+from sandtrap.wrappers import ModuleRef, StClass, StFunction
 
 
 def _make_sandbox(**kwargs):
@@ -98,10 +98,10 @@ def test_vfs_module_uses_checkpoints():
     sandbox, fs = _make_sandbox(policy=policy)
     fs.files["/slow.py"] = "while True: pass"
 
-    from sandtrap.errors import SbTimeout
+    from sandtrap.errors import StTimeout
     result = sandbox.exec("import slow")
     assert result.error is not None
-    assert isinstance(result.error, SbTimeout)
+    assert isinstance(result.error, StTimeout)
 
 
 def test_policy_modules_shadow_vfs():
@@ -390,7 +390,7 @@ def test_relative_import_nonexistent_name():
 
 
 def test_vfs_function_is_sbfunction_in_wrapped_mode():
-    """VFS module functions are SbFunction in wrapped mode."""
+    """VFS module functions are StFunction in wrapped mode."""
     sandbox, fs = _make_sandbox()
     fs.files["/helpers.py"] = "def double(x): return x * 2"
 
@@ -400,7 +400,7 @@ result = double(5)
 """)
     assert result.error is None
     assert result.namespace["result"] == 10
-    assert isinstance(result.namespace["double"], SbFunction)
+    assert isinstance(result.namespace["double"], StFunction)
 
 
 def test_vfs_function_is_regular_in_raw_mode():
@@ -414,12 +414,12 @@ result = double(5)
 """)
     assert result.error is None
     assert result.namespace["result"] == 10
-    assert not isinstance(result.namespace["double"], SbFunction)
+    assert not isinstance(result.namespace["double"], StFunction)
     assert callable(result.namespace["double"])
 
 
 def test_vfs_class_is_sbclass_in_wrapped_mode():
-    """VFS module classes are SbClass in wrapped mode."""
+    """VFS module classes are StClass in wrapped mode."""
     sandbox, fs = _make_sandbox()
     fs.files["/models.py"] = """\
 class Point:
@@ -435,11 +435,11 @@ result = p.x + p.y
 """)
     assert result.error is None
     assert result.namespace["result"] == 7
-    assert isinstance(result.namespace["Point"], SbClass)
+    assert isinstance(result.namespace["Point"], StClass)
 
 
 def test_vfs_function_pickle_roundtrip():
-    """VFS module SbFunction survives pickle round-trip."""
+    """VFS module StFunction survives pickle round-trip."""
     sandbox, fs = _make_sandbox(policy=Policy(tick_limit=10_000))
     fs.files["/helpers.py"] = "def double(x): return x * 2"
 
@@ -450,7 +450,7 @@ def test_vfs_function_pickle_roundtrip():
     # Pickle and restore
     data = pickle.dumps(double)
     restored = pickle.loads(data)
-    assert isinstance(restored, SbFunction)
+    assert isinstance(restored, StFunction)
 
     # Activate and call
     sandbox.activate(restored)

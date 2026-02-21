@@ -1,4 +1,4 @@
-from .errors import SbCancelled, SbError, SbTickLimit, SbTimeout, SbValidationError
+from .errors import StCancelled, StError, StTickLimit, StTimeout, StValidationError
 from .fs.memory import MemoryFS
 from .fs.protocol import FileSystem
 from .policy import MemberSpec, Policy
@@ -12,10 +12,10 @@ __all__ = [
     "MemberSpec",
     "Policy",
     "Sandbox",
-    "SbCancelled",
-    "SbError",
-    "SbTickLimit",
-    "SbTimeout",
-    "SbValidationError",
+    "StCancelled",
+    "StError",
+    "StTickLimit",
+    "StTimeout",
+    "StValidationError",
     "find_refs",
 ]
