@@ -1,72 +1,66 @@
-"""Abstract filesystem protocol for sandbox interception."""
+"""Filesystem protocol for sandbox interception."""
 
-from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 
-class FileSystem(ABC):
-    """Abstract base class for sandbox filesystem implementations.
+@runtime_checkable
+class FileSystem(Protocol):
+    """Protocol for sandbox filesystem implementations.
 
-    Hosts provide a concrete subclass to intercept file I/O
-    during sandboxed execution.
+    Hosts provide an object satisfying this protocol to intercept file I/O
+    during sandboxed execution.  Any object with these methods works —
+    no subclassing required.
     """
 
-    @abstractmethod
     def open(self, path: str, mode: str = "r", **kwargs: Any) -> Any:
         """Open a file and return a file-like object."""
         ...
 
-    @abstractmethod
     def stat(self, path: str) -> Any:
-        """Return an os.stat_result-like object for the path."""
+        """Return an os.stat_result-like object for the path.
+
+        The returned object should have ``st_size``, ``st_mode``,
+        ``st_mtime``, ``st_ctime``, and ``st_atime`` attributes for
+        compatibility with code that uses ``os.stat()``.
+        """
         ...
 
-    @abstractmethod
     def listdir(self, path: str) -> list[str]:
         """List directory contents."""
         ...
 
-    @abstractmethod
     def exists(self, path: str) -> bool:
         """Return True if the path exists."""
         ...
 
-    @abstractmethod
     def isfile(self, path: str) -> bool:
         """Return True if the path is a regular file."""
         ...
 
-    @abstractmethod
     def isdir(self, path: str) -> bool:
         """Return True if the path is a directory."""
         ...
 
-    @abstractmethod
-    def mkdir(self, path: str, mode: int = 0o777, *, parents: bool = False, exist_ok: bool = False) -> None:
+    def mkdir(self, path: str, *, parents: bool = False, exist_ok: bool = False) -> None:
         """Create a directory."""
         ...
 
-    @abstractmethod
-    def makedirs(self, path: str, mode: int = 0o777, *, exist_ok: bool = False) -> None:
+    def makedirs(self, path: str, *, exist_ok: bool = False) -> None:
         """Create a directory tree."""
         ...
 
-    @abstractmethod
     def remove(self, path: str) -> None:
         """Remove a file."""
         ...
 
-    @abstractmethod
     def rename(self, src: str, dst: str) -> None:
         """Rename a file or directory."""
         ...
 
-    @abstractmethod
     def getcwd(self) -> str:
         """Return the current working directory."""
         ...
 
-    @abstractmethod
     def chdir(self, path: str) -> None:
         """Change the current working directory."""
         ...

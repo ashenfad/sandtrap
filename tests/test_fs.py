@@ -53,7 +53,7 @@ def test_fs_exists_routes_to_vfs():
     memfs.files["/present.txt"] = "data"
 
     policy = Policy()
-    policy.module(os)
+    policy.module(os, recursive=True)
     sandbox = Sandbox(policy, filesystem=memfs)
     result = sandbox.exec("""\
 import os

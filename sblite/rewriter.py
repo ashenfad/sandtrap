@@ -666,7 +666,12 @@ class Rewriter(ast.NodeTransformer):
     # Helpers (reached by recursion into child nodes)
     # ------------------------------------------------------------------
 
-    visit_ExceptHandler = _recurse
+    def visit_ExceptHandler(self, node: ast.ExceptHandler) -> ast.AST:
+        """Rewrite bare ``except:`` to ``except Exception:``."""
+        if node.type is None:
+            node.type = ast.Name(id="Exception", ctx=ast.Load())
+            ast.copy_location(node.type, node)
+        return self._recurse(node)
     def visit_comprehension(self, node: ast.comprehension) -> ast.AST:
         node = cast(ast.comprehension, self._recurse(node))
         # Inject checkpoint as an always-true filter: __sb_checkpoint__() or True

@@ -24,7 +24,7 @@ from .net.patch import install as install_net
 from .policy import Policy
 from .resource_limits import get_rss_bytes
 from .rewriter import Rewriter
-from .wrappers import SbClass, SbFunction, SbInstance
+from .wrappers import ModuleRef, SbClass, SbFunction, SbInstance
 
 _exec_counter = itertools.count(1)
 _INTERNAL_KEYS = {"__builtins__", "__name__"}
@@ -55,10 +55,12 @@ class Sandbox:
         *,
         mode: Literal["wrapped", "raw"] = "wrapped",
         filesystem: FileSystem | None = None,
+        print_handler: Any | None = None,
     ) -> None:
         self.policy = policy
         self.mode = mode
         self.filesystem = filesystem
+        self.print_handler = print_handler
         self._cancel_flag = threading.Event()
 
         # Install patches eagerly so _build_namespace captures patched versions
@@ -89,7 +91,8 @@ class Sandbox:
         gates: dict[str, Any],
     ) -> None:
         """Auto-activate any inactive SbFunction/SbClass/SbInstance in namespace."""
-        for v in list(ns.values()):
+        import_gate = gates.get("__sb_import__")
+        for k, v in list(ns.items()):
             if isinstance(v, SbFunction) and v._compiled is None:
                 v.activate(gates, sandbox=self, namespace=ns)
             elif isinstance(v, SbClass) and v._compiled_cls is None:
@@ -100,6 +103,11 @@ class Sandbox:
                     sb_class.activate(gates, sandbox=self, namespace=ns)
                 if object.__getattribute__(v, "_sb_instance") is None:
                     v.activate(gates=gates, sandbox=self, namespace=ns)
+            elif isinstance(v, ModuleRef) and import_gate is not None:
+                try:
+                    ns[k] = import_gate(v.name, alias=v.name)
+                except Exception:
+                    pass  # VFS file may no longer exist
 
     def _attach_sandbox_refs(
         self,
@@ -192,17 +200,25 @@ class Sandbox:
                 )
             injected[cls_name] = ns[cls_name]
 
+        # Populate registered modules (available directly by name, not just via import)
+        for mod_name, mod_reg in self.policy.modules.items():
+            ns.setdefault(mod_name, mod_reg.obj)
+            injected[mod_name] = ns[mod_name]
+
         # Provide open() if filesystem interception is active
         if self.filesystem is not None:
             ns["__builtins__"]["open"] = _builtins.open
 
-        # Capture stdout (gated for tick tracking)
+        # Build print function: checkpoint (security) + output handler (configurable)
         checkpoint = gates["__sb_checkpoint__"]
-        raw_print = make_print(stdout_buf)
+        if self.print_handler is not None:
+            handler = self.print_handler
+        else:
+            handler = make_print(stdout_buf)
 
         def print_fn(*args: Any, **kwargs: Any) -> None:
             checkpoint()
-            raw_print(*args, **kwargs)
+            handler(*args, **kwargs)
 
         ns["print"] = print_fn
         injected["print"] = print_fn
@@ -408,13 +424,57 @@ class Sandbox:
             return prepared
         tree, rewriter = prepared
 
-        # Wrap body in: async def __sb_aexec__(): ...; return __sb_locals__()
+        # Wrap body in:
+        #   async def __sb_aexec__():
+        #       try:
+        #           <body>
+        #       except BaseException:
+        #           __sb_local_capture__.update(__sb_locals__())
+        #           raise
+        #       return __sb_locals__()
+        #
+        # The try/except ensures locals are captured even when the body
+        # raises (e.g. TaskContinue, TaskSuccess) before the return.
         return_locals = ast.Return(
             value=ast.Call(
                 func=ast.Name(id="__sb_locals__", ctx=ast.Load()),
                 args=[],
                 keywords=[],
             )
+        )
+        capture_locals_on_error = ast.ExceptHandler(
+            type=None,
+            name=None,
+            body=[
+                ast.Expr(
+                    value=ast.Call(
+                        func=ast.Attribute(
+                            value=ast.Name(
+                                id="__sb_local_capture__", ctx=ast.Load()
+                            ),
+                            attr="update",
+                            ctx=ast.Load(),
+                        ),
+                        args=[
+                            ast.Call(
+                                func=ast.Name(
+                                    id="__sb_locals__", ctx=ast.Load()
+                                ),
+                                args=[],
+                                keywords=[],
+                            )
+                        ],
+                        keywords=[],
+                    )
+                ),
+                ast.Raise(),
+            ],
+        )
+        try_wrapper = ast.Try(
+            body=tree.body,
+            handlers=[capture_locals_on_error],
+            orelse=[],
+            finalbody=[],
         )
         wrapper_kwargs: dict[str, Any] = dict(
             name="__sb_aexec__",
@@ -425,7 +485,7 @@ class Sandbox:
                 kw_defaults=[],
                 defaults=[],
             ),
-            body=tree.body + [return_locals],
+            body=[try_wrapper, return_locals],
             decorator_list=[],
             returns=None,
         )
@@ -439,6 +499,7 @@ class Sandbox:
             self._compile_and_setup(tree, rewriter, source, namespace)
         )
         ns["__sb_locals__"] = _builtins.locals
+        ns["__sb_local_capture__"] = {}
 
         error = None
         result_locals: dict[str, Any] = {}
@@ -460,6 +521,7 @@ class Sandbox:
                 if isinstance(e, KeyboardInterrupt):
                     raise  # Real Ctrl-C from host
                 error = strip_internal_frames(e)
+                result_locals = ns.get("__sb_local_capture__", {})
 
         return self._build_result(
             ns, injected, gates, stdout_buf, filename, error,

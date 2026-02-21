@@ -23,7 +23,7 @@ When a filesystem is provided, all calls to `open()`, `os.stat()`, `os.listdir()
 
 ### FileSystem protocol
 
-Implement the `FileSystem` ABC to create a custom filesystem:
+Implement the `FileSystem` protocol to create a custom filesystem:
 
 ```python
 from sblite import FileSystem

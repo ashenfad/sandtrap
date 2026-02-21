@@ -7,10 +7,7 @@ import stat as stat_mod
 from io import BytesIO, StringIO
 from typing import Any
 
-from .protocol import FileSystem
-
-
-class MemoryFS(FileSystem):
+class MemoryFS:
     """Simple in-memory filesystem.
 
     Useful for testing and as a lightweight VFS for sandboxed agents
@@ -105,7 +102,7 @@ class MemoryFS(FileSystem):
         path = self._resolve(path)
         return path in self.dirs
 
-    def mkdir(self, path: str, mode: int = 0o777, *, parents: bool = False, exist_ok: bool = False) -> None:
+    def mkdir(self, path: str, *, parents: bool = False, exist_ok: bool = False) -> None:
         path = self._resolve(path)
         if parents:
             self.makedirs(path, exist_ok=exist_ok)
@@ -119,7 +116,7 @@ class MemoryFS(FileSystem):
             raise FileNotFoundError(_errno.ENOENT, "No such directory", parent)
         self.dirs.add(path)
 
-    def makedirs(self, path: str, mode: int = 0o777, *, exist_ok: bool = False) -> None:
+    def makedirs(self, path: str, *, exist_ok: bool = False) -> None:
         path = self._resolve(path)
         parts = path.strip("/").split("/")
         current = ""

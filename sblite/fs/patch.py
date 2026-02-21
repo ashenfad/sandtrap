@@ -118,7 +118,7 @@ def _patched_mkdir(path: Any, mode: int = 0o777, **kwargs: Any) -> None:
     if fs is not None:
         token = _in_fs_op.set(True)
         try:
-            fs.mkdir(str(path), mode)
+            fs.mkdir(str(path))
             return
         finally:
             _in_fs_op.reset(token)
@@ -130,7 +130,7 @@ def _patched_makedirs(path: Any, mode: int = 0o777, *, exist_ok: bool = False) -
     if fs is not None:
         token = _in_fs_op.set(True)
         try:
-            fs.makedirs(str(path), mode, exist_ok=exist_ok)
+            fs.makedirs(str(path), exist_ok=exist_ok)
             return
         finally:
             _in_fs_op.reset(token)
@@ -219,6 +219,26 @@ def install() -> None:
         _originals["rename"] = os.rename
         _originals["getcwd"] = os.getcwd
         _originals["chdir"] = os.chdir
+
+        # Preserve __name__ on patched functions so introspection still works
+        _patches = {
+            "open": _patched_open,
+            "stat": _patched_stat,
+            "lstat": _patched_lstat,
+            "listdir": _patched_listdir,
+            "exists": _patched_exists,
+            "isfile": _patched_isfile,
+            "isdir": _patched_isdir,
+            "mkdir": _patched_mkdir,
+            "makedirs": _patched_makedirs,
+            "remove": _patched_remove,
+            "unlink": _patched_unlink,
+            "rename": _patched_rename,
+            "getcwd": _patched_getcwd,
+            "chdir": _patched_chdir,
+        }
+        for name, fn in _patches.items():
+            fn.__name__ = name
 
         # Install patches
         builtins.open = _patched_open
