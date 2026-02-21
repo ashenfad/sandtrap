@@ -264,9 +264,21 @@ class Policy:
                 include_pred = _make_predicate(reg.include)
                 exclude_pred = _make_predicate(reg.exclude)
                 if not include_pred(attr):
+                    # Before denying, check if the attribute is a separately
+                    # registered submodule (e.g., os.path registered alongside os)
+                    sub_obj = getattr(obj, attr, None)
+                    if sub_obj is not None and self._find_registration_for(sub_obj) is not None:
+                        return True
                     return False
                 if exclude_pred(attr):
                     return False
+                # Block submodule access on non-recursive module registrations
+                if not getattr(reg, "recursive", False):
+                    sub_obj = getattr(obj, attr, None)
+                    if isinstance(sub_obj, ModuleType):
+                        # Allow if the submodule is separately registered
+                        if self._find_registration_for(sub_obj) is None:
+                            return False
                 return True
 
         # Interpreter-internal attrs (frames, code objects, etc.)

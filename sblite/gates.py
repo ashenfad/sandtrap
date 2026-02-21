@@ -243,6 +243,78 @@ def make_gates(
             )
         delattr(obj, attr)
 
+    def _ensure_vfs_package_chain(module_name: str) -> Any:
+        """For dotted VFS imports, build the parent package chain.
+
+        ``import pkg.mod`` must bind ``pkg`` in the namespace with
+        ``pkg.mod`` attached as an attribute — matching standard Python
+        import semantics.
+        """
+        parts = module_name.split(".")
+        if len(parts) <= 1:
+            return _resolve_vfs_module(module_name)
+
+        # Resolve the leaf module first
+        leaf = _resolve_vfs_module(module_name)
+        if leaf is None:
+            return None
+
+        # Build parent packages from top down
+        parent = None
+        for i in range(len(parts) - 1):
+            pkg_name = ".".join(parts[: i + 1])
+            if pkg_name in _vfs_module_cache:
+                parent = _vfs_module_cache[pkg_name]
+            else:
+                # Check for __init__.py
+                init_path = "/" + pkg_name.replace(".", "/") + "/__init__.py"
+                pkg = types.ModuleType(pkg_name)
+                pkg.__file__ = init_path
+                pkg.__path__ = ["/" + pkg_name.replace(".", "/")]
+                _vfs_module_cache[pkg_name] = pkg
+
+                if _filesystem is not None and _filesystem.exists(init_path):
+                    f = _filesystem.open(init_path, "r")
+                    source = f.read()
+                    f.close()
+                    try:
+                        tree = ast.parse(source)
+                        rewriter = Rewriter(wrapped_mode=_wrapped_mode)
+                        tree = rewriter.visit(tree)
+                        ast.fix_missing_locations(tree)
+                        code = compile(
+                            tree, f"<sblite:vfs:{pkg_name}>", "exec"
+                        )
+                        ns = dict(pkg.__dict__)
+                        ns["__builtins__"] = make_safe_builtins(
+                            __sb_getattr__, checkpoint=__sb_checkpoint__
+                        )
+                        ns.update(gates)
+                        exec(code, ns)  # noqa: S102
+                        for k, v in ns.items():
+                            if k != "__builtins__" and not k.startswith(
+                                "__sb_"
+                            ):
+                                setattr(pkg, k, v)
+                    except BaseException:
+                        _vfs_module_cache.pop(pkg_name, None)
+                        raise
+
+                parent = pkg
+
+            # Attach child to parent
+            if i > 0:
+                prev_pkg_name = ".".join(parts[: i])
+                prev_pkg = _vfs_module_cache.get(prev_pkg_name)
+                if prev_pkg is not None:
+                    setattr(prev_pkg, parts[i], parent)
+
+        # Attach leaf to its immediate parent
+        if parent is not None:
+            setattr(parent, parts[-1], leaf)
+
+        return _vfs_module_cache[parts[0]]
+
     def __sb_import__(module_name: str, *, alias: str | None = None) -> Any:
         # Try policy-registered modules first
         if policy.is_import_allowed(module_name):
@@ -251,8 +323,11 @@ def make_gates(
             top_level = module_name.split(".")[0]
             return policy.resolve_module(top_level)
 
-        # Try VFS modules
-        mod = _resolve_vfs_module(module_name)
+        # Try VFS modules (with package chain for dotted imports)
+        if alias is not None or "." not in module_name:
+            mod = _resolve_vfs_module(module_name)
+        else:
+            mod = _ensure_vfs_package_chain(module_name)
         if mod is not None:
             return mod
 

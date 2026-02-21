@@ -210,6 +210,16 @@ class SbFunction:
                     elif isinstance(val, SbClass) and val._compiled_cls is None:
                         val.activate(gates, sandbox=sandbox, namespace=ns)
 
+        # Resolve ModuleRef objects in the namespace via the import gate
+        import_gate = gates.get("__sb_import__")
+        if import_gate is not None:
+            for k, v in list(ns.items()):
+                if isinstance(v, ModuleRef):
+                    try:
+                        ns[k] = import_gate(v.name, alias=v.name)
+                    except Exception:
+                        pass
+
         # Wrap function AST in a module for compilation
         func_copy = copy.deepcopy(self._func_ast)
         module = ast.Module(body=[func_copy], type_ignores=[])
@@ -491,3 +501,21 @@ _FORWARDED_DUNDERS = [
 
 for _dname in _FORWARDED_DUNDERS:
     setattr(SbInstance, _dname, _make_dunder_forwarder(_dname))
+
+
+class ModuleRef:
+    """Pickleable reference to a module.
+
+    Python modules can't survive pickle.  This ref stores just the module
+    name so ``Sandbox._auto_activate`` can re-import it via the
+    ``__sb_import__`` gate on the next turn.  Works for both VFS modules
+    and policy-registered modules (including aliased imports like
+    ``import math as m``).
+    """
+
+    def __init__(self, name: str, file: str | None = None) -> None:
+        self.name = name
+        self.file = file
+
+    def __repr__(self) -> str:
+        return f"<ModuleRef '{self.name}'>"

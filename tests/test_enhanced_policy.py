@@ -232,3 +232,48 @@ result = c.try_blocked()
 """, namespace={"Base": Base})
     assert result.error is not None
     assert isinstance(result.error, AttributeError)
+
+
+# --- Submodule access with recursive flag ---
+
+
+def test_non_recursive_module_blocks_submodule_attribute():
+    """Non-recursive module registration blocks submodule access via attributes."""
+    import os
+
+    policy = Policy()
+    policy.module(os, recursive=False)
+    sandbox = Sandbox(policy)
+
+    result = sandbox.exec("import os\nx = os.path.join('a', 'b')")
+    assert result.error is not None
+    assert isinstance(result.error, AttributeError)
+    assert "path" in str(result.error)
+
+
+def test_recursive_module_allows_submodule_attribute():
+    """Recursive module registration allows submodule access via attributes."""
+    import os
+
+    policy = Policy()
+    policy.module(os, recursive=True)
+    sandbox = Sandbox(policy)
+
+    result = sandbox.exec("import os\nx = os.path.join('a', 'b')")
+    assert result.error is None
+    assert result.namespace["x"] == os.path.join("a", "b")
+
+
+def test_non_recursive_with_separate_submodule_registration():
+    """Non-recursive parent + separately registered submodule allows access."""
+    import os
+    import os.path
+
+    policy = Policy()
+    policy.module(os, recursive=False)
+    policy.module(os.path, name="os.path")
+    sandbox = Sandbox(policy)
+
+    result = sandbox.exec("import os\nx = os.path.join('a', 'b')")
+    assert result.error is None
+    assert result.namespace["x"] == os.path.join("a", "b")

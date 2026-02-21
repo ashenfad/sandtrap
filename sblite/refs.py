@@ -382,7 +382,12 @@ def _follow_transitive_deps(
             continue
         visited.add(name)
 
-        val = namespace.get(name)
+        try:
+            val = namespace.get(name)
+        except Exception:
+            # Lazy containers (e.g. kvit stores) may raise on
+            # unpicklable or corrupted entries.  Skip gracefully.
+            continue
         if isinstance(val, SbFunction):
             for dep in val.global_refs:
                 all_refs.add(dep)
