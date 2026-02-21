@@ -5,7 +5,7 @@ The `Sandbox` class parses, validates, rewrites, compiles, and executes Python c
 ## Creating a sandbox
 
 ```python
-from sblite import Policy, Sandbox
+from sandtrap import Policy, Sandbox
 
 policy = Policy(timeout=5.0, tick_limit=100_000)
 sandbox = Sandbox(policy)
@@ -64,7 +64,7 @@ Both `exec()` and `aexec()` return an `ExecResult`:
 | `error` | `BaseException \| None` | Runtime error, or `None` on success |
 | `ticks` | `int` | Number of checkpoint ticks consumed |
 
-The namespace excludes sandbox internals (`__builtins__`, `__sb_*` gates, registered functions/classes, `print`). If user code reassigns a registered name (e.g., `print = 42`), the new value is included.
+The namespace excludes sandbox internals (`__builtins__`, `__st_*` gates, registered functions/classes, `print`). If user code reassigns a registered name (e.g., `print = 42`), the new value is included.
 
 ## Error handling
 
@@ -99,7 +99,7 @@ SbError
 `MemoryError` (stdlib) is raised when the memory limit is exceeded.
 
 ```python
-from sblite import SbError, SbValidationError, SbTimeout, SbTickLimit, SbCancelled
+from sandtrap import SbError, SbValidationError, SbTimeout, SbTickLimit, SbCancelled
 ```
 
 All errors appear on `result.error`. Check `isinstance(result.error, SbValidationError)` to distinguish code that was rejected before execution from code that failed at runtime.
@@ -129,7 +129,7 @@ See [serialization.md](serialization.md) for `sandbox.activate()`.
 `find_refs` does a conservative static analysis to determine which names a piece of source code reads from the namespace:
 
 ```python
-from sblite import find_refs
+from sandtrap import find_refs
 
 refs = find_refs("y = x + math.sqrt(4)")
 # refs == {"x", "math"}

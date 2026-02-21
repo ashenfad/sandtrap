@@ -2,7 +2,7 @@
 
 import math
 
-from sblite import Policy
+from sandtrap import Policy
 
 
 def test_fn_registration():

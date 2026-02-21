@@ -1,4 +1,4 @@
-"""Network interception for sblite sandbox."""
+"""Network interception for sandtrap sandbox."""
 
 from .context import allow_network, deny_network, network_allowed
 from .patch import install

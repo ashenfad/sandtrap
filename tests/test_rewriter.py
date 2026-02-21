@@ -4,8 +4,8 @@ import ast
 
 import pytest
 
-from sblite.errors import SbValidationError
-from sblite.rewriter import Rewriter
+from sandtrap.errors import SbValidationError
+from sandtrap.rewriter import Rewriter
 
 
 def _rewrite(source: str) -> ast.AST:
@@ -20,17 +20,17 @@ def test_simple_pass_through():
 
 def test_block_sb_assignment():
     with pytest.raises(SbValidationError, match="Cannot assign to reserved name"):
-        _rewrite("__sb_foo = 1")
+        _rewrite("__st_foo = 1")
 
 
 def test_block_sb_tuple_unpack():
     with pytest.raises(SbValidationError, match="Cannot assign to reserved name"):
-        _rewrite("a, __sb_x = 1, 2")
+        _rewrite("a, __st_x = 1, 2")
 
 
 def test_block_sb_delete():
     with pytest.raises(SbValidationError, match="Cannot delete reserved name"):
-        _rewrite("del __sb_foo")
+        _rewrite("del __st_foo")
 
 
 def test_block_exec_assignment():
@@ -55,14 +55,14 @@ def test_block_import_assignment():
 
 def test_block_sb_global():
     with pytest.raises(SbValidationError, match="Cannot declare.*global"):
-        _rewrite("global __sb_foo")
+        _rewrite("global __st_foo")
 
 
 def test_block_sb_nonlocal():
     with pytest.raises(SbValidationError, match="Cannot declare.*nonlocal"):
         _rewrite("""\
 def f():
-    nonlocal __sb_foo
+    nonlocal __st_foo
 """)
 
 
@@ -158,15 +158,15 @@ def test_allowed_name_read():
 
 
 def test_block_sb_name_load():
-    """Reading __sb_* names is blocked."""
+    """Reading __st_* names is blocked."""
     with pytest.raises(SbValidationError, match="Cannot reference reserved name"):
-        _rewrite("x = __sb_getattr__")
+        _rewrite("x = __st_getattr__")
 
 
 def test_block_sb_name_load_in_call():
-    """Calling __sb_* names directly is blocked."""
+    """Calling __st_* names directly is blocked."""
     with pytest.raises(SbValidationError, match="Cannot reference reserved name"):
-        _rewrite("__sb_checkpoint__()")
+        _rewrite("__st_checkpoint__()")
 
 
 def test_block_del_exec():

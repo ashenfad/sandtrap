@@ -1,5 +1,5 @@
 [project]
-name = "sblite"
+name = "sandtrap"
 version = "0.1.0"
 description = "Lightweight in-process Python sandbox using AST rewriting."
 readme = "README.md"
@@ -55,4 +55,4 @@ build-backend = "setuptools.build_meta"
 packages = {find = {where = ["./"], exclude = ["tests*"]}}
 
 [tool.setuptools.package-data]
-sblite = ["py.typed"]
+sandtrap = ["py.typed"]

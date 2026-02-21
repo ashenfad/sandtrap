@@ -121,12 +121,12 @@ def make_gates(
             rewriter = Rewriter(wrapped_mode=_wrapped_mode)
             tree = rewriter.visit(tree)
             ast.fix_missing_locations(tree)
-            code = compile(tree, f"<sblite:vfs:{module_name}>", "exec")
+            code = compile(tree, f"<sandtrap:vfs:{module_name}>", "exec")
 
             # Build namespace with same gates
             ns = dict(mod.__dict__)
             ns["__builtins__"] = make_safe_builtins(
-                __sb_getattr__, checkpoint=__sb_checkpoint__
+                __st_getattr__, checkpoint=__st_checkpoint__
             )
             ns.update(gates)
 
@@ -142,7 +142,7 @@ def make_gates(
                         func_ast = vfs_func_asts[ast_ref]
                     return SbFunction(name, compiled_fn, func_ast)
 
-                ns["__sb_defun__"] = _vfs_defun
+                ns["__st_defun__"] = _vfs_defun
 
             if _wrapped_mode and rewriter._class_asts:
                 vfs_class_asts = rewriter._class_asts
@@ -152,10 +152,10 @@ def make_gates(
                 ) -> Any:
                     cls_ast = vfs_class_asts[ast_idx]
                     sb_cls = SbClass(name, compiled_cls, cls_ast, frozen_refs=frozen_refs)
-                    sb_cls._sb_getattr_gate = __sb_getattr__
+                    sb_cls._sb_getattr_gate = __st_getattr__
                     return sb_cls
 
-                ns["__sb_defclass__"] = _vfs_defclass
+                ns["__st_defclass__"] = _vfs_defclass
 
             # Execute module code
             exec(code, ns)  # noqa: S102
@@ -166,7 +166,7 @@ def make_gates(
 
         # Update module dict (strip internal keys)
         for k, v in ns.items():
-            if k != "__builtins__" and not k.startswith("__sb_"):
+            if k != "__builtins__" and not k.startswith("__st_"):
                 setattr(mod, k, v)
 
         return mod
@@ -178,7 +178,7 @@ def make_gates(
         except (ValueError, AttributeError):
             return None
 
-    def __sb_getattr__(obj: Any, attr: str) -> Any:
+    def __st_getattr__(obj: Any, attr: str) -> Any:
         obj = _unwrap(obj)
         if not policy.is_attr_allowed(obj, attr):
             lineno = _caller_lineno()
@@ -221,7 +221,7 @@ def make_gates(
 
         return value
 
-    def __sb_setattr__(obj: Any, attr: str, value: Any) -> None:
+    def __st_setattr__(obj: Any, attr: str, value: Any) -> None:
         obj = _unwrap(obj)
         if not policy.is_attr_allowed(obj, attr):
             lineno = _caller_lineno()
@@ -232,7 +232,7 @@ def make_gates(
             )
         setattr(obj, attr, value)
 
-    def __sb_delattr__(obj: Any, attr: str) -> None:
+    def __st_delattr__(obj: Any, attr: str) -> None:
         obj = _unwrap(obj)
         if not policy.is_attr_allowed(obj, attr):
             lineno = _caller_lineno()
@@ -282,17 +282,17 @@ def make_gates(
                         tree = rewriter.visit(tree)
                         ast.fix_missing_locations(tree)
                         code = compile(
-                            tree, f"<sblite:vfs:{pkg_name}>", "exec"
+                            tree, f"<sandtrap:vfs:{pkg_name}>", "exec"
                         )
                         ns = dict(pkg.__dict__)
                         ns["__builtins__"] = make_safe_builtins(
-                            __sb_getattr__, checkpoint=__sb_checkpoint__
+                            __st_getattr__, checkpoint=__st_checkpoint__
                         )
                         ns.update(gates)
                         exec(code, ns)  # noqa: S102
                         for k, v in ns.items():
                             if k != "__builtins__" and not k.startswith(
-                                "__sb_"
+                                "__st_"
                             ):
                                 setattr(pkg, k, v)
                     except BaseException:
@@ -314,7 +314,7 @@ def make_gates(
 
         return _vfs_module_cache[parts[0]]
 
-    def __sb_import__(module_name: str, *, alias: str | None = None) -> Any:
+    def __st_import__(module_name: str, *, alias: str | None = None) -> Any:
         # Try policy-registered modules first
         if policy.is_import_allowed(module_name):
             if alias is not None:
@@ -336,7 +336,7 @@ def make_gates(
             f"Import of '{module_name}' is not allowed{loc}"
         )
 
-    def __sb_importfrom__(module_name: str, name: str, *, _level: int = 0) -> Any:
+    def __st_importfrom__(module_name: str, name: str, *, _level: int = 0) -> Any:
         if _level > 0:
             # Relative import — resolve against caller's __file__
             caller_file = sys._getframe(1).f_globals.get("__file__", "")
@@ -395,7 +395,7 @@ def make_gates(
             f"Import of '{module_name}' is not allowed{loc}"
         )
 
-    def __sb_defun__(name: str, compiled_fn: Any, ast_ref: int | str) -> Any:
+    def __st_defun__(name: str, compiled_fn: Any, ast_ref: int | str) -> Any:
         if not _wrapped_mode:
             return compiled_fn
 
@@ -408,7 +408,7 @@ def make_gates(
             func_ast = _func_asts[ast_ref]
         return SbFunction(name, compiled_fn, func_ast)
 
-    def __sb_defclass__(
+    def __st_defclass__(
         name: str, compiled_cls: Any, ast_idx: int, **frozen_refs: Any
     ) -> Any:
         if not _wrapped_mode or _class_asts is None:
@@ -416,7 +416,7 @@ def make_gates(
 
         class_ast = _class_asts[ast_idx]
         sb_cls = SbClass(name, compiled_cls, class_ast, frozen_refs=frozen_refs)
-        sb_cls._sb_getattr_gate = __sb_getattr__
+        sb_cls._sb_getattr_gate = __st_getattr__
         return sb_cls
 
     # Mutable boxes so checkpoint state can be reset for direct calls
@@ -425,7 +425,7 @@ def make_gates(
     _cancel_flag_box = [_cancel_flag]
     _memory_box = [_memory_limit_bytes, _start_rss]
 
-    def __sb_checkpoint__() -> None:
+    def __st_checkpoint__() -> None:
         if _cancel_flag_box[0] is not None and _cancel_flag_box[0].is_set():
             raise SbCancelled("Execution cancelled")
         _tick_counter[0] += 1
@@ -444,18 +444,18 @@ def make_gates(
                     f"Execution exceeded {policy.memory_limit}MB memory limit"
                 )
 
-    gates["__sb_tick_counter__"] = _tick_counter
-    gates["__sb_start_time__"] = _start_time_box
-    gates["__sb_cancel_flag__"] = _cancel_flag_box
-    gates["__sb_memory__"] = _memory_box
+    gates["__st_tick_counter__"] = _tick_counter
+    gates["__st_start_time__"] = _start_time_box
+    gates["__st_cancel_flag__"] = _cancel_flag_box
+    gates["__st_memory__"] = _memory_box
     gates.update({
-        "__sb_getattr__": __sb_getattr__,
-        "__sb_setattr__": __sb_setattr__,
-        "__sb_delattr__": __sb_delattr__,
-        "__sb_import__": __sb_import__,
-        "__sb_importfrom__": __sb_importfrom__,
-        "__sb_defun__": __sb_defun__,
-        "__sb_defclass__": __sb_defclass__,
-        "__sb_checkpoint__": __sb_checkpoint__,
+        "__st_getattr__": __st_getattr__,
+        "__st_setattr__": __st_setattr__,
+        "__st_delattr__": __st_delattr__,
+        "__st_import__": __st_import__,
+        "__st_importfrom__": __st_importfrom__,
+        "__st_defun__": __st_defun__,
+        "__st_defclass__": __st_defclass__,
+        "__st_checkpoint__": __st_checkpoint__,
     })
     return gates

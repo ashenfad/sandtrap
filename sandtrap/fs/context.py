@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from typing import Any, Iterator
 
 current_fs: contextvars.ContextVar[Any] = contextvars.ContextVar(
-    "sblite_current_fs", default=None
+    "sandtrap_current_fs", default=None
 )
 
 

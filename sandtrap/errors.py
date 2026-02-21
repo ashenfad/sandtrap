@@ -1,4 +1,4 @@
-"""sblite error types and traceback utilities."""
+"""sandtrap error types and traceback utilities."""
 
 import os
 import types
@@ -7,7 +7,7 @@ _SBLITE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 class SbError(Exception):
-    """Base exception for all sblite sandbox errors."""
+    """Base exception for all sandtrap sandbox errors."""
 
     pass
 
@@ -40,7 +40,7 @@ class SbValidationError(SbError):
 
 
 def strip_internal_frames(exc: BaseException) -> BaseException:
-    """Strip leading sblite-internal frames from an exception's traceback.
+    """Strip leading sandtrap-internal frames from an exception's traceback.
 
     Sets ``exc.__traceback__`` to the first frame that belongs to user
     sandbox code or external code.  Frames that appear *after* the first
@@ -59,8 +59,8 @@ def strip_internal_frames(exc: BaseException) -> BaseException:
 
 
 def _is_internal_frame(filename: str) -> bool:
-    """Check if a filename belongs to sblite internals."""
-    if filename.startswith("<sblite:"):
+    """Check if a filename belongs to sandtrap internals."""
+    if filename.startswith("<sandtrap:"):
         return False  # User sandbox code
     try:
         return os.path.abspath(filename).startswith(_SBLITE_DIR)
@@ -71,7 +71,7 @@ def _is_internal_frame(filename: str) -> bool:
 def _find_first_user_frame(
     tb: types.TracebackType,
 ) -> types.TracebackType | None:
-    """Find the first traceback frame that's not sblite internal code."""
+    """Find the first traceback frame that's not sandtrap internal code."""
     current: types.TracebackType | None = tb
     while current is not None:
         if not _is_internal_frame(current.tb_frame.f_code.co_filename):

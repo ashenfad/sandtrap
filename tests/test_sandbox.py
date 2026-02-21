@@ -2,8 +2,8 @@
 
 import pytest
 
-from sblite import Policy, Sandbox
-from sblite.errors import SbValidationError
+from sandtrap import Policy, Sandbox
+from sandtrap.errors import SbValidationError
 
 
 @pytest.fixture
@@ -116,16 +116,16 @@ def test_syntax_error_captured(sandbox):
 
 
 def test_validation_error_on_result(sandbox):
-    result = sandbox.exec("__sb_foo = 1")
+    result = sandbox.exec("__st_foo = 1")
     assert isinstance(result.error, SbValidationError)
 
 
-def test_error_traceback_has_sblite_filename(sandbox):
+def test_error_traceback_has_sandtrap_filename(sandbox):
     result = sandbox.exec("x = 1\ny = 1/0\nz = 3")
     assert result.error is not None
     import traceback
     tb_text = "".join(traceback.format_exception(type(result.error), result.error, result.error.__traceback__))
-    assert "<sblite:" in tb_text
+    assert "<sandtrap:" in tb_text
 
 
 def test_namespace_passthrough(sandbox):
@@ -224,7 +224,7 @@ keys = list(loc.keys())
     assert result.error is None
     keys = result.namespace["keys"]
     for k in keys:
-        assert not k.startswith("__sb_"), f"Internal key leaked: {k}"
+        assert not k.startswith("__st_"), f"Internal key leaked: {k}"
         assert k != "__builtins__"
         assert k != "__name__"
         assert k != "print"
@@ -247,7 +247,7 @@ def test_safe_locals_cannot_replace_gates(sandbox):
     result = sandbox.exec("""\
 loc = locals()
 # Even if someone tries to write a gate name into the copy, it doesn't matter
-loc['__sb_getattr__'] = lambda obj, attr: getattr(obj, attr)
+loc['__st_getattr__'] = lambda obj, attr: getattr(obj, attr)
 # The real gate is still in place — this should still be blocked
 class Foo:
     _secret = 42
@@ -407,24 +407,24 @@ def test_type_three_arg_blocked(sandbox):
 
 
 def test_sb_name_read_blocked(sandbox):
-    """Sandboxed code cannot read __sb_* names."""
-    result = sandbox.exec("x = __sb_getattr__")
+    """Sandboxed code cannot read __st_* names."""
+    result = sandbox.exec("x = __st_getattr__")
     assert isinstance(result.error, SbValidationError)
     assert "Cannot reference reserved name" in str(result.error)
 
 
 def test_aexec_sb_locals_blocked():
-    """Sandboxed code in aexec cannot call __sb_locals__."""
+    """Sandboxed code in aexec cannot call __st_locals__."""
     import asyncio
 
     sandbox = Sandbox(Policy())
-    result = asyncio.run(sandbox.aexec("x = __sb_locals__"))
+    result = asyncio.run(sandbox.aexec("x = __st_locals__"))
     assert isinstance(result.error, SbValidationError)
     assert "Cannot reference reserved name" in str(result.error)
 
 
 def test_annassign_attr_goes_through_gate():
-    """Annotated assignment to attribute goes through __sb_setattr__ gate."""
+    """Annotated assignment to attribute goes through __st_setattr__ gate."""
     sandbox = Sandbox(Policy())
     result = sandbox.exec("""\
 class Foo:
@@ -452,7 +452,7 @@ result = f.x
 
 def test_comprehension_respects_timeout():
     """Comprehensions respect the timeout via checkpoint."""
-    from sblite.errors import SbTimeout
+    from sandtrap.errors import SbTimeout
 
     policy = Policy()
     policy.timeout = 0.1
@@ -462,7 +462,7 @@ def test_comprehension_respects_timeout():
 
 
 def test_fstring_attribute_gated():
-    """F-string attribute access goes through __sb_getattr__ gate."""
+    """F-string attribute access goes through __st_getattr__ gate."""
     policy = Policy()
     sandbox = Sandbox(policy)
 
@@ -610,8 +610,8 @@ def test_sandbox_context_manager(sandbox):
 
 def test_fs_patches_installed_permanently():
     """FS patches are installed once and remain active."""
-    from sblite import MemoryFS
-    from sblite.fs import patch as fs_patch
+    from sandtrap import MemoryFS
+    from sandtrap.fs import patch as fs_patch
 
     fs = MemoryFS()
     with Sandbox(Policy(), filesystem=fs):
@@ -622,7 +622,7 @@ def test_fs_patches_installed_permanently():
 
 def test_net_patches_installed_permanently():
     """Net patches are installed once and remain active."""
-    from sblite.net import patch as net_patch
+    from sandtrap.net import patch as net_patch
 
     with Sandbox(Policy(allow_network=False)):
         assert net_patch._installed
@@ -632,7 +632,7 @@ def test_net_patches_installed_permanently():
 
 def test_overlapping_sandboxes():
     """Overlapping sandboxes each see their own filesystem."""
-    from sblite import MemoryFS
+    from sandtrap import MemoryFS
 
     fs1 = MemoryFS()
     fs1.files["/a.txt"] = "from fs1"

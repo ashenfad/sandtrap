@@ -1,8 +1,8 @@
 """Tests for resource limits (memory + stdout caps)."""
 
 
-from sblite import Policy, Sandbox
-from sblite.builtins import TailBuffer
+from sandtrap import Policy, Sandbox
+from sandtrap.builtins import TailBuffer
 
 # --- TailBuffer unit tests ---
 

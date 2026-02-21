@@ -4,9 +4,9 @@ import pickle
 
 import pytest
 
-from sblite import MemoryFS, Policy, Sandbox, find_refs
-from sblite.errors import SbTickLimit
-from sblite.wrappers import SbClass, SbFunction
+from sandtrap import MemoryFS, Policy, Sandbox, find_refs
+from sandtrap.errors import SbTickLimit
+from sandtrap.wrappers import SbClass, SbFunction
 
 # --- Function pickle + reuse ---
 

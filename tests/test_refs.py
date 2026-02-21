@@ -1,6 +1,6 @@
 """Tests for find_refs static analysis."""
 
-from sblite import find_refs
+from sandtrap import find_refs
 
 
 def test_simple_load():
@@ -169,9 +169,9 @@ def test_builtins_excluded():
 
 
 def test_sb_names_excluded():
-    """Internal __sb_* names are not reported."""
-    refs = find_refs("__sb_getattr__(x, 'y')")
-    assert "__sb_getattr__" not in refs
+    """Internal __st_* names are not reported."""
+    refs = find_refs("__st_getattr__(x, 'y')")
+    assert "__st_getattr__" not in refs
     assert "x" in refs
 
 
@@ -287,7 +287,7 @@ def test_starred_unpack_binds():
 
 def test_find_refs_with_namespace_follows_deps():
     """find_refs with namespace follows SbFunction.global_refs."""
-    from sblite import Policy, Sandbox
+    from sandtrap import Policy, Sandbox
 
     policy = Policy(tick_limit=10_000)
     sandbox = Sandbox(policy, mode="wrapped")
@@ -307,7 +307,7 @@ def sum_squares(lst):
 
 def test_find_refs_transitive_chain():
     """A -> B -> C chain is fully discovered."""
-    from sblite import Policy, Sandbox
+    from sandtrap import Policy, Sandbox
 
     policy = Policy(tick_limit=10_000)
     sandbox = Sandbox(policy, mode="wrapped")
@@ -328,7 +328,7 @@ def a(x): return b(x) + 10
 
 def test_find_refs_cycle_detection():
     """Circular deps (A -> B -> A) don't cause infinite loop."""
-    from sblite import Policy, Sandbox
+    from sandtrap import Policy, Sandbox
 
     policy = Policy(tick_limit=10_000)
     sandbox = Sandbox(policy, mode="wrapped")

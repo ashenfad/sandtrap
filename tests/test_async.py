@@ -3,8 +3,8 @@
 
 import pytest
 
-from sblite import Policy, Sandbox
-from sblite.errors import SbTimeout
+from sandtrap import Policy, Sandbox
+from sandtrap.errors import SbTimeout
 
 
 @pytest.fixture
@@ -107,12 +107,12 @@ result = factorial(5)
 
 @pytest.mark.asyncio
 async def test_async_result_excludes_internals(sandbox):
-    """aexec result namespace doesn't contain __sb_* keys."""
+    """aexec result namespace doesn't contain __st_* keys."""
     result = await sandbox.aexec("x = 42")
     assert result.error is None
     assert result.namespace["x"] == 42
     for key in result.namespace:
-        assert not key.startswith("__sb_"), f"Internal key leaked: {key}"
+        assert not key.startswith("__st_"), f"Internal key leaked: {key}"
 
 
 @pytest.mark.asyncio
@@ -120,7 +120,7 @@ async def test_async_cancellation():
     """Cancelling an async sandbox execution via sandbox.cancel()."""
     import threading
 
-    from sblite.errors import SbCancelled
+    from sandtrap.errors import SbCancelled
 
     policy = Policy()
     sandbox = Sandbox(policy)

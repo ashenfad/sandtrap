@@ -2,8 +2,8 @@
 
 import math
 
-from sblite import Policy, Sandbox
-from sblite.errors import SbValidationError
+from sandtrap import Policy, Sandbox
+from sandtrap.errors import SbValidationError
 
 
 def test_import_allowed_module():

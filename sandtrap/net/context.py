@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from typing import Iterator
 
 network_allowed: contextvars.ContextVar[bool] = contextvars.ContextVar(
-    "sblite_network_allowed", default=True
+    "sandtrap_network_allowed", default=True
 )
 
 

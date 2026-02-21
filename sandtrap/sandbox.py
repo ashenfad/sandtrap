@@ -91,7 +91,7 @@ class Sandbox:
         gates: dict[str, Any],
     ) -> None:
         """Auto-activate any inactive SbFunction/SbClass/SbInstance in namespace."""
-        import_gate = gates.get("__sb_import__")
+        import_gate = gates.get("__st_import__")
         for k, v in list(ns.items()):
             if isinstance(v, SbFunction) and v._compiled is None:
                 v.activate(gates, sandbox=self, namespace=ns)
@@ -146,13 +146,13 @@ class Sandbox:
         the sandbox context (fs/net patches) for the duration of the call.
         """
         # Reset checkpoint state for this call
-        gates["__sb_tick_counter__"][0] = 0
-        gates["__sb_start_time__"][0] = time.monotonic()
+        gates["__st_tick_counter__"][0] = 0
+        gates["__st_start_time__"][0] = time.monotonic()
         self._cancel_flag.clear()
-        gates["__sb_cancel_flag__"][0] = self._cancel_flag
+        gates["__st_cancel_flag__"][0] = self._cancel_flag
         mem_limit, start_rss = self._memory_params()
-        gates["__sb_memory__"][0] = mem_limit
-        gates["__sb_memory__"][1] = start_rss
+        gates["__st_memory__"][0] = mem_limit
+        gates["__st_memory__"][1] = start_rss
 
         with ExitStack() as stack:
             self._enter_sandbox_context(stack)
@@ -173,10 +173,10 @@ class Sandbox:
         injected: dict[str, Any] = {}
 
         ns["__builtins__"] = make_safe_builtins(
-            gates["__sb_getattr__"],
-            checkpoint=gates["__sb_checkpoint__"],
+            gates["__st_getattr__"],
+            checkpoint=gates["__st_checkpoint__"],
         )
-        ns.setdefault("__name__", "__sblite__")
+        ns.setdefault("__name__", "__sandtrap__")
         ns.update(gates)
 
         # Populate registered functions (with privilege wrapping)
@@ -200,7 +200,7 @@ class Sandbox:
                     cls_name,
                     _make_gated_type(
                         cls_reg.cls,
-                        gates["__sb_checkpoint__"],
+                        gates["__st_checkpoint__"],
                         constructable=False,
                     ),
                 )
@@ -216,7 +216,7 @@ class Sandbox:
             ns["__builtins__"]["open"] = _builtins.open
 
         # Build print function: checkpoint (security) + output handler (configurable)
-        checkpoint = gates["__sb_checkpoint__"]
+        checkpoint = gates["__st_checkpoint__"]
         if self.print_handler is not None:
             handler = self.print_handler
         else:
@@ -293,7 +293,7 @@ class Sandbox:
         """
         ast.fix_missing_locations(tree)
 
-        filename = f"<sblite:{next(_exec_counter)}>"
+        filename = f"<sandtrap:{next(_exec_counter)}>"
         lines = source.splitlines(keepends=True)
         if lines and not lines[-1].endswith("\n"):
             lines[-1] += "\n"
@@ -343,16 +343,16 @@ class Sandbox:
             k: v
             for k, v in ns.items()
             if k not in _INTERNAL_KEYS
-            and not k.startswith("__sb_")
+            and not k.startswith("__st_")
             and not (k in injected and v is injected[k])
         }
 
         if extra_locals:
             for k, v in extra_locals.items():
-                if not k.startswith("__sb_"):
+                if not k.startswith("__st_"):
                     result_ns[k] = v
 
-        tick_counter = gates.get("__sb_tick_counter__")
+        tick_counter = gates.get("__st_tick_counter__")
         ticks = tick_counter[0] if tick_counter else 0
 
         linecache.cache.pop(filename, None)
@@ -431,19 +431,19 @@ class Sandbox:
         tree, rewriter = prepared
 
         # Wrap body in:
-        #   async def __sb_aexec__():
+        #   async def __st_aexec__():
         #       try:
         #           <body>
         #       except BaseException:
-        #           __sb_local_capture__.update(__sb_locals__())
+        #           __st_local_capture__.update(__st_locals__())
         #           raise
-        #       return __sb_locals__()
+        #       return __st_locals__()
         #
         # The try/except ensures locals are captured even when the body
         # raises (e.g. TaskContinue, TaskSuccess) before the return.
         return_locals = ast.Return(
             value=ast.Call(
-                func=ast.Name(id="__sb_locals__", ctx=ast.Load()),
+                func=ast.Name(id="__st_locals__", ctx=ast.Load()),
                 args=[],
                 keywords=[],
             )
@@ -456,7 +456,7 @@ class Sandbox:
                     value=ast.Call(
                         func=ast.Attribute(
                             value=ast.Name(
-                                id="__sb_local_capture__", ctx=ast.Load()
+                                id="__st_local_capture__", ctx=ast.Load()
                             ),
                             attr="update",
                             ctx=ast.Load(),
@@ -464,7 +464,7 @@ class Sandbox:
                         args=[
                             ast.Call(
                                 func=ast.Name(
-                                    id="__sb_locals__", ctx=ast.Load()
+                                    id="__st_locals__", ctx=ast.Load()
                                 ),
                                 args=[],
                                 keywords=[],
@@ -483,7 +483,7 @@ class Sandbox:
             finalbody=[],
         )
         wrapper_kwargs: dict[str, Any] = dict(
-            name="__sb_aexec__",
+            name="__st_aexec__",
             args=ast.arguments(
                 posonlyargs=[],
                 args=[],
@@ -504,8 +504,8 @@ class Sandbox:
         code, filename, gates, ns, injected, stdout_buf = (
             self._compile_and_setup(tree, rewriter, source, namespace)
         )
-        ns["__sb_locals__"] = _builtins.locals
-        ns["__sb_local_capture__"] = {}
+        ns["__st_locals__"] = _builtins.locals
+        ns["__st_local_capture__"] = {}
 
         error = None
         result_locals: dict[str, Any] = {}
@@ -513,7 +513,7 @@ class Sandbox:
             self._enter_sandbox_context(stack)
             try:
                 exec(code, ns)  # noqa: S102
-                coro = ns["__sb_aexec__"]()
+                coro = ns["__st_aexec__"]()
                 result_locals = await asyncio.wait_for(
                     coro, timeout=self.policy.timeout
                 )
@@ -527,7 +527,7 @@ class Sandbox:
                 if isinstance(e, KeyboardInterrupt):
                     raise  # Real Ctrl-C from host
                 error = strip_internal_frames(e)
-                result_locals = ns.get("__sb_local_capture__", {})
+                result_locals = ns.get("__st_local_capture__", {})
 
         return self._build_result(
             ns, injected, gates, stdout_buf, filename, error,

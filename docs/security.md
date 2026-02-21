@@ -16,14 +16,14 @@ The rewriter injects calls to these internal functions:
 
 | Gate | Purpose |
 |------|---------|
-| `__sb_getattr__` | Policy-checked attribute read (`obj.attr`) |
-| `__sb_setattr__` | Policy-checked attribute write (`obj.attr = x`) |
-| `__sb_delattr__` | Policy-checked attribute delete (`del obj.attr`) |
-| `__sb_import__` | Module import (`import x`) |
-| `__sb_importfrom__` | From-import (`from x import y`) |
-| `__sb_checkpoint__` | Timeout, tick limit, memory, and cancellation check |
-| `__sb_defun__` | Function definition wrapping (wrapped mode) |
-| `__sb_defclass__` | Class definition wrapping (wrapped mode) |
+| `__st_getattr__` | Policy-checked attribute read (`obj.attr`) |
+| `__st_setattr__` | Policy-checked attribute write (`obj.attr = x`) |
+| `__st_delattr__` | Policy-checked attribute delete (`del obj.attr`) |
+| `__st_import__` | Module import (`import x`) |
+| `__st_importfrom__` | From-import (`from x import y`) |
+| `__st_checkpoint__` | Timeout, tick limit, memory, and cancellation check |
+| `__st_defun__` | Function definition wrapping (wrapped mode) |
+| `__st_defclass__` | Class definition wrapping (wrapped mode) |
 
 All `obj.attr` access in sandboxed code -- including in f-strings and augmented assignments -- goes through the getattr gate.
 
@@ -48,7 +48,7 @@ Sandboxed code gets a restricted `__builtins__` (frozen via `MappingProxyType`):
 - **`type(name, bases, dict)`** -- three-arg form blocked (prevents dynamic class creation outside the rewriter)
 - **`str.format` traversal** -- `"{0.__class__}".format(obj)` blocked
 - **`__builtins__` mutation** -- frozen with `MappingProxyType`
-- **`__sb_*` names** -- reserved namespace rejected at validation time
+- **`__st_*` names** -- reserved namespace rejected at validation time
 - **`globals()`** -- not available
 - **Bare `except:`** -- automatically rewritten to `except Exception:` so sandboxed code cannot catch `BaseException` subclasses like `SbTimeout` or `SbCancelled`
 
@@ -63,7 +63,7 @@ Each checkpoint increments the tick counter and checks: cancellation flag, tick 
 
 ## Threat model
 
-sblite is a "walled garden" -- it controls what sandboxed code can access, not what the Python runtime can do. It is designed to prevent accidental or casual misuse by LLM-generated code.
+sandtrap is a "walled garden" -- it controls what sandboxed code can access, not what the Python runtime can do. It is designed to prevent accidental or casual misuse by LLM-generated code.
 
 It is **not** a security boundary against a determined attacker with full CPython knowledge. It runs in-process and shares the same memory space as the host. If you need hard isolation, use process-level sandboxing (containers, seccomp, etc.) as an outer layer.
 
