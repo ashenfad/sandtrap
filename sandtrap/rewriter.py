@@ -740,3 +740,11 @@ class Rewriter(ast.NodeTransformer):
         visit_ParamSpec = _recurse
         visit_TypeVarTuple = _recurse
         visit_TypeAlias = _recurse
+
+    # ------------------------------------------------------------------
+    # Python 3.14+ template string nodes
+    # ------------------------------------------------------------------
+
+    if sys.version_info >= (3, 14):
+        visit_TemplateStr = _recurse
+        visit_Interpolation = _recurse

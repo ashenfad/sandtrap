@@ -1,6 +1,7 @@
 """Tests for the AST rewriter validation."""
 
 import ast
+import sys
 
 import pytest
 
@@ -228,3 +229,22 @@ class Foo:
     async def __del__(self):
         pass
 """)
+
+
+# ------------------------------------------------------------------
+# Python 3.14+ template strings
+# ------------------------------------------------------------------
+
+
+@pytest.mark.skipif(sys.version_info < (3, 14), reason="t-strings require 3.14+")
+def test_template_string_accepted():
+    """Template string literals (t'...') are accepted by the rewriter."""
+    tree = _rewrite("x = t'hello {name}'")
+    assert isinstance(tree, ast.Module)
+
+
+@pytest.mark.skipif(sys.version_info < (3, 14), reason="t-strings require 3.14+")
+def test_template_string_with_format_spec():
+    """Template strings with format specs are accepted."""
+    tree = _rewrite("x = t'{value:.2f}'")
+    assert isinstance(tree, ast.Module)
