@@ -1,5 +1,7 @@
 """Tests for the Sandbox execution pipeline."""
 
+import sys
+
 import pytest
 
 from sandtrap import Policy, Sandbox
@@ -143,6 +145,18 @@ def test_fstring(sandbox):
     result = sandbox.exec("name = 'world'\nresult = f'hello {name}'")
     assert result.error is None
     assert result.namespace["result"] == "hello world"
+
+
+@pytest.mark.skipif(sys.version_info < (3, 14), reason="t-strings require 3.14+")
+def test_tstring(sandbox):
+    result = sandbox.exec("""\
+from string.templatelib import Template
+name = 'world'
+result = t'hello {name}'
+is_template = isinstance(result, Template)
+""")
+    assert result.error is None
+    assert result.namespace["is_template"] is True
 
 
 def test_walrus_operator(sandbox):
