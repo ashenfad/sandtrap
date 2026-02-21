@@ -274,9 +274,8 @@ def make_gates(
                 _vfs_module_cache[pkg_name] = pkg
 
                 if _filesystem is not None and _filesystem.exists(init_path):
-                    f = _filesystem.open(init_path, "r")
-                    source = f.read()
-                    f.close()
+                    with _filesystem.open(init_path, "r") as f:
+                        source = f.read()
                     try:
                         tree = ast.parse(source)
                         rewriter = Rewriter(wrapped_mode=_wrapped_mode)
