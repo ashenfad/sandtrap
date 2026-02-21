@@ -216,7 +216,11 @@ class SbFunction:
             for k, v in list(ns.items()):
                 if isinstance(v, ModuleRef):
                     try:
-                        ns[k] = import_gate(v.name, alias=v.name)
+                        top = v.name.split(".")[0]
+                        if k == top:
+                            ns[k] = import_gate(v.name)
+                        else:
+                            ns[k] = import_gate(v.name, alias=k)
                     except Exception:
                         pass
 
