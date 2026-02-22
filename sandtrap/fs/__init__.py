@@ -3,11 +3,11 @@
 from monkeyfs import (
     FileSystem,
     VirtualFS,
+    current_fs,
     install,
+    patch,
     suspend_fs_interception,
-    use_fs,
 )
-from monkeyfs.context import current_fs
 
 __all__ = [
     "FileSystem",
@@ -15,5 +15,5 @@ __all__ = [
     "current_fs",
     "install",
     "suspend_fs_interception",
-    "use_fs",
+    "patch",
 ]
