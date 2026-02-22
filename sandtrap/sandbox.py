@@ -15,7 +15,7 @@ from typing import Any, Literal
 
 from .builtins import TailBuffer, _make_gated_type, make_print, make_safe_builtins
 from .errors import StTimeout, StValidationError, strip_internal_frames
-from .fs import FileSystem, install as install_fs, use_fs
+from .fs import FileSystem, install as install_fs, patch
 from .gates import make_gates, wrap_privileged
 from .net.context import deny_network
 from .net.patch import install as install_net
@@ -250,7 +250,7 @@ class Sandbox:
 
         if self.filesystem is not None:
             install_fs()
-            stack.enter_context(use_fs(self.filesystem))
+            stack.enter_context(patch(self.filesystem))
 
     # ------------------------------------------------------------------
     # Shared pipeline helpers
