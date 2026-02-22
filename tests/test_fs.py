@@ -6,13 +6,7 @@ import pathlib
 import pytest
 
 from sandtrap import VirtualFS, Policy, Sandbox
-from sandtrap.fs import current_fs, install as install_fs, suspend, patch
-
-
-@pytest.fixture(autouse=True)
-def _install_fs_patches():
-    """Ensure filesystem patches are installed for all tests."""
-    install_fs()
+from sandtrap.fs import current_fs, suspend, patch
 
 
 def test_fs_routes_to_vfs():
@@ -123,17 +117,6 @@ cwd = os.getcwd()
     assert result.error is None
     assert result.namespace["cwd"] == os.getcwd()
 
-
-def test_fs_install_idempotent():
-    """install() is idempotent -- calling it twice is safe."""
-    from monkeyfs import patching
-
-    patching.install()
-    assert patching._installed
-
-    # Second call is a no-op
-    patching.install()
-    assert patching._installed
 
 
 def test_vfs_path_normalization():

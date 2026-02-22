@@ -15,7 +15,7 @@ from typing import Any, Literal
 
 from .builtins import TailBuffer, _make_gated_type, make_print, make_safe_builtins
 from .errors import StTimeout, StValidationError, strip_internal_frames
-from .fs import FileSystem, install as install_fs, patch
+from .fs import FileSystem, patch
 from .gates import make_gates, wrap_privileged
 from .net.context import deny_network
 from .net.patch import install as install_net
@@ -61,9 +61,7 @@ class Sandbox:
         self.print_handler = print_handler
         self._cancel_flag = threading.Event()
 
-        # Install patches eagerly so _build_namespace captures patched versions
-        if filesystem is not None:
-            install_fs()
+        # Install network patches eagerly so _build_namespace captures patched versions
         if not policy.allow_network:
             install_net()
 
@@ -249,7 +247,6 @@ class Sandbox:
             stack.enter_context(deny_network())
 
         if self.filesystem is not None:
-            install_fs()
             stack.enter_context(patch(self.filesystem))
 
     # ------------------------------------------------------------------
