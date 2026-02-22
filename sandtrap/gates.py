@@ -13,7 +13,7 @@ from typing import Any, cast
 
 from .builtins import make_safe_builtins
 from .errors import StCancelled, StTickLimit, StTimeout
-from .fs import suspend_fs_interception
+from .fs import suspend
 from .net.context import allow_network
 from .policy import Policy
 from .resource_limits import get_rss_bytes
@@ -54,7 +54,7 @@ def wrap_privileged(
             if network_access:
                 stack.enter_context(allow_network())
             if host_fs_access:
-                stack.enter_context(suspend_fs_interception())
+                stack.enter_context(suspend())
             return fn(*args, **kwargs)
 
     return wrapper

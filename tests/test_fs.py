@@ -6,7 +6,7 @@ import pathlib
 import pytest
 
 from sandtrap import VirtualFS, Policy, Sandbox
-from sandtrap.fs import current_fs, install as install_fs, suspend_fs_interception, patch
+from sandtrap.fs import current_fs, install as install_fs, suspend, patch
 
 
 @pytest.fixture(autouse=True)
@@ -100,12 +100,12 @@ def test_host_fs_access_suspends_interception():
 
 
 def test_context_var_isolation():
-    """patch/suspend_fs_interception properly restore state."""
+    """patch/suspend properly restore state."""
     memfs = VirtualFS({})
     assert current_fs.get() is None
     with patch(memfs):
         assert current_fs.get() is memfs
-        with suspend_fs_interception():
+        with suspend():
             assert current_fs.get() is None
         assert current_fs.get() is memfs
     assert current_fs.get() is None
