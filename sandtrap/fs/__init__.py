@@ -1,11 +1,17 @@
-"""Filesystem interception for sandtrap sandbox."""
+"""Filesystem interception — delegates to monkeyfs."""
 
-from .context import current_fs, suspend_fs_interception, use_fs
-from .patch import install
-from .protocol import FileSystem
+from monkeyfs import (
+    FileSystem,
+    MemoryFS,
+    install,
+    suspend_fs_interception,
+    use_fs,
+)
+from monkeyfs.context import current_fs
 
 __all__ = [
     "FileSystem",
+    "MemoryFS",
     "current_fs",
     "install",
     "suspend_fs_interception",

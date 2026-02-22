@@ -69,4 +69,4 @@ It is **not** a security boundary against a determined attacker with full CPytho
 
 ## Process-global patches
 
-Filesystem and network interception works by monkey-patching `builtins.open`, `os.stat`, `socket.socket.connect`, etc. at the process level. Patches are installed once on first use and remain active permanently. They dispatch via `ContextVar` -- when no sandbox is executing, all calls fall through to the original functions transparently. This is necessary so that registered libraries (e.g., `pd.read_csv`) see the virtual filesystem during sandbox execution.
+Filesystem interception is provided by [monkeyfs](https://github.com/ashenfad/monkeyfs), which monkey-patches `builtins.open`, `os.stat`, `os.path.exists`, and 20+ other stdlib functions at the process level. Network interception patches `socket.socket.connect` etc. similarly. Patches are installed once on first use and remain active permanently. They dispatch via `ContextVar` -- when no sandbox is executing, all calls fall through to the original functions transparently. This is necessary so that registered libraries (e.g., `pd.read_csv`) see the virtual filesystem during sandbox execution.

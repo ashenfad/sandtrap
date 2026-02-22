@@ -6,8 +6,7 @@ import pathlib
 import pytest
 
 from sandtrap import MemoryFS, Policy, Sandbox
-from sandtrap.fs.context import current_fs, suspend_fs_interception, use_fs
-from sandtrap.fs.patch import install as install_fs
+from sandtrap.fs import current_fs, install as install_fs, suspend_fs_interception, use_fs
 
 
 @pytest.fixture(autouse=True)
@@ -127,14 +126,14 @@ cwd = os.getcwd()
 
 def test_fs_install_idempotent():
     """install() is idempotent -- calling it twice is safe."""
-    from sandtrap.fs import patch as fs_patch
+    from monkeyfs import patching
 
-    fs_patch.install()
-    assert fs_patch._installed
+    patching.install()
+    assert patching._installed
 
     # Second call is a no-op
-    fs_patch.install()
-    assert fs_patch._installed
+    patching.install()
+    assert patching._installed
 
 
 def test_memoryfs_path_normalization():

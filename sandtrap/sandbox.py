@@ -15,9 +15,7 @@ from typing import Any, Literal
 
 from .builtins import TailBuffer, _make_gated_type, make_print, make_safe_builtins
 from .errors import StTimeout, StValidationError, strip_internal_frames
-from .fs.context import use_fs
-from .fs.patch import install as install_fs
-from .fs.protocol import FileSystem
+from .fs import FileSystem, install as install_fs, use_fs
 from .gates import make_gates, wrap_privileged
 from .net.context import deny_network
 from .net.patch import install as install_net
