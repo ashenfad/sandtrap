@@ -13,7 +13,7 @@ from typing import Any, cast
 
 from .builtins import make_safe_builtins
 from .errors import StCancelled, StTickLimit, StTimeout
-from .fs.context import suspend_fs_interception
+from .fs import suspend_fs_interception
 from .net.context import allow_network
 from .policy import Policy
 from .resource_limits import get_rss_bytes

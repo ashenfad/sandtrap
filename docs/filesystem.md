@@ -19,17 +19,18 @@ f.close()
     assert result.namespace["content"] == "hello world"
 ```
 
-When a filesystem is provided, all calls to `open()`, `os.stat()`, `os.listdir()`, `os.path.exists()`, `os.mkdir()`, `os.remove()`, `os.rename()`, `os.getcwd()`, `os.chdir()`, etc. route through the VFS.
+When a filesystem is provided, all calls to `open()`, `os.stat()`, `os.listdir()`, `os.path.exists()`, `os.mkdir()`, `os.remove()`, `os.rename()`, `os.getcwd()`, `os.chdir()`, `os.path.isfile()`, `os.path.isdir()`, `os.path.realpath()`, `os.path.expanduser()`, `pathlib.Path.touch()`, and more route through the VFS. Interception is powered by [monkeyfs](https://github.com/ashenfad/monkeyfs), which sandtrap uses as a dependency.
 
 ### FileSystem protocol
 
-`FileSystem` is a `typing.Protocol` -- any object with the right methods works, no subclassing required:
+`FileSystem` is a `typing.Protocol` from monkeyfs -- any object with the right methods works, no subclassing required. See the [monkeyfs README](https://github.com/ashenfad/monkeyfs) for the full protocol. The most commonly needed methods:
 
 ```python
 class MyFS:
     def open(self, path, mode="r", **kwargs): ...
     def stat(self, path): ...
-    def listdir(self, path): ...
+    def list(self, path="."): ...       # immediate children
+    def listdir(self, path="/"): ...
     def exists(self, path): ...
     def isfile(self, path): ...
     def isdir(self, path): ...
@@ -41,11 +42,9 @@ class MyFS:
     def chdir(self, path): ...
 ```
 
-You can also inherit from `FileSystem` for IDE autocompletion, but it's optional.
-
 ### MemoryFS
 
-`MemoryFS` is a built-in in-memory implementation. Files are stored in `fs.files` (a `dict[str, str | bytes]`):
+`MemoryFS` is a simple in-memory implementation (provided by monkeyfs). Files are stored in `fs.files` (a `dict[str, str | bytes]`):
 
 ```python
 fs = MemoryFS()

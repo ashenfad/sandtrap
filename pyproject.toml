@@ -22,7 +22,9 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 
-dependencies = []
+dependencies = [
+    "monkeyfs",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -57,3 +59,6 @@ packages = {find = {where = ["./"], exclude = ["tests*"]}}
 
 [tool.setuptools.package-data]
 sandtrap = ["py.typed"]
+
+[tool.uv.sources]
+monkeyfs = { path = "../monkeyfs", editable = true }

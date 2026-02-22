@@ -1,6 +1,5 @@
 from .errors import StCancelled, StError, StTickLimit, StTimeout, StValidationError
-from .fs.memory import MemoryFS
-from .fs.protocol import FileSystem
+from .fs import FileSystem, MemoryFS
 from .policy import MemberSpec, Policy
 from .refs import find_refs
 from .sandbox import ExecResult, Sandbox
