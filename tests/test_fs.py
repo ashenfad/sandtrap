@@ -18,7 +18,7 @@ def _install_fs_patches():
 def test_fs_routes_to_vfs():
     """Sandbox file operations route through the provided filesystem."""
     memfs = MemoryFS()
-    memfs.files["/data.txt"] = "hello world"
+    memfs.files["/data.txt"] = b"hello world"
 
     policy = Policy()
     sandbox = Sandbox(policy, filesystem=memfs)
@@ -43,13 +43,13 @@ f.write('test data')
 f.close()
 """)
     assert result.error is None
-    assert memfs.files["/output.txt"] == "test data"
+    assert memfs.files["/output.txt"] == b"test data"
 
 
 def test_fs_exists_routes_to_vfs():
     """os.path.exists checks against the VFS."""
     memfs = MemoryFS()
-    memfs.files["/present.txt"] = "data"
+    memfs.files["/present.txt"] = b"data"
 
     policy = Policy()
     policy.module(os, recursive=True)
@@ -67,8 +67,8 @@ missing = os.path.exists('/nope.txt')
 def test_fs_listdir_routes_to_vfs():
     """os.listdir lists from the VFS."""
     memfs = MemoryFS()
-    memfs.files["/a.txt"] = "a"
-    memfs.files["/b.txt"] = "b"
+    memfs.files["/a.txt"] = b"a"
+    memfs.files["/b.txt"] = b"b"
 
     policy = Policy()
     policy.module(os)
@@ -139,7 +139,7 @@ def test_fs_install_idempotent():
 def test_memoryfs_path_normalization():
     """MemoryFS normalizes .. and . in paths."""
     fs = MemoryFS()
-    fs.files["/data/file.txt"] = "hello"
+    fs.files["/data/file.txt"] = b"hello"
 
     sandbox = Sandbox(Policy(), filesystem=fs)
     result = sandbox.exec("""\
@@ -154,7 +154,7 @@ f.close()
 def test_memoryfs_append_mode():
     """MemoryFS supports append mode."""
     fs = MemoryFS()
-    fs.files["/log.txt"] = "line1\n"
+    fs.files["/log.txt"] = b"line1\n"
 
     sandbox = Sandbox(Policy(), filesystem=fs)
     result = sandbox.exec("""\
@@ -209,16 +209,16 @@ def test_memoryfs_rename_directory():
     fs = MemoryFS()
     fs.mkdir("/src", parents=True)
     fs.mkdir("/src/sub", parents=True)
-    fs.files["/src/a.txt"] = "a"
-    fs.files["/src/sub/b.txt"] = "b"
+    fs.files["/src/a.txt"] = b"a"
+    fs.files["/src/sub/b.txt"] = b"b"
 
     fs.rename("/src", "/dst")
 
     assert "/src" not in fs.dirs
     assert "/dst" in fs.dirs
     assert "/dst/sub" in fs.dirs
-    assert fs.files.get("/dst/a.txt") == "a"
-    assert fs.files.get("/dst/sub/b.txt") == "b"
+    assert fs.files.get("/dst/a.txt") == b"a"
+    assert fs.files.get("/dst/sub/b.txt") == b"b"
     assert "/src/a.txt" not in fs.files
 
 
@@ -238,8 +238,8 @@ def test_memoryfs_open_write_validates_parent():
 def _pathlib_sandbox():
     """Create a sandbox with pathlib registered and a populated VFS."""
     fs = MemoryFS()
-    fs.files["/data.txt"] = "hello pathlib"
-    fs.files["/sub/nested.txt"] = "nested"
+    fs.files["/data.txt"] = b"hello pathlib"
+    fs.files["/sub/nested.txt"] = b"nested"
     fs.dirs.add("/sub")
     policy = Policy()
     policy.module(pathlib)
@@ -265,7 +265,7 @@ import pathlib
 pathlib.Path('/output.txt').write_text('written via pathlib')
 """)
     assert result.error is None
-    assert fs.files["/output.txt"] == "written via pathlib"
+    assert fs.files["/output.txt"] == b"written via pathlib"
 
 
 def test_pathlib_exists():
@@ -349,7 +349,7 @@ pathlib.Path('/data.txt').rename('/moved.txt')
 """)
     assert result.error is None
     assert "/data.txt" not in fs.files
-    assert fs.files["/moved.txt"] == "hello pathlib"
+    assert fs.files["/moved.txt"] == b"hello pathlib"
 
 
 def test_pathlib_open_read():
@@ -373,4 +373,4 @@ with pathlib.Path('/written.txt').open('w') as f:
     f.write('via open')
 """)
     assert result.error is None
-    assert fs.files["/written.txt"] == "via open"
+    assert fs.files["/written.txt"] == b"via open"
