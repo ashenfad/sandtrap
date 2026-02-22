@@ -2,13 +2,13 @@
 
 import pickle
 
-from sandtrap import MemoryFS, Policy, Sandbox
+from sandtrap import VirtualFS, Policy, Sandbox
 from sandtrap.wrappers import ModuleRef, StClass, StFunction
 
 
 def _make_sandbox(**kwargs):
-    """Create a sandbox with a MemoryFS."""
-    fs = kwargs.pop("fs", None) or MemoryFS()
+    """Create a sandbox with a VirtualFS."""
+    fs = kwargs.pop("fs", None) or VirtualFS({})
     policy = kwargs.pop("policy", None) or Policy()
     return Sandbox(policy, filesystem=fs, **kwargs), fs
 
@@ -16,7 +16,7 @@ def _make_sandbox(**kwargs):
 def test_import_vfs_module():
     """Basic VFS module import."""
     sandbox, fs = _make_sandbox()
-    fs.files["/helpers.py"] = b"def double(x): return x * 2"
+    fs.write("/helpers.py", b"def double(x): return x * 2")
 
     result = sandbox.exec("""\
 import helpers
@@ -29,7 +29,7 @@ result = helpers.double(5)
 def test_from_import_vfs_module():
     """from-import from a VFS module."""
     sandbox, fs = _make_sandbox()
-    fs.files["/helpers.py"] = b"PI = 3.14159\ndef area(r): return PI * r * r"
+    fs.write("/helpers.py", b"PI = 3.14159\ndef area(r): return PI * r * r")
 
     result = sandbox.exec("""\
 from helpers import area, PI
@@ -43,7 +43,7 @@ result = area(2)
 def test_from_import_missing_name():
     """from-import of a name that doesn't exist in the VFS module."""
     sandbox, fs = _make_sandbox()
-    fs.files["/helpers.py"] = b"x = 1"
+    fs.write("/helpers.py", b"x = 1")
 
     result = sandbox.exec("from helpers import missing")
     assert result.error is not None
@@ -63,7 +63,7 @@ def test_vfs_module_not_found():
 def test_vfs_module_cached():
     """Importing the same VFS module twice returns the cached version."""
     sandbox, fs = _make_sandbox()
-    fs.files["/counter.py"] = b"n = 0"
+    fs.write("/counter.py", b"n = 0")
 
     result = sandbox.exec("""\
 import counter
@@ -79,13 +79,13 @@ def test_vfs_module_sandboxed():
     """VFS module code goes through the sandbox gates."""
     sandbox, fs = _make_sandbox()
     # Module code that tries to access a private attribute should fail
-    fs.files["/bad.py"] = b"""\
+    fs.write("/bad.py", b"""\
 class Foo:
     _secret = 42
 
 f = Foo()
 val = f._secret
-"""
+""")
     result = sandbox.exec("import bad")
     assert result.error is not None
     assert isinstance(result.error, AttributeError)
@@ -96,7 +96,7 @@ def test_vfs_module_uses_checkpoints():
     policy = Policy()
     policy.timeout = 0.1
     sandbox, fs = _make_sandbox(policy=policy)
-    fs.files["/slow.py"] = b"while True: pass"
+    fs.write("/slow.py", b"while True: pass")
 
     from sandtrap.errors import StTimeout
     result = sandbox.exec("import slow")
@@ -112,7 +112,7 @@ def test_policy_modules_shadow_vfs():
     policy.module(math)
     sandbox, fs = _make_sandbox(policy=policy)
     # Even though math.py exists in VFS, the registered math module wins
-    fs.files["/math.py"] = b"sqrt = lambda x: 'fake'"
+    fs.write("/math.py", b"sqrt = lambda x: 'fake'")
 
     result = sandbox.exec("""\
 import math
@@ -129,11 +129,11 @@ def test_vfs_module_can_import_registered():
     policy = Policy()
     policy.module(math)
     sandbox, fs = _make_sandbox(policy=policy)
-    fs.files["/geometry.py"] = b"""\
+    fs.write("/geometry.py", b"""\
 import math
 def circle_area(r):
     return math.pi * r * r
-"""
+""")
 
     result = sandbox.exec("""\
 from geometry import circle_area
@@ -146,12 +146,12 @@ result = circle_area(1)
 def test_vfs_module_can_import_vfs_module():
     """VFS modules can import other VFS modules."""
     sandbox, fs = _make_sandbox()
-    fs.files["/base.py"] = b"FACTOR = 10"
-    fs.files["/derived.py"] = b"""\
+    fs.write("/base.py", b"FACTOR = 10")
+    fs.write("/derived.py", b"""\
 import base
 def scaled(x):
     return x * base.FACTOR
-"""
+""")
 
     result = sandbox.exec("""\
 from derived import scaled
@@ -164,14 +164,14 @@ result = scaled(5)
 def test_vfs_module_classes():
     """VFS modules can define and export classes."""
     sandbox, fs = _make_sandbox()
-    fs.files["/models.py"] = b"""\
+    fs.write("/models.py", b"""\
 class Point:
     def __init__(self, x, y):
         self.x = x
         self.y = y
     def magnitude(self):
         return (self.x ** 2 + self.y ** 2) ** 0.5
-"""
+""")
 
     result = sandbox.exec("""\
 from models import Point
@@ -195,8 +195,8 @@ def test_vfs_module_no_filesystem():
 def test_vfs_circular_import():
     """Circular imports don't crash (partial module returned)."""
     sandbox, fs = _make_sandbox()
-    fs.files["/a.py"] = b"import b\nX = 1"
-    fs.files["/b.py"] = b"import a\nY = 2"
+    fs.write("/a.py", b"import b\nX = 1")
+    fs.write("/b.py", b"import a\nY = 2")
 
     result = sandbox.exec("""\
 import a
@@ -210,7 +210,7 @@ result = a.X + b.Y
 def test_vfs_module_syntax_error_not_cached():
     """A VFS module with a syntax error is evicted from cache and can be retried."""
     sandbox, fs = _make_sandbox()
-    fs.files["/broken.py"] = b"def oops(:"
+    fs.write("/broken.py", b"def oops(:")
 
     # First import fails
     result = sandbox.exec("import broken")
@@ -218,7 +218,7 @@ def test_vfs_module_syntax_error_not_cached():
     assert isinstance(result.error, SyntaxError)
 
     # Fix the module
-    fs.files["/broken.py"] = b"X = 42"
+    fs.write("/broken.py", b"X = 42")
 
     # Second import should succeed (not return the cached broken module)
     result = sandbox.exec("""\
@@ -232,14 +232,14 @@ result = broken.X
 def test_vfs_module_runtime_error_not_cached():
     """A VFS module that raises at import time is evicted from cache."""
     sandbox, fs = _make_sandbox()
-    fs.files["/bad.py"] = b"raise RuntimeError('init failed')"
+    fs.write("/bad.py", b"raise RuntimeError('init failed')")
 
     result = sandbox.exec("import bad")
     assert result.error is not None
     assert isinstance(result.error, RuntimeError)
 
     # Fix the module
-    fs.files["/bad.py"] = b"Y = 99"
+    fs.write("/bad.py", b"Y = 99")
 
     result = sandbox.exec("""\
 import bad
@@ -257,11 +257,11 @@ result = bad.Y
 def test_relative_import_same_package():
     """from .sibling import name works within a VFS package."""
     sandbox, fs = _make_sandbox()
-    fs.files["/pkg/utils.py"] = b"FACTOR = 7"
-    fs.files["/pkg/main.py"] = b"""\
+    fs.write("/pkg/utils.py", b"FACTOR = 7")
+    fs.write("/pkg/main.py", b"""\
 from .utils import FACTOR
 result = FACTOR * 3
-"""
+""")
 
     result = sandbox.exec("""\
 from pkg import main
@@ -274,11 +274,11 @@ result = main.result
 def test_relative_import_dot_only():
     """from . import sibling works to import a sibling module."""
     sandbox, fs = _make_sandbox()
-    fs.files["/pkg/helpers.py"] = b"X = 42"
-    fs.files["/pkg/main.py"] = b"""\
+    fs.write("/pkg/helpers.py", b"X = 42")
+    fs.write("/pkg/main.py", b"""\
 from . import helpers
 result = helpers.X
-"""
+""")
 
     result = sandbox.exec("""\
 from pkg import main
@@ -291,11 +291,11 @@ result = main.result
 def test_relative_import_parent_level():
     """from ..sibling import name goes up one level."""
     sandbox, fs = _make_sandbox()
-    fs.files["/pkg/shared.py"] = b"VAL = 100"
-    fs.files["/pkg/sub/inner.py"] = b"""\
+    fs.write("/pkg/shared.py", b"VAL = 100")
+    fs.write("/pkg/sub/inner.py", b"""\
 from ..shared import VAL
 doubled = VAL * 2
-"""
+""")
 
     result = sandbox.exec("""\
 from pkg.sub import inner
@@ -316,7 +316,7 @@ def test_relative_import_no_vfs_fails():
 def test_relative_import_from_toplevel():
     """Relative import from top-level sandbox code resolves against VFS root."""
     sandbox, fs = _make_sandbox()
-    fs.files["/utils.py"] = b"X = 99"
+    fs.write("/utils.py", b"X = 99")
 
     # Top-level sandbox code has no __file__, so base_dir becomes ""
     # and ".utils" resolves to "utils" at VFS root
@@ -331,7 +331,7 @@ result = X
 def test_relative_import_dot_only_from_toplevel():
     """from . import mod from top-level resolves to VFS root module."""
     sandbox, fs = _make_sandbox()
-    fs.files["/helpers.py"] = b"Y = 7"
+    fs.write("/helpers.py", b"Y = 7")
 
     result = sandbox.exec("""\
 from . import helpers
@@ -344,15 +344,15 @@ result = helpers.Y
 def test_relative_import_chained():
     """Relative imports work across multiple levels of VFS modules."""
     sandbox, fs = _make_sandbox()
-    fs.files["/a/b/c.py"] = b"VAL = 1"
-    fs.files["/a/b/d.py"] = b"""\
+    fs.write("/a/b/c.py", b"VAL = 1")
+    fs.write("/a/b/d.py", b"""\
 from .c import VAL
 DOUBLED = VAL * 2
-"""
-    fs.files["/a/entry.py"] = b"""\
+""")
+    fs.write("/a/entry.py", b"""\
 from .b.d import DOUBLED
 RESULT = DOUBLED + 10
-"""
+""")
 
     result = sandbox.exec("""\
 from a import entry
@@ -365,7 +365,7 @@ result = entry.RESULT
 def test_relative_import_nonexistent_module():
     """Relative import of a nonexistent sibling raises ImportError."""
     sandbox, fs = _make_sandbox()
-    fs.files["/pkg/main.py"] = b"from .missing import X"
+    fs.write("/pkg/main.py", b"from .missing import X")
 
     result = sandbox.exec("from pkg import main")
     assert result.error is not None
@@ -375,8 +375,8 @@ def test_relative_import_nonexistent_module():
 def test_relative_import_nonexistent_name():
     """Relative import of a nonexistent name from an existing module."""
     sandbox, fs = _make_sandbox()
-    fs.files["/pkg/utils.py"] = b"X = 1"
-    fs.files["/pkg/main.py"] = b"from .utils import MISSING"
+    fs.write("/pkg/utils.py", b"X = 1")
+    fs.write("/pkg/main.py", b"from .utils import MISSING")
 
     result = sandbox.exec("from pkg import main")
     assert result.error is not None
@@ -392,7 +392,7 @@ def test_relative_import_nonexistent_name():
 def test_vfs_function_is_sbfunction_in_wrapped_mode():
     """VFS module functions are StFunction in wrapped mode."""
     sandbox, fs = _make_sandbox()
-    fs.files["/helpers.py"] = b"def double(x): return x * 2"
+    fs.write("/helpers.py", b"def double(x): return x * 2")
 
     result = sandbox.exec("""\
 from helpers import double
@@ -406,7 +406,7 @@ result = double(5)
 def test_vfs_function_is_regular_in_raw_mode():
     """VFS module functions are regular functions in raw mode."""
     sandbox, fs = _make_sandbox(mode="raw")
-    fs.files["/helpers.py"] = b"def double(x): return x * 2"
+    fs.write("/helpers.py", b"def double(x): return x * 2")
 
     result = sandbox.exec("""\
 from helpers import double
@@ -421,12 +421,12 @@ result = double(5)
 def test_vfs_class_is_sbclass_in_wrapped_mode():
     """VFS module classes are StClass in wrapped mode."""
     sandbox, fs = _make_sandbox()
-    fs.files["/models.py"] = b"""\
+    fs.write("/models.py", b"""\
 class Point:
     def __init__(self, x, y):
         self.x = x
         self.y = y
-"""
+""")
 
     result = sandbox.exec("""\
 from models import Point
@@ -441,7 +441,7 @@ result = p.x + p.y
 def test_vfs_function_pickle_roundtrip():
     """VFS module StFunction survives pickle round-trip."""
     sandbox, fs = _make_sandbox(policy=Policy(tick_limit=10_000))
-    fs.files["/helpers.py"] = b"def double(x): return x * 2"
+    fs.write("/helpers.py", b"def double(x): return x * 2")
 
     result = sandbox.exec("from helpers import double")
     assert result.error is None
@@ -467,7 +467,7 @@ def test_vfs_module_getattr_gated():
     policy = Policy(tick_limit=10_000)
     policy.cls(Secret)
     sandbox, fs = _make_sandbox(policy=policy)
-    fs.files["/probe.py"] = b"""\
+    fs.write("/probe.py", b"""\
 def read_private(obj):
     return getattr(obj, '_hidden', 'blocked')
 
@@ -479,7 +479,7 @@ def has_private(obj):
 
 def has_public(obj):
     return hasattr(obj, 'public')
-"""
+""")
 
     result = sandbox.exec("""\
 from probe import read_private, read_public, has_private, has_public
@@ -504,8 +504,8 @@ h_priv = has_private(obj)
 def test_moduleref_bare_dotted_import_reactivation():
     """ModuleRef for a bare dotted import (import pkg.mod) restores the package chain."""
     sandbox, fs = _make_sandbox()
-    fs.files["/pkg/__init__.py"] = b""
-    fs.files["/pkg/mod.py"] = b"X = 42"
+    fs.write("/pkg/__init__.py", b"")
+    fs.write("/pkg/mod.py", b"X = 42")
 
     # Simulate what happens after deserializing a namespace that had
     # ``import pkg.mod`` — the key is "pkg" and the ModuleRef stores "pkg.mod"
@@ -518,8 +518,8 @@ def test_moduleref_bare_dotted_import_reactivation():
 def test_moduleref_aliased_dotted_import_reactivation():
     """ModuleRef for an aliased dotted import (import pkg.mod as m) returns the leaf."""
     sandbox, fs = _make_sandbox()
-    fs.files["/pkg/__init__.py"] = b""
-    fs.files["/pkg/mod.py"] = b"Y = 99"
+    fs.write("/pkg/__init__.py", b"")
+    fs.write("/pkg/mod.py", b"Y = 99")
 
     # Simulate ``import pkg.mod as m`` — key is "m", ModuleRef stores "pkg.mod"
     ns = {"m": ModuleRef("pkg.mod")}
@@ -531,7 +531,7 @@ def test_moduleref_aliased_dotted_import_reactivation():
 def test_moduleref_simple_import_reactivation():
     """ModuleRef for a simple import (import helpers) resolves correctly."""
     sandbox, fs = _make_sandbox()
-    fs.files["/helpers.py"] = b"Z = 7"
+    fs.write("/helpers.py", b"Z = 7")
 
     ns = {"helpers": ModuleRef("helpers")}
     result = sandbox.exec("result = helpers.Z", namespace=ns)
@@ -547,8 +547,8 @@ def test_moduleref_simple_import_reactivation():
 def test_vfs_package_init_executes():
     """__init__.py in a VFS package is executed during dotted import."""
     sandbox, fs = _make_sandbox()
-    fs.files["/pkg/__init__.py"] = b"PKG_LOADED = True"
-    fs.files["/pkg/mod.py"] = b"VAL = 1"
+    fs.write("/pkg/__init__.py", b"PKG_LOADED = True")
+    fs.write("/pkg/mod.py", b"VAL = 1")
 
     result = sandbox.exec("""\
 import pkg.mod

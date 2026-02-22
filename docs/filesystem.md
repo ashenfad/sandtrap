@@ -5,10 +5,10 @@
 Provide a `FileSystem` implementation to intercept all file I/O during sandboxed execution:
 
 ```python
-from sandtrap import MemoryFS, Policy, Sandbox
+from sandtrap import VirtualFS, Policy, Sandbox
 
-fs = MemoryFS()
-fs.files["/data.txt"] = b"hello world"
+fs = VirtualFS({})
+fs.write("/data.txt", b"hello world")
 
 with Sandbox(Policy(), filesystem=fs) as sandbox:
     result = sandbox.exec("""
@@ -42,22 +42,12 @@ class MyFS:
     def chdir(self, path): ...
 ```
 
-### MemoryFS
-
-`MemoryFS` is a simple in-memory implementation (provided by monkeyfs). Files are stored in `fs.files` as `bytes`:
-
-```python
-fs = MemoryFS()
-fs.files["/script.py"] = b"x = 42"
-fs.files["/data/config.json"] = b'{"key": "value"}'
-```
-
 ## VFS imports
 
 Sandboxed code can `import` modules from Python files in the VFS:
 
 ```python
-fs.files["/helpers.py"] = b"def double(x): return x * 2"
+fs.write("/helpers.py", b"def double(x): return x * 2")
 
 result = sandbox.exec("""
 from helpers import double
@@ -71,8 +61,8 @@ assert result.namespace["result"] == 10
 VFS modules support relative imports:
 
 ```python
-fs.files["/pkg/utils.py"] = b"def add(a, b): return a + b"
-fs.files["/pkg/main.py"] = b"from .utils import add"
+fs.write("/pkg/utils.py", b"def add(a, b): return a + b")
+fs.write("/pkg/main.py", b"from .utils import add")
 ```
 
 ### Package directories
@@ -80,7 +70,7 @@ fs.files["/pkg/main.py"] = b"from .utils import add"
 Directories work as packages without `__init__.py`:
 
 ```python
-fs.files["/mylib/core.py"] = b"value = 42"
+fs.write("/mylib/core.py", b"value = 42")
 
 result = sandbox.exec("from mylib import core")
 # core.value == 42
