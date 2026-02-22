@@ -624,10 +624,10 @@ def test_sandbox_context_manager(sandbox):
 
 def test_fs_patches_installed_permanently():
     """FS patches are installed once and remain active."""
-    from sandtrap import MemoryFS
+    from sandtrap import VirtualFS
     from monkeyfs import patching
 
-    fs = MemoryFS()
+    fs = VirtualFS({})
     with Sandbox(Policy(), filesystem=fs):
         assert patching._installed
     # Patches remain after exit
@@ -646,12 +646,12 @@ def test_net_patches_installed_permanently():
 
 def test_overlapping_sandboxes():
     """Overlapping sandboxes each see their own filesystem."""
-    from sandtrap import MemoryFS
+    from sandtrap import VirtualFS
 
-    fs1 = MemoryFS()
-    fs1.files["/a.txt"] = b"from fs1"
-    fs2 = MemoryFS()
-    fs2.files["/a.txt"] = b"from fs2"
+    fs1 = VirtualFS({})
+    fs1.write("/a.txt", b"from fs1")
+    fs2 = VirtualFS({})
+    fs2.write("/a.txt", b"from fs2")
 
     sandbox1 = Sandbox(Policy(), filesystem=fs1)
     sandbox2 = Sandbox(Policy(), filesystem=fs2)

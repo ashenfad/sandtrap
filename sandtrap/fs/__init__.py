@@ -2,7 +2,7 @@
 
 from monkeyfs import (
     FileSystem,
-    MemoryFS,
+    VirtualFS,
     install,
     suspend_fs_interception,
     use_fs,
@@ -11,7 +11,7 @@ from monkeyfs.context import current_fs
 
 __all__ = [
     "FileSystem",
-    "MemoryFS",
+    "VirtualFS",
     "current_fs",
     "install",
     "suspend_fs_interception",

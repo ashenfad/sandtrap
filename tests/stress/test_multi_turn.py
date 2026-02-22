@@ -4,7 +4,7 @@ import pickle
 
 import pytest
 
-from sandtrap import MemoryFS, Policy, Sandbox, find_refs
+from sandtrap import VirtualFS, Policy, Sandbox, find_refs
 from sandtrap.errors import StTickLimit
 from sandtrap.wrappers import StClass, StFunction
 
@@ -365,8 +365,8 @@ def apply(x):
 
 def test_vfs_module_function_survives_pickle():
     """VFS module function (StFunction in wrapped mode) survives pickle."""
-    fs = MemoryFS()
-    fs.files["/mathlib.py"] = b"def double(x): return x * 2"
+    fs = VirtualFS({})
+    fs.write("/mathlib.py", b"def double(x): return x * 2")
 
     policy = Policy(tick_limit=10_000)
     sandbox = Sandbox(policy, mode="wrapped", filesystem=fs)
@@ -391,11 +391,11 @@ def quadruple(x):
 
 def test_vfs_module_function_in_multi_turn():
     """VFS module dep available via frozen globals across turns."""
-    fs = MemoryFS()
-    fs.files["/utils.py"] = b"""\
+    fs = VirtualFS({})
+    fs.write("/utils.py", b"""\
 def add(a, b): return a + b
 def mul(a, b): return a * b
-"""
+""")
 
     policy = Policy(tick_limit=10_000)
     sandbox = Sandbox(policy, mode="wrapped", filesystem=fs)
@@ -1030,14 +1030,14 @@ result_odd = is_odd(3)
 
 def test_vfs_class_pickle_round_trip():
     """StClass imported from VFS survives pickle and works in a later turn."""
-    fs = MemoryFS()
-    fs.files["/shapes.py"] = b"""\
+    fs = VirtualFS({})
+    fs.write("/shapes.py", b"""\
 class Circle:
     def __init__(self, r):
         self.r = r
     def area(self):
         return 3.14 * self.r * self.r
-"""
+""")
 
     policy = Policy(tick_limit=10_000)
     sandbox = Sandbox(policy, mode="wrapped", filesystem=fs)
@@ -1059,8 +1059,8 @@ result = c.area()
 
 def test_vfs_class_method_calls_vfs_function():
     """VFS class method calling a VFS helper function, pickled across turns."""
-    fs = MemoryFS()
-    fs.files["/lib.py"] = b"""\
+    fs = VirtualFS({})
+    fs.write("/lib.py", b"""\
 def clamp(x, lo, hi):
     if x < lo:
         return lo
@@ -1077,7 +1077,7 @@ class Gauge:
         self.value = clamp(x, self.lo, self.hi)
     def read(self):
         return self.value
-"""
+""")
 
     policy = Policy(tick_limit=10_000)
     sandbox = Sandbox(policy, mode="wrapped", filesystem=fs)
@@ -1107,8 +1107,8 @@ result = g.read()
 
 def test_vfs_class_instance_pickle_round_trip():
     """VFS class instance constructed in VFS, pickled and used in later turn."""
-    fs = MemoryFS()
-    fs.files["/counter.py"] = b"""\
+    fs = VirtualFS({})
+    fs.write("/counter.py", b"""\
 class Counter:
     def __init__(self, start=0):
         self.n = start
@@ -1116,7 +1116,7 @@ class Counter:
         self.n += 1
     def value(self):
         return self.n
-"""
+""")
 
     policy = Policy(tick_limit=10_000)
     sandbox = Sandbox(policy, mode="wrapped", filesystem=fs)
