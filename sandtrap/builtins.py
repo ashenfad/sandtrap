@@ -1,6 +1,7 @@
 """Safe builtins for sandboxed execution."""
 
 import builtins as _builtins
+import copyreg
 import sys
 from io import StringIO
 from typing import Any
@@ -223,7 +224,6 @@ def _reduce_gated(obj: type) -> tuple:
 
 
 # Register so pickle uses _reduce_gated instead of save_global for gated types.
-import copyreg
 copyreg.dispatch_table[_GatedMeta] = _reduce_gated
 
 
