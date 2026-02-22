@@ -649,9 +649,9 @@ def test_overlapping_sandboxes():
     from sandtrap import MemoryFS
 
     fs1 = MemoryFS()
-    fs1.files["/a.txt"] = "from fs1"
+    fs1.files["/a.txt"] = b"from fs1"
     fs2 = MemoryFS()
-    fs2.files["/a.txt"] = "from fs2"
+    fs2.files["/a.txt"] = b"from fs2"
 
     sandbox1 = Sandbox(Policy(), filesystem=fs1)
     sandbox2 = Sandbox(Policy(), filesystem=fs2)
