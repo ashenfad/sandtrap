@@ -6,7 +6,7 @@ from monkeyfs import (
     current_fs,
     install,
     patch,
-    suspend_fs_interception,
+    suspend,
 )
 
 __all__ = [
@@ -14,6 +14,6 @@ __all__ = [
     "VirtualFS",
     "current_fs",
     "install",
-    "suspend_fs_interception",
+    "suspend",
     "patch",
 ]
