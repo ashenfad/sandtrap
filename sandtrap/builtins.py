@@ -154,6 +154,17 @@ SAFE_BUILTINS["NotImplemented"] = NotImplemented
 SAFE_BUILTINS["__build_class__"] = _builtins.__build_class__
 
 
+def _unpickle_real_type(module_name: str, qualname: str) -> type:
+    """Resolve a gated type back to its real type on unpickle."""
+    import importlib
+
+    mod = importlib.import_module(module_name)
+    obj: Any = mod
+    for attr in qualname.split("."):
+        obj = getattr(obj, attr)
+    return obj
+
+
 class _GatedMeta(type):
     """Metaclass for gated type proxies.
 
@@ -203,6 +214,17 @@ def _make_gated_type(
             "__gated_constructable__": constructable,
         },
     )
+
+
+def _reduce_gated(obj: type) -> tuple:
+    """Pickle a gated type as its underlying real type."""
+    real = obj.__gated_real__
+    return _unpickle_real_type, (real.__module__, real.__qualname__)
+
+
+# Register so pickle uses _reduce_gated instead of save_global for gated types.
+import copyreg
+copyreg.dispatch_table[_GatedMeta] = _reduce_gated
 
 
 class TailBuffer:
