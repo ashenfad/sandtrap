@@ -155,6 +155,63 @@ SAFE_BUILTINS["NotImplemented"] = NotImplemented
 SAFE_BUILTINS["__build_class__"] = _builtins.__build_class__
 
 
+class _FrozenBuiltins(dict):
+    """Read-only dict with attribute access for sandbox builtins.
+
+    C-level code (e.g. numpy internals) looks up ``__import__`` via
+    ``PyObject_GetAttr(builtins, "__import__")``.  Regular dicts and
+    ``MappingProxyType`` do not support arbitrary attribute access.
+    This dict subclass adds ``__getattr__`` that falls back to item
+    lookup, and blocks all mutation after construction.
+    """
+
+    _frozen = False  # class-level default; allows __init__ to populate
+
+    def __init__(self, data: dict[str, Any]) -> None:
+        super().__init__(data)
+        object.__setattr__(self, "_frozen", True)
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            return self[name]
+        except KeyError:
+            raise AttributeError(name) from None
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        if self._frozen:
+            raise TypeError("Cannot modify sandbox builtins")
+        super().__setitem__(key, value)
+
+    def __delitem__(self, key: str) -> None:
+        raise TypeError("Cannot modify sandbox builtins")
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise TypeError("Cannot modify sandbox builtins")
+
+    def __delattr__(self, name: str) -> None:
+        raise TypeError("Cannot modify sandbox builtins")
+
+    def update(self, *args: Any, **kwargs: Any) -> None:
+        raise TypeError("Cannot modify sandbox builtins")
+
+    def pop(self, *args: Any, **kwargs: Any) -> Any:
+        raise TypeError("Cannot modify sandbox builtins")
+
+    def popitem(self) -> tuple[str, Any]:
+        raise TypeError("Cannot modify sandbox builtins")
+
+    def clear(self) -> None:
+        raise TypeError("Cannot modify sandbox builtins")
+
+    def setdefault(self, key: str, default: Any = None) -> Any:
+        if key in self:
+            return self[key]
+        raise TypeError("Cannot modify sandbox builtins")
+
+    def __ior__(self, other: Any) -> Any:
+        raise TypeError("Cannot modify sandbox builtins")
+
+
 def _unpickle_real_type(module_name: str, qualname: str) -> type:
     """Resolve a gated type back to its real type on unpickle."""
     import importlib
