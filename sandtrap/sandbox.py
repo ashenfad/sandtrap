@@ -7,13 +7,12 @@ import itertools
 import linecache
 import threading
 import time
-import types
 from collections.abc import Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from .builtins import TailBuffer, _make_gated_type, make_print, make_safe_builtins
+from .builtins import TailBuffer, _FrozenBuiltins, _make_gated_type, make_print, make_safe_builtins
 from .errors import StTimeout, StValidationError, strip_internal_frames
 from .fs import FileSystem, patch
 from .gates import make_gates, wrap_privileged
@@ -225,8 +224,26 @@ class Sandbox:
         ns["print"] = print_fn
         injected["print"] = print_fn
 
-        # Freeze builtins so sandboxed code cannot mutate them
-        ns["__builtins__"] = types.MappingProxyType(ns["__builtins__"])
+        # Add policy-gated __import__ for C-level imports.
+        # C extensions (e.g. numpy) call PyObject_GetAttr(builtins, "__import__")
+        # to import submodules.  Without this, those imports fail because the
+        # sandbox's safe builtins don't include __import__.
+        _real_import = _builtins.__import__
+        _policy = self.policy
+
+        def _policy_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if level == 0 and not _policy.is_import_allowed(name):
+                raise ImportError(
+                    f"Import of '{name}' is not allowed in the sandbox"
+                )
+            return _real_import(name, globals, locals, fromlist, level)
+
+        ns["__builtins__"]["__import__"] = _policy_import
+
+        # Freeze builtins so sandboxed code cannot mutate them.
+        # _FrozenBuiltins adds __getattr__ so C-level PyObject_GetAttr
+        # lookups (like __import__) work alongside normal item access.
+        ns["__builtins__"] = _FrozenBuiltins(ns["__builtins__"])
 
         return ns, injected
 

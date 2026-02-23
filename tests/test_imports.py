@@ -162,3 +162,139 @@ def test_recursive_module_import():
     result = sandbox.exec("import json\nx = json.dumps([1, 2, 3])")
     assert result.error is None
     assert result.namespace["x"] == "[1, 2, 3]"
+
+
+# ---- C-level __import__ tests ----
+#
+# C extensions (e.g. numpy) call PyObject_GetAttr(builtins, "__import__")
+# to import submodules internally.  The sandbox provides a policy-gated
+# __import__ so these work for registered modules but remain blocked for
+# unregistered ones.
+
+
+def test_clevel_import_allowed_for_registered_module():
+    """C-level __import__ succeeds for a policy-registered module."""
+    policy = Policy()
+    policy.module(math)
+    sandbox = Sandbox(policy)
+    # Simulate what C code does: builtins.__import__("math")
+    result = sandbox.exec("""\
+imp = __builtins__["__import__"]
+m = imp("math")
+x = m.sqrt(16)
+""")
+    assert result.error is None
+    assert result.namespace["x"] == 4.0
+
+
+def test_clevel_import_blocked_for_unregistered_module():
+    """C-level __import__ rejects modules not in the policy."""
+    policy = Policy()
+    policy.module(math)
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("""\
+imp = __builtins__["__import__"]
+m = imp("os")
+""")
+    assert result.error is not None
+    assert isinstance(result.error, ImportError)
+    assert "not allowed" in str(result.error)
+
+
+def test_clevel_import_recursive_submodule():
+    """C-level __import__ allows submodules of a recursive registration."""
+    import json
+    import json.decoder  # ensure loaded
+
+    policy = Policy()
+    policy.module(json, recursive=True)
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("""\
+imp = __builtins__["__import__"]
+dec = imp("json.decoder", fromlist=["JSONDecodeError"])
+x = hasattr(dec, "JSONDecodeError")
+""")
+    assert result.error is None
+    assert result.namespace["x"] is True
+
+
+def test_clevel_import_recursive_blocks_unrelated():
+    """Recursive registration for one module doesn't open others."""
+    import json
+
+    policy = Policy()
+    policy.module(json, recursive=True)
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("""\
+imp = __builtins__["__import__"]
+m = imp("subprocess")
+""")
+    assert result.error is not None
+    assert isinstance(result.error, ImportError)
+
+
+def test_clevel_import_relative_passthrough():
+    """C-level __import__ delegates relative imports to real __import__."""
+    policy = Policy()
+    policy.module(math)
+    sandbox = Sandbox(policy)
+    # level > 0 is passed through to real __import__ (which will fail
+    # here because there's no package context, but it's not our gate
+    # that rejects it)
+    result = sandbox.exec("""\
+imp = __builtins__["__import__"]
+try:
+    m = imp("math", level=1)
+    failed = False
+except (ImportError, KeyError, TypeError):
+    failed = True
+""")
+    assert result.error is None
+    assert result.namespace["failed"] is True
+
+
+def test_clevel_import_numpy_operations():
+    """Numpy C-level internal imports work when numpy is registered."""
+    numpy = None
+    try:
+        import numpy
+    except ImportError:
+        pass
+    if numpy is None:
+        import pytest
+
+        pytest.skip("numpy not installed")
+
+    policy = Policy()
+    policy.module(numpy, recursive=True)
+    sandbox = Sandbox(policy)
+    # Operations that trigger C-level submodule imports:
+    # .astype(int), .dtype access, f-string formatting of numpy scalars
+    result = sandbox.exec("""\
+import numpy as np
+arr = np.arange(12)
+arr2 = arr.astype(float)
+d = arr.dtype
+s = arr.sum()
+desc = f"dtype={d}, sum={s}"
+""")
+    assert result.error is None, f"Unexpected error: {result.error}"
+    assert result.namespace["desc"] == "dtype=int64, sum=66"
+
+
+def test_builtins_import_not_accessible_via_getattr():
+    """Sandboxed code cannot access __import__ via attribute access.
+
+    The AST rewriter transforms obj.attr to __st_getattr__(obj, attr),
+    and __import__ is not in DEFAULT_ALLOWED_DUNDERS, so attribute-style
+    access is blocked.  Only item access (__builtins__["__import__"])
+    works, which is the path C-level code uses.
+    """
+    policy = Policy()
+    policy.module(math)
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("""\
+x = __builtins__.__import__
+""")
+    assert result.error is not None
+    assert isinstance(result.error, AttributeError)

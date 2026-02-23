@@ -594,6 +594,21 @@ except TypeError:
     assert result.namespace["deleted"] is False
 
 
+def test_builtins_import_frozen():
+    """Sandboxed code cannot overwrite __import__ in builtins."""
+    policy = Policy()
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("""\
+try:
+    __builtins__["__import__"] = lambda *a, **k: None
+    mutated = True
+except TypeError:
+    mutated = False
+""")
+    assert result.error is None
+    assert result.namespace["mutated"] is False
+
+
 def test_negative_timeout_still_runs():
     """Negative timeout doesn't prevent execution."""
     policy = Policy()
