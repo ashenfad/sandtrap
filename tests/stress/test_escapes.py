@@ -232,6 +232,48 @@ def test_fstring_attr_access(sandbox):
     assert result.error is not None
 
 
+def test_fstring_format_spec(sandbox):
+    """f-string with format spec still gates attribute access."""
+    result = sandbox.exec("x = 42; y = f'{x.__class__!r:>20}'")
+    assert result.error is not None
+
+
+def test_fstring_nested_format_spec(sandbox):
+    """f-string with nested format spec doesn't bypass gates."""
+    result = sandbox.exec("""\
+class Obj:
+    _secret = 42
+o = Obj()
+w = 10
+y = f'{o._secret:{w}}'
+""")
+    assert result.error is not None
+    assert isinstance(result.error, AttributeError)
+
+
+def test_fstring_conversion_safe(sandbox):
+    """f-string !r/!s/!a conversions on safe values work fine."""
+    result = sandbox.exec("""\
+x = 42
+a = f'{x!r}'
+b = f'{x!s}'
+c = f'{x!a}'
+""")
+    assert result.error is None
+    assert result.namespace["a"] == "42"
+
+
+def test_fstring_method_call_gated(sandbox):
+    """f-string calling a gated method is blocked."""
+    result = sandbox.exec("""\
+class Obj:
+    _hidden = 99
+o = Obj()
+y = f'{o._hidden.__str__()}'
+""")
+    assert result.error is not None
+
+
 # --- type() three-arg form ---
 
 
@@ -246,6 +288,30 @@ def test_type_one_arg_allowed(sandbox):
     result = sandbox.exec("t = type(42)")
     assert result.error is None
     assert result.namespace["t"] is int
+
+
+def test_type_via_alias_blocked(sandbox):
+    """Assigning type to a variable and calling 3-arg form is blocked."""
+    result = sandbox.exec("t = type; X = t('Foo', (object,), {})")
+    assert result.error is not None
+
+
+def test_type_via_class_class(sandbox):
+    """obj.__class__.__class__ is blocked by attribute gate."""
+    result = sandbox.exec("x = (1).__class__.__class__")
+    assert result.error is not None
+    assert isinstance(result.error, AttributeError)
+
+
+def test_type_via_mro_to_type(sandbox):
+    """Traversing MRO to reach type is blocked."""
+    result = sandbox.exec("""\
+class Foo:
+    pass
+t = Foo.__mro__[-1].__class__
+""")
+    assert result.error is not None
+    assert isinstance(result.error, AttributeError)
 
 
 # --- Frame / generator internal access ---
