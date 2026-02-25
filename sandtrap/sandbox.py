@@ -64,10 +64,6 @@ class Sandbox:
         self.print_handler = print_handler
         self._cancel_flag = threading.Event()
 
-        # Install network patches eagerly so _build_namespace captures patched versions
-        if not policy.allow_network:
-            install_net()
-
     def __enter__(self) -> "Sandbox":
         return self
 
