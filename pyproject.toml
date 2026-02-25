@@ -11,6 +11,7 @@ keywords = ["sandbox", "security", "ast", "python", "runtime"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -19,12 +20,18 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Topic :: Security",
     "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
 ]
 requires-python = ">=3.10"
-
 dependencies = [
     "monkeyfs",
 ]
+
+[project.urls]
+"Homepage" = "https://github.com/ashenfad/sandtrap"
+"Bug Tracker" = "https://github.com/ashenfad/sandtrap/issues"
+"Documentation" = "https://github.com/ashenfad/sandtrap#readme"
+"Source" = "https://github.com/ashenfad/sandtrap"
 
 [project.optional-dependencies]
 dev = [
@@ -46,9 +53,8 @@ select = ["E4", "E7", "E9", "F", "I"]
 ignore = ["E731"]
 
 [tool.pytest.ini_options]
-pythonpath = [
-  "."
-]
+testpaths = ["tests"]
+pythonpath = ["."]
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
@@ -60,5 +66,3 @@ packages = {find = {where = ["./"], exclude = ["tests*"]}}
 [tool.setuptools.package-data]
 sandtrap = ["py.typed"]
 
-[tool.uv.sources]
-monkeyfs = { path = "../monkeyfs", editable = true }
