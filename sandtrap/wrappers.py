@@ -7,10 +7,21 @@ from typing import Any
 
 from .builtins import SAFE_EXCEPTIONS, SAFE_FN_NAMES, make_safe_builtins
 
-_SAFE_BUILTIN_NAMES = set(SAFE_FN_NAMES) | set(SAFE_EXCEPTIONS) | {
-    "True", "False", "None", "Ellipsis", "NotImplemented",
-    "print", "getattr", "hasattr", "locals",
-}
+_SAFE_BUILTIN_NAMES = (
+    set(SAFE_FN_NAMES)
+    | set(SAFE_EXCEPTIONS)
+    | {
+        "True",
+        "False",
+        "None",
+        "Ellipsis",
+        "NotImplemented",
+        "print",
+        "getattr",
+        "hasattr",
+        "locals",
+    }
+)
 
 
 def _collect_global_names(code: Any) -> set[str]:
@@ -25,7 +36,6 @@ def _collect_global_names(code: Any) -> set[str]:
         if hasattr(const, "co_names"):
             names.update(_collect_global_names(const))
     return names
-
 
 
 class StFunction:
@@ -91,7 +101,8 @@ class StFunction:
             return set(stored)
         if self._compiled is not None and hasattr(self._compiled, "__code__"):
             return {
-                n for n in _collect_global_names(self._compiled.__code__)
+                n
+                for n in _collect_global_names(self._compiled.__code__)
                 if not n.startswith("__st_")
                 and n not in _SAFE_BUILTIN_NAMES
                 and n != self._name
@@ -106,7 +117,11 @@ class StFunction:
 
         # Freeze closure variables from the compiled function
         # (skip if _compiled is a wrapper like StFunction, not a raw function)
-        if compiled is not None and hasattr(compiled, "__closure__") and compiled.__closure__:
+        if (
+            compiled is not None
+            and hasattr(compiled, "__closure__")
+            and compiled.__closure__
+        ):
             freevars = compiled.__code__.co_freevars
             frozen: dict[str, Any] = {}
             for name, cell in zip(freevars, compiled.__closure__):
@@ -262,8 +277,7 @@ class StClass:
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         if self._compiled_cls is None:
             raise RuntimeError(
-                f"StClass '{self._name}' is not active "
-                f"-- call activate() first"
+                f"StClass '{self._name}' is not active -- call activate() first"
             )
         if self._sandbox is not None and self._gates is not None:
             instance = self._sandbox._call_in_context(
@@ -283,8 +297,7 @@ class StClass:
         compiled = self.__dict__.get("_compiled_cls")
         if compiled is None:
             raise RuntimeError(
-                f"StClass '{self._name}' is not active "
-                f"-- call activate() first"
+                f"StClass '{self._name}' is not active -- call activate() first"
             )
         return getattr(compiled, name)
 
@@ -373,7 +386,9 @@ class StInstance:
 
     __slots__ = ("_st_class", "_st_instance", "_frozen_attrs", "_st_getattr_gate")
 
-    def __init__(self, sb_class: StClass, instance: Any, getattr_gate: Any = None) -> None:
+    def __init__(
+        self, sb_class: StClass, instance: Any, getattr_gate: Any = None
+    ) -> None:
         object.__setattr__(self, "_st_class", sb_class)
         object.__setattr__(self, "_st_instance", instance)
         object.__setattr__(self, "_st_getattr_gate", getattr_gate)
@@ -381,9 +396,7 @@ class StInstance:
     def __getattr__(self, name: str) -> Any:
         instance = object.__getattribute__(self, "_st_instance")
         if instance is None:
-            raise RuntimeError(
-                "StInstance is not active -- call activate() first"
-            )
+            raise RuntimeError("StInstance is not active -- call activate() first")
         gate = object.__getattribute__(self, "_st_getattr_gate")
         if gate is not None:
             return gate(instance, name)
@@ -392,17 +405,13 @@ class StInstance:
     def __setattr__(self, name: str, value: Any) -> None:
         instance = object.__getattribute__(self, "_st_instance")
         if instance is None:
-            raise RuntimeError(
-                "StInstance is not active -- call activate() first"
-            )
+            raise RuntimeError("StInstance is not active -- call activate() first")
         setattr(instance, name, value)
 
     def __delattr__(self, name: str) -> None:
         instance = object.__getattribute__(self, "_st_instance")
         if instance is None:
-            raise RuntimeError(
-                "StInstance is not active -- call activate() first"
-            )
+            raise RuntimeError("StInstance is not active -- call activate() first")
         delattr(instance, name)
 
     def __repr__(self) -> str:
@@ -444,9 +453,7 @@ class StInstance:
         """
         sb_class = object.__getattribute__(self, "_st_class")
         if sb_class._compiled_cls is None:
-            raise RuntimeError(
-                "StClass must be activated before its instances"
-            )
+            raise RuntimeError("StClass must be activated before its instances")
         cls = sb_class._compiled_cls
         instance = cls.__new__(cls)
         frozen = object.__getattribute__(self, "_frozen_attrs")
@@ -461,7 +468,9 @@ class StInstance:
                 elif isinstance(val, StInstance):
                     nested_class = object.__getattribute__(val, "_st_class")
                     if nested_class._compiled_cls is None:
-                        nested_class.activate(gates, sandbox=sandbox, namespace=namespace)
+                        nested_class.activate(
+                            gates, sandbox=sandbox, namespace=namespace
+                        )
                     if object.__getattribute__(val, "_st_instance") is None:
                         val.activate(gates=gates, sandbox=sandbox, namespace=namespace)
 
@@ -477,9 +486,11 @@ def _make_dunder_forwarder(name: str):
     Protocol dunders (__len__, __iter__, __add__, etc.) are safe — they only
     operate on the object's own data and don't expose interpreter internals.
     """
+
     def forwarder(self, *args, **kwargs):
         instance = object.__getattribute__(self, "_st_instance")
         return getattr(instance, name)(*args, **kwargs)
+
     forwarder.__name__ = name
     forwarder.__qualname__ = f"StInstance.{name}"
     return forwarder
@@ -489,17 +500,48 @@ def _make_dunder_forwarder(name: str):
 # __repr__ is handled explicitly above; __init__/__getattr__/__setattr__/__delattr__
 # are part of StInstance's own proxy machinery.
 _FORWARDED_DUNDERS = [
-    "__str__", "__len__", "__bool__", "__hash__",
-    "__iter__", "__next__", "__contains__",
-    "__getitem__", "__setitem__", "__delitem__",
-    "__eq__", "__ne__", "__lt__", "__le__", "__gt__", "__ge__",
-    "__add__", "__radd__", "__sub__", "__rsub__",
-    "__mul__", "__rmul__", "__truediv__", "__rtruediv__",
-    "__floordiv__", "__rfloordiv__", "__mod__", "__rmod__",
-    "__pow__", "__rpow__", "__neg__", "__pos__", "__abs__",
-    "__int__", "__float__", "__index__",
-    "__enter__", "__exit__",
-    "__aenter__", "__aexit__", "__aiter__", "__anext__",
+    "__str__",
+    "__len__",
+    "__bool__",
+    "__hash__",
+    "__iter__",
+    "__next__",
+    "__contains__",
+    "__getitem__",
+    "__setitem__",
+    "__delitem__",
+    "__eq__",
+    "__ne__",
+    "__lt__",
+    "__le__",
+    "__gt__",
+    "__ge__",
+    "__add__",
+    "__radd__",
+    "__sub__",
+    "__rsub__",
+    "__mul__",
+    "__rmul__",
+    "__truediv__",
+    "__rtruediv__",
+    "__floordiv__",
+    "__rfloordiv__",
+    "__mod__",
+    "__rmod__",
+    "__pow__",
+    "__rpow__",
+    "__neg__",
+    "__pos__",
+    "__abs__",
+    "__int__",
+    "__float__",
+    "__index__",
+    "__enter__",
+    "__exit__",
+    "__aenter__",
+    "__aexit__",
+    "__aiter__",
+    "__anext__",
     "__call__",
 ]
 

@@ -5,8 +5,8 @@ import pathlib
 
 import pytest
 
-from sandtrap import VirtualFS, Policy, Sandbox
-from sandtrap.fs import current_fs, suspend, patch
+from sandtrap import Policy, Sandbox, VirtualFS
+from sandtrap.fs import current_fs, patch, suspend
 
 
 def test_fs_routes_to_vfs():
@@ -118,7 +118,6 @@ cwd = os.getcwd()
     assert result.namespace["cwd"] == os.getcwd()
 
 
-
 def test_vfs_path_normalization():
     """VirtualFS normalizes .. and . in paths."""
     fs = VirtualFS({})
@@ -175,8 +174,6 @@ def test_vfs_mkdir_parents():
     assert fs.isdir("/a")
     assert fs.isdir("/a/b")
     assert fs.isdir("/a/b/c")
-
-
 
 
 def test_vfs_rename_directory():

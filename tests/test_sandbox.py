@@ -126,7 +126,12 @@ def test_error_traceback_has_sandtrap_filename(sandbox):
     result = sandbox.exec("x = 1\ny = 1/0\nz = 3")
     assert result.error is not None
     import traceback
-    tb_text = "".join(traceback.format_exception(type(result.error), result.error, result.error.__traceback__))
+
+    tb_text = "".join(
+        traceback.format_exception(
+            type(result.error), result.error, result.error.__traceback__
+        )
+    )
     assert "<sandtrap:" in tb_text
 
 
@@ -639,8 +644,9 @@ def test_sandbox_context_manager(sandbox):
 
 def test_fs_patches_installed_permanently():
     """FS patches are installed once and remain active."""
-    from sandtrap import VirtualFS
     from monkeyfs import patching
+
+    from sandtrap import VirtualFS
 
     fs = VirtualFS({})
     with Sandbox(Policy(), filesystem=fs):

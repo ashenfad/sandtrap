@@ -20,6 +20,7 @@ def _extract_names(nodes: Sequence[ast.AST]) -> set[str]:
                 names.add(child.id)
     return names
 
+
 # Names that cannot be assigned to, deleted, or declared global/nonlocal.
 _BLOCKED_NAMES = frozenset({"exec", "eval", "compile", "__import__"})
 
@@ -184,6 +185,7 @@ class Rewriter(ast.NodeTransformer):
 
     visit_Module = _recurse
     visit_Expr = _recurse
+
     def visit_AnnAssign(self, node: ast.AnnAssign) -> ast.AST | list[ast.stmt]:
         if isinstance(node.target, ast.Attribute) and node.value is not None:
             # obj.attr: annotation = value → __st_setattr__(obj, 'attr', value)
@@ -191,6 +193,7 @@ class Rewriter(ast.NodeTransformer):
             value = self.visit(node.value)
             return self._make_setattr(obj, node.target.attr, value, node)
         return self._recurse(node)
+
     visit_Return = _recurse
     visit_Raise = _recurse
     visit_Assert = _recurse
@@ -249,9 +252,7 @@ class Rewriter(ast.NodeTransformer):
         tmp = self._new_tmp()
         stmts.append(
             ast.copy_location(
-                ast.Assign(
-                    targets=[ast.Name(id=tmp, ctx=ast.Store())], value=obj
-                ),
+                ast.Assign(targets=[ast.Name(id=tmp, ctx=ast.Store())], value=obj),
                 node,
             )
         )
@@ -283,9 +284,7 @@ class Rewriter(ast.NodeTransformer):
                 stmts.append(self._make_delattr(obj, target.attr, node))
             else:
                 target = self.visit(target)
-                stmts.append(
-                    ast.copy_location(ast.Delete(targets=[target]), node)
-                )
+                stmts.append(ast.copy_location(ast.Delete(targets=[target]), node))
 
         return stmts
 
@@ -517,6 +516,7 @@ class Rewriter(ast.NodeTransformer):
         )
         ast.copy_location(wrap_assign, node)
         return [node, wrap_assign]
+
     visit_Lambda = _recurse
 
     # ------------------------------------------------------------------
@@ -570,6 +570,7 @@ class Rewriter(ast.NodeTransformer):
                     col=node.col_offset,
                 )
         return self._recurse(node)
+
     visit_Try = _recurse
 
     # Python 3.11+: TryStar (try/except*)
@@ -672,6 +673,7 @@ class Rewriter(ast.NodeTransformer):
             node.type = ast.Name(id="Exception", ctx=ast.Load())
             ast.copy_location(node.type, node)
         return self._recurse(node)
+
     def visit_comprehension(self, node: ast.comprehension) -> ast.AST:
         node = cast(ast.comprehension, self._recurse(node))
         # Inject checkpoint as an always-true filter: __st_checkpoint__() or True
@@ -688,6 +690,7 @@ class Rewriter(ast.NodeTransformer):
         ast.copy_location(always_true, node.iter)
         node.ifs.insert(0, always_true)
         return node
+
     visit_arguments = _recurse
     visit_arg = _recurse
     visit_keyword = _recurse

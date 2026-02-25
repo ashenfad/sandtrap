@@ -1,6 +1,5 @@
 """Tests for async sandbox execution (Phase 7)."""
 
-
 import pytest
 
 from sandtrap import Policy, Sandbox

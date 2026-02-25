@@ -2,7 +2,7 @@
 
 import pickle
 
-from sandtrap import VirtualFS, Policy, Sandbox
+from sandtrap import Policy, Sandbox, VirtualFS
 from sandtrap.wrappers import ModuleRef, StClass, StFunction
 
 
@@ -79,13 +79,16 @@ def test_vfs_module_sandboxed():
     """VFS module code goes through the sandbox gates."""
     sandbox, fs = _make_sandbox()
     # Module code that tries to access a private attribute should fail
-    fs.write("/bad.py", b"""\
+    fs.write(
+        "/bad.py",
+        b"""\
 class Foo:
     _secret = 42
 
 f = Foo()
 val = f._secret
-""")
+""",
+    )
     result = sandbox.exec("import bad")
     assert result.error is not None
     assert isinstance(result.error, AttributeError)
@@ -99,6 +102,7 @@ def test_vfs_module_uses_checkpoints():
     fs.write("/slow.py", b"while True: pass")
 
     from sandtrap.errors import StTimeout
+
     result = sandbox.exec("import slow")
     assert result.error is not None
     assert isinstance(result.error, StTimeout)
@@ -129,11 +133,14 @@ def test_vfs_module_can_import_registered():
     policy = Policy()
     policy.module(math)
     sandbox, fs = _make_sandbox(policy=policy)
-    fs.write("/geometry.py", b"""\
+    fs.write(
+        "/geometry.py",
+        b"""\
 import math
 def circle_area(r):
     return math.pi * r * r
-""")
+""",
+    )
 
     result = sandbox.exec("""\
 from geometry import circle_area
@@ -147,11 +154,14 @@ def test_vfs_module_can_import_vfs_module():
     """VFS modules can import other VFS modules."""
     sandbox, fs = _make_sandbox()
     fs.write("/base.py", b"FACTOR = 10")
-    fs.write("/derived.py", b"""\
+    fs.write(
+        "/derived.py",
+        b"""\
 import base
 def scaled(x):
     return x * base.FACTOR
-""")
+""",
+    )
 
     result = sandbox.exec("""\
 from derived import scaled
@@ -164,14 +174,17 @@ result = scaled(5)
 def test_vfs_module_classes():
     """VFS modules can define and export classes."""
     sandbox, fs = _make_sandbox()
-    fs.write("/models.py", b"""\
+    fs.write(
+        "/models.py",
+        b"""\
 class Point:
     def __init__(self, x, y):
         self.x = x
         self.y = y
     def magnitude(self):
         return (self.x ** 2 + self.y ** 2) ** 0.5
-""")
+""",
+    )
 
     result = sandbox.exec("""\
 from models import Point
@@ -258,10 +271,13 @@ def test_relative_import_same_package():
     """from .sibling import name works within a VFS package."""
     sandbox, fs = _make_sandbox()
     fs.write("/pkg/utils.py", b"FACTOR = 7")
-    fs.write("/pkg/main.py", b"""\
+    fs.write(
+        "/pkg/main.py",
+        b"""\
 from .utils import FACTOR
 result = FACTOR * 3
-""")
+""",
+    )
 
     result = sandbox.exec("""\
 from pkg import main
@@ -275,10 +291,13 @@ def test_relative_import_dot_only():
     """from . import sibling works to import a sibling module."""
     sandbox, fs = _make_sandbox()
     fs.write("/pkg/helpers.py", b"X = 42")
-    fs.write("/pkg/main.py", b"""\
+    fs.write(
+        "/pkg/main.py",
+        b"""\
 from . import helpers
 result = helpers.X
-""")
+""",
+    )
 
     result = sandbox.exec("""\
 from pkg import main
@@ -292,10 +311,13 @@ def test_relative_import_parent_level():
     """from ..sibling import name goes up one level."""
     sandbox, fs = _make_sandbox()
     fs.write("/pkg/shared.py", b"VAL = 100")
-    fs.write("/pkg/sub/inner.py", b"""\
+    fs.write(
+        "/pkg/sub/inner.py",
+        b"""\
 from ..shared import VAL
 doubled = VAL * 2
-""")
+""",
+    )
 
     result = sandbox.exec("""\
 from pkg.sub import inner
@@ -345,14 +367,20 @@ def test_relative_import_chained():
     """Relative imports work across multiple levels of VFS modules."""
     sandbox, fs = _make_sandbox()
     fs.write("/a/b/c.py", b"VAL = 1")
-    fs.write("/a/b/d.py", b"""\
+    fs.write(
+        "/a/b/d.py",
+        b"""\
 from .c import VAL
 DOUBLED = VAL * 2
-""")
-    fs.write("/a/entry.py", b"""\
+""",
+    )
+    fs.write(
+        "/a/entry.py",
+        b"""\
 from .b.d import DOUBLED
 RESULT = DOUBLED + 10
-""")
+""",
+    )
 
     result = sandbox.exec("""\
 from a import entry
@@ -421,12 +449,15 @@ result = double(5)
 def test_vfs_class_is_sbclass_in_wrapped_mode():
     """VFS module classes are StClass in wrapped mode."""
     sandbox, fs = _make_sandbox()
-    fs.write("/models.py", b"""\
+    fs.write(
+        "/models.py",
+        b"""\
 class Point:
     def __init__(self, x, y):
         self.x = x
         self.y = y
-""")
+""",
+    )
 
     result = sandbox.exec("""\
 from models import Point
@@ -467,7 +498,9 @@ def test_vfs_module_getattr_gated():
     policy = Policy(tick_limit=10_000)
     policy.cls(Secret)
     sandbox, fs = _make_sandbox(policy=policy)
-    fs.write("/probe.py", b"""\
+    fs.write(
+        "/probe.py",
+        b"""\
 def read_private(obj):
     return getattr(obj, '_hidden', 'blocked')
 
@@ -479,7 +512,8 @@ def has_private(obj):
 
 def has_public(obj):
     return hasattr(obj, 'public')
-""")
+""",
+    )
 
     result = sandbox.exec("""\
 from probe import read_private, read_public, has_private, has_public

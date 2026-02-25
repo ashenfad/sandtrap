@@ -139,7 +139,9 @@ class _FunctionRefAnalyzer(ast.NodeVisitor):
     global/nonlocal) are "free" and must come from an enclosing scope.
     """
 
-    def __init__(self, node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda) -> None:
+    def __init__(
+        self, node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda
+    ) -> None:
         self.bound: set[str] = set()
         self.loaded: set[str] = set()
         self.globals: set[str] = set()
@@ -293,7 +295,11 @@ class _FunctionRefAnalyzer(ast.NodeVisitor):
         """Visit a node, treating scope_bound names as locally bound."""
         for child in ast.walk(node):
             if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load):
-                if child.id not in scope_bound and child.id not in self.bound and child.id not in self.globals:
+                if (
+                    child.id not in scope_bound
+                    and child.id not in self.bound
+                    and child.id not in self.globals
+                ):
                     self.loaded.add(child.id)
 
     @staticmethod

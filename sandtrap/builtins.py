@@ -236,9 +236,7 @@ class _GatedMeta(type):
     def __call__(cls, *args: Any, **kwargs: Any) -> Any:
         real = cls.__gated_real__
         if not cls.__gated_constructable__:
-            raise TypeError(
-                f"'{real.__name__}' is not constructable in the sandbox"
-            )
+            raise TypeError(f"'{real.__name__}' is not constructable in the sandbox")
         cls.__gated_checkpoint__()
         return real(*args, **kwargs)
 
@@ -318,7 +316,9 @@ class TailBuffer:
 def make_print(buffer: StringIO | TailBuffer) -> Any:
     """Create a print function that writes to the given buffer."""
 
-    def _print(*args: Any, sep: str = " ", end: str = "\n", file: Any = None, **_kwargs: Any) -> None:
+    def _print(
+        *args: Any, sep: str = " ", end: str = "\n", file: Any = None, **_kwargs: Any
+    ) -> None:
         if file is not None:
             raise ValueError("print(file=...) is not supported in the sandbox")
         text = sep.join(str(a) for a in args) + end
@@ -379,9 +379,7 @@ def make_safe_builtins(
 
         def _gated_build_class(func, name, *bases, **kwargs):
             unwrapped = tuple(
-                b.__gated_real__
-                if isinstance(type(b), _GatedMeta)
-                else b
+                b.__gated_real__ if isinstance(type(b), _GatedMeta) else b
                 for b in bases
             )
             return real_build_class(func, name, *unwrapped, **kwargs)
