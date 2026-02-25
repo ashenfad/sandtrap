@@ -153,8 +153,13 @@ def test_fstring(sandbox):
 
 
 @pytest.mark.skipif(sys.version_info < (3, 14), reason="t-strings require 3.14+")
-def test_tstring(sandbox):
-    result = sandbox.exec("""\
+def test_tstring():
+    import string.templatelib
+
+    policy = Policy(timeout=5.0)
+    policy.module(string.templatelib)
+    sb = Sandbox(policy)
+    result = sb.exec("""\
 from string.templatelib import Template
 name = 'world'
 result = t'hello {name}'
