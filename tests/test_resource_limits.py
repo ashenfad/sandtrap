@@ -1,5 +1,7 @@
 """Tests for resource limits (memory + stdout caps)."""
 
+import sys
+
 import pytest
 
 from sandtrap import Policy, Sandbox
@@ -83,25 +85,37 @@ for i in range(100):
     assert "truncated" not in result.stdout
 
 
-# --- Memory limit tests (checkpoint-based, works on all platforms) ---
+# --- Memory limit tests ---
+# On Linux, RLIMIT_AS provides kernel-enforced limits.
+# On macOS, RLIMIT_AS is not supported; checkpoint-based detection is used.
 
 
-@pytest.mark.xfail(
-    reason="Peak RSS measurement is process-wide; may not trip on CI if earlier "
-    "tests already raised the high-water mark",
-    strict=False,
-)
 def test_memory_limit_enforcement():
     """Memory limit causes MemoryError for excessive allocation."""
     policy = Policy()
     policy.memory_limit = 10  # 10 MB headroom
     sandbox = Sandbox(policy)
-    # Allocate ~80MB in a loop so checkpoints fire
+    # Loop triggers checkpoints; on Linux RLIMIT_AS also kicks in
     result = sandbox.exec("""\
 chunks = []
 for i in range(10):
     chunks.append(bytearray(8 * 1024 * 1024))
 """)
+    assert result.error is not None
+    assert isinstance(result.error, MemoryError)
+
+
+@pytest.mark.skipif(
+    sys.platform == "darwin",
+    reason="macOS does not support RLIMIT_AS",
+)
+def test_memory_limit_single_allocation():
+    """RLIMIT_AS catches a single large allocation without checkpoints."""
+    policy = Policy()
+    policy.memory_limit = 10  # 10 MB headroom
+    sandbox = Sandbox(policy)
+    # Single allocation, no loop — kernel enforces it
+    result = sandbox.exec("x = bytearray(100 * 1024 * 1024)")
     assert result.error is not None
     assert isinstance(result.error, MemoryError)
 
