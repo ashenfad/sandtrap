@@ -231,6 +231,8 @@ class Sandbox:
         _policy = self.policy
 
         def _policy_import(name, globals=None, locals=None, fromlist=(), level=0):
+            # Relative imports (level > 0) skip policy — they resolve within
+            # the VFS package hierarchy and are handled by monkeyfs.
             if level == 0 and not _policy.is_import_allowed(name):
                 raise ImportError(f"Import of '{name}' is not allowed in the sandbox")
             return _real_import(name, globals, locals, fromlist, level)
