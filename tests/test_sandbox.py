@@ -643,16 +643,17 @@ def test_sandbox_context_manager(sandbox):
 
 
 def test_fs_patches_installed_permanently():
-    """FS patches are installed once and remain active."""
-    from monkeyfs import patching
+    """FS patches are installed on first exec and remain active."""
+    import importlib
 
     from sandtrap import VirtualFS
 
+    _install_mod = importlib.import_module("monkeyfs.patching.install")
+
     fs = VirtualFS({})
-    with Sandbox(Policy(), filesystem=fs):
-        assert patching._installed
-    # Patches remain after exit
-    assert patching._installed
+    sandbox = Sandbox(Policy(), filesystem=fs)
+    sandbox.exec("x = 1")
+    assert _install_mod._installed
 
 
 def test_net_patches_installed_permanently():
