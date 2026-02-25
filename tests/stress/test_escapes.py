@@ -109,17 +109,13 @@ def test_no_input(sandbox):
 # --- Builtins mutation ---
 
 
-def test_builtins_frozen(sandbox):
-    """__builtins__ should be a frozen MappingProxyType."""
-    result = sandbox.exec("__builtins__['eval'] = lambda x: x")
+def test_builtins_not_readable(sandbox):
+    """__builtins__ cannot be accessed from sandboxed code."""
+    from sandtrap.errors import StValidationError
+
+    result = sandbox.exec("x = __builtins__")
     assert result.error is not None
-
-
-def test_builtins_not_assignable(sandbox):
-    """Can't replace __builtins__ entirely."""
-    sandbox.exec("__builtins__ = {}")
-    # This may succeed (assigns a local) but shouldn't bypass the sandbox
-    # The real builtins are already baked into the namespace
+    assert isinstance(result.error, StValidationError)
 
 
 # --- Gate evasion ---

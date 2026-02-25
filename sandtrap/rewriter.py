@@ -24,6 +24,12 @@ def _extract_names(nodes: Sequence[ast.AST]) -> set[str]:
 # Names that cannot be assigned to, deleted, or declared global/nonlocal.
 _BLOCKED_NAMES = frozenset({"exec", "eval", "compile", "__import__"})
 
+# Names that cannot be read (Load context).  __builtins__ is blocked so
+# sandboxed code cannot fish out __import__ via __builtins__["__import__"].
+# __import__ is blocked because the real __import__ lives in builtins
+# (for C extension support) and must not be callable from user code.
+_BLOCKED_LOAD_NAMES = frozenset({"__builtins__", "__import__"})
+
 
 class Rewriter(ast.NodeTransformer):
     """Fail-closed AST rewriter.
@@ -610,6 +616,12 @@ class Rewriter(ast.NodeTransformer):
         if isinstance(node.ctx, ast.Load) and node.id.startswith("__st_"):
             raise StValidationError(
                 f"Cannot reference reserved name '{node.id}'",
+                lineno=getattr(node, "lineno", None),
+                col=getattr(node, "col_offset", None),
+            )
+        if isinstance(node.ctx, ast.Load) and node.id in _BLOCKED_LOAD_NAMES:
+            raise StValidationError(
+                f"Cannot access '{node.id}'",
                 lineno=getattr(node, "lineno", None),
                 col=getattr(node, "col_offset", None),
             )
