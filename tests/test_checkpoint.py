@@ -157,13 +157,13 @@ def test_tick_count_on_result():
     """result.ticks reflects the actual checkpoint count."""
     policy = Policy(timeout=None)
     sandbox = Sandbox(policy)
-    # range(5) = 1 tick, + 5 loop iterations = 6 ticks
+    # 5 loop iterations = 5 ticks (type builtins like range don't tick)
     result = sandbox.exec("""\
 for i in range(5):
     pass
 """)
     assert result.error is None
-    assert result.ticks == 6
+    assert result.ticks == 5
 
 
 def test_tick_limit_none_no_enforcement():
@@ -175,7 +175,7 @@ for i in range(10000):
     pass
 """)
     assert result.error is None
-    assert result.ticks == 10001
+    assert result.ticks == 10000
 
 
 def test_comprehension_respects_tick_limit():

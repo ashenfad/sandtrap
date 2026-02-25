@@ -337,23 +337,27 @@ def make_safe_builtins(
     VFS modules, reactivated functions/classes) so that ``getattr()``
     and ``hasattr()`` always route through the attribute policy.
 
-    When *checkpoint* is provided, every callable builtin gets a gate
+    When *checkpoint* is provided, non-type callable builtins get a gate
     that fires one checkpoint (tick + resource check) before executing.
-    Types are wrapped with ``_GatedType`` so isinstance/issubclass
-    and attribute access (e.g. ``int.from_bytes``) still work.
+    Type builtins (``str``, ``int``, ``dict``, etc.) are left as real
+    types so that library code receiving them (e.g. ``df.astype(str)``,
+    ``np.dtype(int)``) works correctly.  Loop-head checkpoints inserted
+    by the AST rewriter cover the resource-intensive cases.
     """
     builtins = dict(SAFE_BUILTINS)
 
     if checkpoint is not None:
         # super() uses frame magic (__class__ cell) — gating breaks it.
-        _ungated_types = frozenset({"super"})
+        _ungated = frozenset({"super"})
 
         for name in SAFE_FN_NAMES:
-            if name in _ungated_types:
+            if name in _ungated:
                 continue
             original = builtins[name]
+            # Leave real types in builtins so library code that receives
+            # them (e.g. pandas .astype(str), numpy dtype(int)) works.
             if isinstance(original, type):
-                builtins[name] = _make_gated_type(original, checkpoint)
+                continue
             elif callable(original):
                 fn = original
 
@@ -365,16 +369,8 @@ def make_safe_builtins(
                 _gated.__qualname__ = name
                 builtins[name] = _gated
 
-        # type() is already restricted to single-arg form; gate it too
-        safe_type = builtins["type"]
-
-        def _gated_type(obj, /, _fn=safe_type):
-            checkpoint()
-            return _fn(obj)
-
-        builtins["type"] = _gated_type
-
-        # __build_class__ must unwrap gated bases
+        # __build_class__ must unwrap _GatedMeta bases (used for
+        # non-constructable registered classes).
         real_build_class = _builtins.__build_class__
 
         def _gated_build_class(func, name, *bases, **kwargs):

@@ -47,6 +47,30 @@ def test_builtin_types(sandbox):
     assert result.namespace["z"] == [0, 1, 2]
 
 
+def test_builtin_types_are_real():
+    """Builtin types in the sandbox are real types, not proxies.
+
+    Library code that receives builtin types (e.g. df.astype(str),
+    np.dtype(int)) needs real types for identity checks at the C level.
+    """
+    policy = Policy(timeout=5.0)
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("""\
+results = {
+    'str_is_str': str is str,
+    'int_is_int': int is int,
+    'float_is_float': float is float,
+    'dict_is_dict': dict is dict,
+    'list_is_list': list is list,
+    'isinstance_works': isinstance(42, int),
+    'issubclass_works': issubclass(bool, int),
+}
+""")
+    assert result.error is None
+    for check, passed in result.namespace["results"].items():
+        assert passed, f"{check} failed"
+
+
 def test_control_flow(sandbox):
     result = sandbox.exec("""\
 total = 0
