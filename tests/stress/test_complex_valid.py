@@ -400,7 +400,13 @@ def classify(x):
 results = [classify(0), classify(5), classify(-3), classify("hi"), classify([])]
 """)
     assert result.error is None
-    assert result.namespace["results"] == ["zero", "positive", "negative", "string", "other"]
+    assert result.namespace["results"] == [
+        "zero",
+        "positive",
+        "negative",
+        "string",
+        "other",
+    ]
 
 
 # --- Complex comprehensions ---

@@ -209,7 +209,8 @@ def test_super_respects_include_filter():
     assert isinstance(result.error, AttributeError)
 
     # super() in a subclass also respects the filter
-    result = sandbox.exec("""\
+    result = sandbox.exec(
+        """\
 class Child(Base):
     def try_allowed(self):
         return super().allowed()
@@ -218,18 +219,23 @@ class Child(Base):
 
 c = Child()
 result = c.try_allowed()
-""", namespace={"Base": Base})
+""",
+        namespace={"Base": Base},
+    )
     assert result.error is None
     assert result.namespace["result"] == "ok"
 
-    result = sandbox.exec("""\
+    result = sandbox.exec(
+        """\
 class Child(Base):
     def try_blocked(self):
         return super().blocked()
 
 c = Child()
 result = c.try_blocked()
-""", namespace={"Base": Base})
+""",
+        namespace={"Base": Base},
+    )
     assert result.error is not None
     assert isinstance(result.error, AttributeError)
 

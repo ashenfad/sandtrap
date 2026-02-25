@@ -1,6 +1,5 @@
 """Tests for resource limits (memory + stdout caps)."""
 
-
 from sandtrap import Policy, Sandbox
 from sandtrap.builtins import TailBuffer
 

@@ -55,7 +55,9 @@ def test_from_import_multiple():
     policy = Policy()
     policy.module(math)
     sandbox = Sandbox(policy)
-    result = sandbox.exec("from math import sqrt, cos, pi\nx = sqrt(4)\ny = cos(0)\nz = pi")
+    result = sandbox.exec(
+        "from math import sqrt, cos, pi\nx = sqrt(4)\ny = cos(0)\nz = pi"
+    )
     assert result.error is None
     assert result.namespace["x"] == 2.0
     assert result.namespace["y"] == 1.0
@@ -117,6 +119,7 @@ def test_registered_class_in_namespace():
     class MyClass:
         def __init__(self, val):
             self.val = val
+
         def double(self):
             return self.val * 2
 

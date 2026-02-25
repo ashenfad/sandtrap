@@ -12,7 +12,13 @@ from contextlib import ExitStack
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from .builtins import TailBuffer, _FrozenBuiltins, _make_gated_type, make_print, make_safe_builtins
+from .builtins import (
+    TailBuffer,
+    _FrozenBuiltins,
+    _make_gated_type,
+    make_print,
+    make_safe_builtins,
+)
 from .errors import StTimeout, StValidationError, strip_internal_frames
 from .fs import FileSystem, patch
 from .gates import make_gates, wrap_privileged
@@ -25,8 +31,6 @@ from .wrappers import ModuleRef, StClass, StFunction, StInstance
 
 _exec_counter = itertools.count(1)
 _INTERNAL_KEYS = {"__builtins__", "__name__"}
-
-
 
 
 @dataclass
@@ -63,7 +67,6 @@ class Sandbox:
         # Install network patches eagerly so _build_namespace captures patched versions
         if not policy.allow_network:
             install_net()
-
 
     def __enter__(self) -> "Sandbox":
         return self
@@ -233,9 +236,7 @@ class Sandbox:
 
         def _policy_import(name, globals=None, locals=None, fromlist=(), level=0):
             if level == 0 and not _policy.is_import_allowed(name):
-                raise ImportError(
-                    f"Import of '{name}' is not allowed in the sandbox"
-                )
+                raise ImportError(f"Import of '{name}' is not allowed in the sandbox")
             return _real_import(name, globals, locals, fromlist, level)
 
         ns["__builtins__"]["__import__"] = _policy_import
@@ -392,8 +393,8 @@ class Sandbox:
             return prepared
         tree, rewriter = prepared
 
-        code, filename, gates, ns, injected, stdout_buf = (
-            self._compile_and_setup(tree, rewriter, source, namespace)
+        code, filename, gates, ns, injected, stdout_buf = self._compile_and_setup(
+            tree, rewriter, source, namespace
         )
 
         error = None
@@ -406,9 +407,7 @@ class Sandbox:
                     raise  # Real Ctrl-C from host
                 error = strip_internal_frames(e)
 
-        return self._build_result(
-            ns, injected, gates, stdout_buf, filename, error
-        )
+        return self._build_result(ns, injected, gates, stdout_buf, filename, error)
 
     def activate(
         self,
@@ -467,17 +466,13 @@ class Sandbox:
                 ast.Expr(
                     value=ast.Call(
                         func=ast.Attribute(
-                            value=ast.Name(
-                                id="__st_local_capture__", ctx=ast.Load()
-                            ),
+                            value=ast.Name(id="__st_local_capture__", ctx=ast.Load()),
                             attr="update",
                             ctx=ast.Load(),
                         ),
                         args=[
                             ast.Call(
-                                func=ast.Name(
-                                    id="__st_locals__", ctx=ast.Load()
-                                ),
+                                func=ast.Name(id="__st_locals__", ctx=ast.Load()),
                                 args=[],
                                 keywords=[],
                             )
@@ -513,8 +508,8 @@ class Sandbox:
         wrapper = ast.AsyncFunctionDef(**wrapper_kwargs)
         tree.body = [wrapper]
 
-        code, filename, gates, ns, injected, stdout_buf = (
-            self._compile_and_setup(tree, rewriter, source, namespace)
+        code, filename, gates, ns, injected, stdout_buf = self._compile_and_setup(
+            tree, rewriter, source, namespace
         )
         ns["__st_locals__"] = _builtins.locals
         ns["__st_local_capture__"] = {}
@@ -532,9 +527,7 @@ class Sandbox:
                 if result_locals is None:
                     result_locals = {}
             except asyncio.TimeoutError:
-                error = StTimeout(
-                    f"Execution exceeded {self.policy.timeout}s timeout"
-                )
+                error = StTimeout(f"Execution exceeded {self.policy.timeout}s timeout")
             except BaseException as e:
                 if isinstance(e, KeyboardInterrupt):
                     raise  # Real Ctrl-C from host
@@ -542,6 +535,11 @@ class Sandbox:
                 result_locals = ns.get("__st_local_capture__", {})
 
         return self._build_result(
-            ns, injected, gates, stdout_buf, filename, error,
+            ns,
+            injected,
+            gates,
+            stdout_buf,
+            filename,
+            error,
             extra_locals=result_locals,
         )

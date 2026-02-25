@@ -267,7 +267,10 @@ class Policy:
                     # Before denying, check if the attribute is a separately
                     # registered submodule (e.g., os.path registered alongside os)
                     sub_obj = getattr(obj, attr, None)
-                    if sub_obj is not None and self._find_registration_for(sub_obj) is not None:
+                    if (
+                        sub_obj is not None
+                        and self._find_registration_for(sub_obj) is not None
+                    ):
                         return True
                     return False
                 if exclude_pred(attr):

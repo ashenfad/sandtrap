@@ -4,7 +4,7 @@ import pickle
 
 import pytest
 
-from sandtrap import VirtualFS, Policy, Sandbox, find_refs
+from sandtrap import Policy, Sandbox, VirtualFS, find_refs
 from sandtrap.errors import StTickLimit
 from sandtrap.wrappers import StClass, StFunction
 
@@ -79,11 +79,14 @@ def test_function_defined_in_turn2_uses_turn1_fn():
     assert r1.error is None
     sq = pickle.loads(pickle.dumps(r1.namespace["square"]))
 
-    r2 = sandbox.exec("""\
+    r2 = sandbox.exec(
+        """\
 def sum_of_squares(a, b):
     return square(a) + square(b)
 result = sum_of_squares(3, 4)
-""", namespace={"square": sq})
+""",
+        namespace={"square": sq},
+    )
     assert r2.error is None
     assert r2.namespace["result"] == 25
 
@@ -109,12 +112,15 @@ class Counter:
     data = pickle.dumps(r1.namespace["Counter"])
 
     cls = pickle.loads(data)
-    r2 = sandbox.exec("""\
+    r2 = sandbox.exec(
+        """\
 c = Counter(10)
 c.inc()
 c.inc()
 result = c.value()
-""", namespace={"Counter": cls})
+""",
+        namespace={"Counter": cls},
+    )
     assert r2.error is None
     assert r2.namespace["result"] == 12
 
@@ -141,10 +147,13 @@ a.add(20)
     data = pickle.dumps(r1.namespace["a"])
 
     inst = pickle.loads(data)
-    r2 = sandbox.exec("""\
+    r2 = sandbox.exec(
+        """\
 a.add(30)
 result = a.value()
-""", namespace={"a": inst})
+""",
+        namespace={"a": inst},
+    )
     assert r2.error is None
     assert r2.namespace["result"] == 60
 
@@ -169,10 +178,13 @@ class Child(Base):
         "Child": pickle.loads(pickle.dumps(r1.namespace["Child"])),
     }
 
-    r2 = sandbox.exec("""\
+    r2 = sandbox.exec(
+        """\
 c = Child()
 result = c.greet() + " " + c.farewell()
-""", namespace=ns)
+""",
+        namespace=ns,
+    )
     assert r2.error is None
     assert r2.namespace["result"] == "hello bye"
 
@@ -200,11 +212,14 @@ def distance(p1, p2):
         "distance": pickle.loads(pickle.dumps(r1.namespace["distance"])),
     }
 
-    r2 = sandbox.exec("""\
+    r2 = sandbox.exec(
+        """\
 a = Point(0, 0)
 b = Point(3, 4)
 result = distance(a, b)
-""", namespace=ns)
+""",
+        namespace=ns,
+    )
     assert r2.error is None
     assert r2.namespace["result"] == 5.0
 
@@ -260,10 +275,13 @@ def test_function_evolution_across_turns():
 
     # Turn 2: define new fn referencing turn 1 fn
     ns2 = {"square": pickle.loads(pickle.dumps(r1.namespace["square"]))}
-    r2 = sandbox.exec("""\
+    r2 = sandbox.exec(
+        """\
 def sum_squares(lst):
     return sum(square(x) for x in lst)
-""", namespace=ns2)
+""",
+        namespace=ns2,
+    )
     assert r2.error is None
 
     # Turn 3: use the composed fn (must include square — it's a global, not a closure var)
@@ -342,20 +360,26 @@ def apply(x):
     restored = pickle.loads(data)
 
     # Provide a different square in namespace
-    r2 = sandbox.exec("result = apply(3)", namespace={
-        "apply": restored,
-        "square": r1.namespace["square"],  # original
-    })
+    r2 = sandbox.exec(
+        "result = apply(3)",
+        namespace={
+            "apply": restored,
+            "square": r1.namespace["square"],  # original
+        },
+    )
     assert r2.error is None
     assert r2.namespace["result"] == 9  # square(3) = 9
 
     # Now provide a cube function as "square"
     r3 = sandbox.exec("def cube(x): return x * x * x")
     restored2 = pickle.loads(data)
-    r4 = sandbox.exec("result = apply(3)", namespace={
-        "apply": restored2,
-        "square": r3.namespace["cube"],  # override
-    })
+    r4 = sandbox.exec(
+        "result = apply(3)",
+        namespace={
+            "apply": restored2,
+            "square": r3.namespace["cube"],  # override
+        },
+    )
     assert r4.error is None
     assert r4.namespace["result"] == 27  # cube(3) = 27
 
@@ -392,10 +416,13 @@ def quadruple(x):
 def test_vfs_module_function_in_multi_turn():
     """VFS module dep available via frozen globals across turns."""
     fs = VirtualFS({})
-    fs.write("/utils.py", b"""\
+    fs.write(
+        "/utils.py",
+        b"""\
 def add(a, b): return a + b
 def mul(a, b): return a * b
-""")
+""",
+    )
 
     policy = Policy(tick_limit=10_000)
     sandbox = Sandbox(policy, mode="wrapped", filesystem=fs)
@@ -412,8 +439,9 @@ def dot(xs, ys):
     assert r1.error is None
 
     # Pickle the namespace
-    ns_data = {k: pickle.dumps(v) for k, v in r1.namespace.items()
-               if isinstance(v, StFunction)}
+    ns_data = {
+        k: pickle.dumps(v) for k, v in r1.namespace.items() if isinstance(v, StFunction)
+    }
 
     # Turn 2: restore only dot and use it
     dot = pickle.loads(ns_data["dot"])
@@ -501,13 +529,16 @@ class Shape:
 
     # Turn 2: subclass overrides area
     ns2 = {"Shape": pickle.loads(pickle.dumps(r1.namespace["Shape"]))}
-    r2 = sandbox.exec("""\
+    r2 = sandbox.exec(
+        """\
 class Circle(Shape):
     def __init__(self, r):
         self.r = r
     def area(self):
         return 3.14 * self.r * self.r
-""", namespace=ns2)
+""",
+        namespace=ns2,
+    )
     assert r2.error is None
 
     # Turn 3: use subclass
@@ -515,11 +546,14 @@ class Circle(Shape):
         "Circle": pickle.loads(pickle.dumps(r2.namespace["Circle"])),
         "Shape": pickle.loads(pickle.dumps(r1.namespace["Shape"])),
     }
-    r3 = sandbox.exec("""\
+    r3 = sandbox.exec(
+        """\
 c = Circle(10)
 a = c.area()
 d = c.describe()
-""", namespace=ns3)
+""",
+        namespace=ns3,
+    )
     assert r3.error is None
     assert abs(r3.namespace["a"] - 314.0) < 0.1
     assert r3.namespace["d"] == "shape"  # inherited
@@ -547,11 +581,14 @@ class Bag:
 
     # Turn 2: construct and populate
     ns2 = {"Bag": pickle.loads(pickle.dumps(r1.namespace["Bag"]))}
-    r2 = sandbox.exec("""\
+    r2 = sandbox.exec(
+        """\
 b = Bag()
 b.add("alpha")
 b.add("beta")
-""", namespace=ns2)
+""",
+        namespace=ns2,
+    )
     assert r2.error is None
 
     # Turn 3: use instance from turn 2 (without the class)
@@ -615,8 +652,9 @@ def sum_squares(lst):
     assert r1.error is None
 
     # Pickle everything
-    pickled = {k: pickle.dumps(v) for k, v in r1.namespace.items()
-               if isinstance(v, StFunction)}
+    pickled = {
+        k: pickle.dumps(v) for k, v in r1.namespace.items() if isinstance(v, StFunction)
+    }
 
     # Turn 2: only need sum_squares — use find_refs to discover deps
     source = "result = sum_squares([1, 2, 3])"
@@ -665,9 +703,12 @@ add20 = make_adder(20)
     # Pickle and restore in turn 2
     add10 = pickle.loads(pickle.dumps(r1.namespace["add10"]))
     add20 = pickle.loads(pickle.dumps(r1.namespace["add20"]))
-    r2 = sandbox.exec("""\
+    r2 = sandbox.exec(
+        """\
 result = add10(5) + add20(3)
-""", namespace={"add10": add10, "add20": add20})
+""",
+        namespace={"add10": add10, "add20": add20},
+    )
     assert r2.error is None
     assert r2.namespace["result"] == 38  # 15 + 23
 
@@ -721,9 +762,12 @@ multiplier = make_op("mul")
     adder = pickle.loads(pickle.dumps(r1.namespace["adder"]))
     multiplier = pickle.loads(pickle.dumps(r1.namespace["multiplier"]))
 
-    r2 = sandbox.exec("""\
+    r2 = sandbox.exec(
+        """\
 result = adder(multiplier(3, 4), 10)
-""", namespace={"adder": adder, "multiplier": multiplier})
+""",
+        namespace={"adder": adder, "multiplier": multiplier},
+    )
     assert r2.error is None
     assert r2.namespace["result"] == 22  # 3*4 + 10
 
@@ -829,13 +873,16 @@ async def fetch(x):
     fetch = pickle.loads(pickle.dumps(r1.namespace["fetch"]))
 
     # Turn 2: define async function that uses the turn-1 async helper
-    r2 = await sandbox.aexec("""\
+    r2 = await sandbox.aexec(
+        """\
 async def process(items):
     results = []
     for item in items:
         results.append(await fetch(item))
     return results
-""", namespace={"fetch": fetch})
+""",
+        namespace={"fetch": fetch},
+    )
     assert r2.error is None
 
     # Turn 3: use composed function
@@ -867,11 +914,14 @@ async def arange(start, stop):
     data = pickle.dumps(r1.namespace["arange"])
     restored = pickle.loads(data)
 
-    r2 = await sandbox.aexec("""\
+    r2 = await sandbox.aexec(
+        """\
 total = 0
 async for x in arange(1, 5):
     total += x
-""", namespace={"arange": restored})
+""",
+        namespace={"arange": restored},
+    )
     assert r2.error is None
     assert r2.namespace["total"] == 10  # 1 + 2 + 3 + 4
 
@@ -966,10 +1016,13 @@ o = Obj()
     real._secret = "hidden"
 
     # Before pickle: gate blocks _secret access in sandbox
-    r_check = sandbox.exec("x = o._secret", namespace={
-        "Obj": r1.namespace["Obj"],
-        "o": r1.namespace["o"],
-    })
+    r_check = sandbox.exec(
+        "x = o._secret",
+        namespace={
+            "Obj": r1.namespace["Obj"],
+            "o": r1.namespace["o"],
+        },
+    )
     assert isinstance(r_check.error, AttributeError)
 
     # After pickle round-trip: gate must still block _secret
@@ -1016,10 +1069,13 @@ def is_odd(n):
     is_odd = pickle.loads(data_odd)
 
     # Activate and use — should not hit RecursionError during activation
-    r2 = sandbox.exec("""\
+    r2 = sandbox.exec(
+        """\
 result_even = is_even(4)
 result_odd = is_odd(3)
-""", namespace={"is_even": is_even, "is_odd": is_odd})
+""",
+        namespace={"is_even": is_even, "is_odd": is_odd},
+    )
     assert r2.error is None
     assert r2.namespace["result_even"] is True
     assert r2.namespace["result_odd"] is True
@@ -1031,13 +1087,16 @@ result_odd = is_odd(3)
 def test_vfs_class_pickle_round_trip():
     """StClass imported from VFS survives pickle and works in a later turn."""
     fs = VirtualFS({})
-    fs.write("/shapes.py", b"""\
+    fs.write(
+        "/shapes.py",
+        b"""\
 class Circle:
     def __init__(self, r):
         self.r = r
     def area(self):
         return 3.14 * self.r * self.r
-""")
+""",
+    )
 
     policy = Policy(tick_limit=10_000)
     sandbox = Sandbox(policy, mode="wrapped", filesystem=fs)
@@ -1049,10 +1108,13 @@ class Circle:
     data = pickle.dumps(r1.namespace["Circle"])
     restored = pickle.loads(data)
 
-    r2 = sandbox.exec("""\
+    r2 = sandbox.exec(
+        """\
 c = Circle(5)
 result = c.area()
-""", namespace={"Circle": restored})
+""",
+        namespace={"Circle": restored},
+    )
     assert r2.error is None
     assert abs(r2.namespace["result"] - 78.5) < 0.1
 
@@ -1060,7 +1122,9 @@ result = c.area()
 def test_vfs_class_method_calls_vfs_function():
     """VFS class method calling a VFS helper function, pickled across turns."""
     fs = VirtualFS({})
-    fs.write("/lib.py", b"""\
+    fs.write(
+        "/lib.py",
+        b"""\
 def clamp(x, lo, hi):
     if x < lo:
         return lo
@@ -1077,7 +1141,8 @@ class Gauge:
         self.value = clamp(x, self.lo, self.hi)
     def read(self):
         return self.value
-""")
+""",
+    )
 
     policy = Policy(tick_limit=10_000)
     sandbox = Sandbox(policy, mode="wrapped", filesystem=fs)
@@ -1093,14 +1158,17 @@ class Gauge:
     r1b = sandbox.exec("from lib import clamp")
     assert r1b.error is None
 
-    r2 = sandbox.exec("""\
+    r2 = sandbox.exec(
+        """\
 g = Gauge(0, 100)
 g.set(150)
 result = g.read()
-""", namespace={
-        "Gauge": restored,
-        "clamp": pickle.loads(pickle.dumps(r1b.namespace["clamp"])),
-    })
+""",
+        namespace={
+            "Gauge": restored,
+            "clamp": pickle.loads(pickle.dumps(r1b.namespace["clamp"])),
+        },
+    )
     assert r2.error is None
     assert r2.namespace["result"] == 100
 
@@ -1108,7 +1176,9 @@ result = g.read()
 def test_vfs_class_instance_pickle_round_trip():
     """VFS class instance constructed in VFS, pickled and used in later turn."""
     fs = VirtualFS({})
-    fs.write("/counter.py", b"""\
+    fs.write(
+        "/counter.py",
+        b"""\
 class Counter:
     def __init__(self, start=0):
         self.n = start
@@ -1116,7 +1186,8 @@ class Counter:
         self.n += 1
     def value(self):
         return self.n
-""")
+""",
+    )
 
     policy = Policy(tick_limit=10_000)
     sandbox = Sandbox(policy, mode="wrapped", filesystem=fs)
@@ -1133,10 +1204,13 @@ c.inc()
         "Counter": pickle.loads(pickle.dumps(r1.namespace["Counter"])),
         "c": pickle.loads(pickle.dumps(r1.namespace["c"])),
     }
-    r2 = sandbox.exec("""\
+    r2 = sandbox.exec(
+        """\
 c.inc()
 result = c.value()
-""", namespace=ns2)
+""",
+        namespace=ns2,
+    )
     assert r2.error is None
     assert r2.namespace["result"] == 13
 
@@ -1164,10 +1238,13 @@ class Child(Base):
     data = pickle.dumps(r1.namespace["Child"])
     restored = pickle.loads(data)
 
-    r2 = sandbox.exec("""\
+    r2 = sandbox.exec(
+        """\
 c = Child()
 result = c.greet() + " " + c.farewell()
-""", namespace={"Child": restored})
+""",
+        namespace={"Child": restored},
+    )
     assert r2.error is None
     assert r2.namespace["result"] == "hello bye"
 
@@ -1227,10 +1304,13 @@ add10 = make_fn(10)
     restored = pickle.loads(data)
 
     # Try to override "n" via namespace — closure should win
-    r2 = sandbox.exec("result = add10(5)", namespace={
-        "add10": restored,
-        "n": 999,
-    })
+    r2 = sandbox.exec(
+        "result = add10(5)",
+        namespace={
+            "add10": restored,
+            "n": 999,
+        },
+    )
     assert r2.error is None
     assert r2.namespace["result"] == 15  # 5 + 10, not 5 + 999
 
@@ -1277,9 +1357,11 @@ def main(x): return process(x) + 100
     assert r1.error is None
 
     # Pickle everything — StFunctions are inactive (_compiled=None)
-    ns = {k: pickle.loads(pickle.dumps(v))
-          for k, v in r1.namespace.items()
-          if isinstance(v, StFunction)}
+    ns = {
+        k: pickle.loads(pickle.dumps(v))
+        for k, v in r1.namespace.items()
+        if isinstance(v, StFunction)
+    }
 
     # find_refs should still discover transitive deps via _global_ref_names
     refs = find_refs("result = main(5)", namespace=ns)
@@ -1388,12 +1470,15 @@ ml.append(30)
         "MyList": pickle.loads(pickle.dumps(r1.namespace["MyList"])),
         "ml": pickle.loads(pickle.dumps(r1.namespace["ml"])),
     }
-    r2 = sandbox.exec("""\
+    r2 = sandbox.exec(
+        """\
 length = len(ml)
 first = ml[0]
 has_20 = 20 in ml
 collected = [x for x in ml]
-""", namespace=ns2)
+""",
+        namespace=ns2,
+    )
     assert r2.error is None
     assert r2.namespace["length"] == 3
     assert r2.namespace["first"] == 10
@@ -1448,10 +1533,13 @@ class AsyncCalc:
     data = pickle.dumps(r1.namespace["AsyncCalc"])
     restored = pickle.loads(data)
 
-    r2 = await sandbox.aexec("""\
+    r2 = await sandbox.aexec(
+        """\
 c = AsyncCalc(100)
 result = await c.compute(5)
-""", namespace={"AsyncCalc": restored})
+""",
+        namespace={"AsyncCalc": restored},
+    )
     assert r2.error is None
     assert r2.namespace["result"] == 125
 

@@ -151,7 +151,9 @@ def make_gates(
                     name: str, compiled_cls: Any, ast_idx: int, **frozen_refs: Any
                 ) -> Any:
                     cls_ast = vfs_class_asts[ast_idx]
-                    sb_cls = StClass(name, compiled_cls, cls_ast, frozen_refs=frozen_refs)
+                    sb_cls = StClass(
+                        name, compiled_cls, cls_ast, frozen_refs=frozen_refs
+                    )
                     sb_cls._st_getattr_gate = __st_getattr__
                     return sb_cls
 
@@ -184,19 +186,22 @@ def make_gates(
             lineno = _caller_lineno()
             loc = f" (line {lineno})" if lineno else ""
             raise AttributeError(
-                f"Attribute '{attr}' is not accessible on "
-                f"'{type(obj).__name__}'{loc}"
+                f"Attribute '{attr}' is not accessible on '{type(obj).__name__}'{loc}"
             )
 
         # Intercept str.format / str.format_map to block field traversal
         if isinstance(obj, str) and attr in ("format", "format_map"):
             if attr == "format":
+
                 def safe_format(*args: Any, **kwargs: Any) -> str:
                     return _safe_formatter.vformat(obj, args, kwargs)
+
                 return safe_format
             else:
+
                 def safe_format_map(mapping: Any) -> str:
                     return _safe_formatter.vformat(obj, (), mapping)
+
                 return safe_format_map
 
         value = getattr(obj, attr)
@@ -227,8 +232,7 @@ def make_gates(
             lineno = _caller_lineno()
             loc = f" (line {lineno})" if lineno else ""
             raise AttributeError(
-                f"Cannot set attribute '{attr}' on "
-                f"'{type(obj).__name__}'{loc}"
+                f"Cannot set attribute '{attr}' on '{type(obj).__name__}'{loc}"
             )
         setattr(obj, attr, value)
 
@@ -238,8 +242,7 @@ def make_gates(
             lineno = _caller_lineno()
             loc = f" (line {lineno})" if lineno else ""
             raise AttributeError(
-                f"Cannot delete attribute '{attr}' on "
-                f"'{type(obj).__name__}'{loc}"
+                f"Cannot delete attribute '{attr}' on '{type(obj).__name__}'{loc}"
             )
         delattr(obj, attr)
 
@@ -281,9 +284,7 @@ def make_gates(
                         rewriter = Rewriter(wrapped_mode=_wrapped_mode)
                         tree = rewriter.visit(tree)
                         ast.fix_missing_locations(tree)
-                        code = compile(
-                            tree, f"<sandtrap:vfs:{pkg_name}>", "exec"
-                        )
+                        code = compile(tree, f"<sandtrap:vfs:{pkg_name}>", "exec")
                         ns = dict(pkg.__dict__)
                         ns["__builtins__"] = make_safe_builtins(
                             __st_getattr__, checkpoint=__st_checkpoint__
@@ -291,9 +292,7 @@ def make_gates(
                         ns.update(gates)
                         exec(code, ns)  # noqa: S102
                         for k, v in ns.items():
-                            if k != "__builtins__" and not k.startswith(
-                                "__st_"
-                            ):
+                            if k != "__builtins__" and not k.startswith("__st_"):
                                 setattr(pkg, k, v)
                     except BaseException:
                         _vfs_module_cache.pop(pkg_name, None)
@@ -303,7 +302,7 @@ def make_gates(
 
             # Attach child to parent
             if i > 0:
-                prev_pkg_name = ".".join(parts[: i])
+                prev_pkg_name = ".".join(parts[:i])
                 prev_pkg = _vfs_module_cache.get(prev_pkg_name)
                 if prev_pkg is not None:
                     setattr(prev_pkg, parts[i], parent)
@@ -332,9 +331,7 @@ def make_gates(
 
         lineno = _caller_lineno()
         loc = f" (line {lineno})" if lineno else ""
-        raise ImportError(
-            f"Import of '{module_name}' is not allowed{loc}"
-        )
+        raise ImportError(f"Import of '{module_name}' is not allowed{loc}")
 
     def __st_importfrom__(module_name: str, name: str, *, _level: int = 0) -> Any:
         if _level > 0:
@@ -351,7 +348,9 @@ def make_gates(
             else:
                 # from . import bar → treat bar as a sub-module of base_dir
                 abs_parts = base_dir.strip("/")
-                abs_module = (abs_parts.replace("/", ".") + "." + name) if abs_parts else name
+                abs_module = (
+                    (abs_parts.replace("/", ".") + "." + name) if abs_parts else name
+                )
 
             mod = _resolve_vfs_module(abs_module if module_name else abs_module)
             if mod is not None:
@@ -360,9 +359,7 @@ def make_gates(
                     return mod
                 if hasattr(mod, name):
                     return getattr(mod, name)
-                raise ImportError(
-                    f"cannot import name '{name}' from '{abs_module}'"
-                )
+                raise ImportError(f"cannot import name '{name}' from '{abs_module}'")
             raise ImportError(
                 f"No module named '{abs_module}' (resolved from relative import)"
             )
@@ -380,9 +377,7 @@ def make_gates(
             sub = _resolve_vfs_module(module_name + "." + name)
             if sub is not None:
                 return sub
-            raise ImportError(
-                f"cannot import name '{name}' from '{module_name}'"
-            )
+            raise ImportError(f"cannot import name '{name}' from '{module_name}'")
 
         # module_name might be a package directory without __init__.py
         sub = _resolve_vfs_module(module_name + "." + name)
@@ -391,9 +386,7 @@ def make_gates(
 
         lineno = _caller_lineno()
         loc = f" (line {lineno})" if lineno else ""
-        raise ImportError(
-            f"Import of '{module_name}' is not allowed{loc}"
-        )
+        raise ImportError(f"Import of '{module_name}' is not allowed{loc}")
 
     def __st_defun__(name: str, compiled_fn: Any, ast_ref: int | str) -> Any:
         if not _wrapped_mode:
@@ -430,14 +423,10 @@ def make_gates(
             raise StCancelled("Execution cancelled")
         _tick_counter[0] += 1
         if policy.tick_limit is not None and _tick_counter[0] > policy.tick_limit:
-            raise StTickLimit(
-                f"Execution exceeded {policy.tick_limit} tick limit"
-            )
+            raise StTickLimit(f"Execution exceeded {policy.tick_limit} tick limit")
         if _start_time_box[0] is not None and policy.timeout is not None:
             if time.monotonic() - _start_time_box[0] > policy.timeout:
-                raise StTimeout(
-                    f"Execution exceeded {policy.timeout}s timeout"
-                )
+                raise StTimeout(f"Execution exceeded {policy.timeout}s timeout")
         if _memory_box[0] is not None and _memory_box[1] is not None:
             if get_rss_bytes() - _memory_box[1] > _memory_box[0]:
                 raise MemoryError(
@@ -448,14 +437,16 @@ def make_gates(
     gates["__st_start_time__"] = _start_time_box
     gates["__st_cancel_flag__"] = _cancel_flag_box
     gates["__st_memory__"] = _memory_box
-    gates.update({
-        "__st_getattr__": __st_getattr__,
-        "__st_setattr__": __st_setattr__,
-        "__st_delattr__": __st_delattr__,
-        "__st_import__": __st_import__,
-        "__st_importfrom__": __st_importfrom__,
-        "__st_defun__": __st_defun__,
-        "__st_defclass__": __st_defclass__,
-        "__st_checkpoint__": __st_checkpoint__,
-    })
+    gates.update(
+        {
+            "__st_getattr__": __st_getattr__,
+            "__st_setattr__": __st_setattr__,
+            "__st_delattr__": __st_delattr__,
+            "__st_import__": __st_import__,
+            "__st_importfrom__": __st_importfrom__,
+            "__st_defun__": __st_defun__,
+            "__st_defclass__": __st_defclass__,
+            "__st_checkpoint__": __st_checkpoint__,
+        }
+    )
     return gates

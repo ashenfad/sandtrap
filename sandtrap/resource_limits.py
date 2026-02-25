@@ -22,9 +22,7 @@ def get_rss_bytes() -> int:
     memory has since been freed.
     """
     if resource is None:
-        raise RuntimeError(
-            "Memory limits require the 'resource' module (Unix only)"
-        )
+        raise RuntimeError("Memory limits require the 'resource' module (Unix only)")
     usage = resource.getrusage(resource.RUSAGE_SELF)
     if sys.platform == "darwin":
         return usage.ru_maxrss  # already bytes
