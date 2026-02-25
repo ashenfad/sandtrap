@@ -1,6 +1,6 @@
 [project]
 name = "sandtrap"
-version = "0.1.2"
+version = "0.1.3"
 description = "Lightweight in-process Python sandbox using AST rewriting."
 readme = "README.md"
 license = "MIT"
