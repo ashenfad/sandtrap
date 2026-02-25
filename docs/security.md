@@ -29,7 +29,7 @@ All `obj.attr` access in sandboxed code -- including in f-strings and augmented 
 
 ## Builtins whitelist
 
-Sandboxed code gets a restricted `__builtins__` (frozen via `_FrozenBuiltins`, which wraps `MappingProxyType` and blocks arbitrary attribute access):
+Sandboxed code gets a restricted `__builtins__` (frozen via `_FrozenBuiltins`, a read-only dict subclass). Access to `__builtins__` itself is blocked at the AST level — sandboxed code cannot reference it. The builtins it contains:
 
 **Available**: `abs`, `all`, `any`, `ascii`, `bin`, `bool`, `bytearray`, `bytes`, `callable`, `chr`, `classmethod`, `complex`, `dict`, `divmod`, `enumerate`, `filter`, `float`, `format`, `frozenset`, `getattr` (policy-gated), `hasattr` (policy-gated), `hash`, `hex`, `id`, `int`, `isinstance`, `issubclass`, `iter`, `len`, `list`, `locals`, `map`, `max`, `min`, `next`, `object`, `oct`, `ord`, `pow`, `property`, `range`, `repr`, `reversed`, `round`, `set`, `slice`, `sorted`, `staticmethod`, `str`, `sum`, `super`, `tuple`, `type` (single-arg only), `zip`, plus ~40 exception types.
 
@@ -47,7 +47,7 @@ Sandboxed code gets a restricted `__builtins__` (frozen via `_FrozenBuiltins`, w
 - **File I/O** -- routes through VFS when filesystem provided, otherwise `open` unavailable
 - **`type(name, bases, dict)`** -- three-arg form blocked (prevents dynamic class creation outside the rewriter)
 - **`str.format` traversal** -- `"{0.__class__}".format(obj)` blocked
-- **`__builtins__` mutation** -- frozen with `MappingProxyType`
+- **`__builtins__` access** -- blocked at the AST level; sandboxed code cannot read `__builtins__`
 - **`__st_*` names** -- reserved namespace rejected at validation time
 - **`globals()`** -- not available
 - **Bare `except:`** -- automatically rewritten to `except Exception:` so sandboxed code cannot catch `BaseException` subclasses (`StTimeout`, `StCancelled`, `KeyboardInterrupt`, `SystemExit`). This is a deliberate semantic change: Python's bare `except:` normally catches everything including `BaseException`, but in the sandbox it only catches `Exception` and below
@@ -58,6 +58,9 @@ Checkpoints are injected at:
 - Start of every loop body (`for`, `while`)
 - Start of every function/method body
 - Every comprehension iteration (`[x for x in ...]`)
+- Every call to a non-type builtin function (`len`, `sorted`, `sum`, etc.)
+
+Type builtins (`str`, `int`, `dict`, `range`, etc.) do not fire checkpoints -- they are real types so that library code receiving them (e.g. `df.astype(str)`) works correctly.
 
 Each checkpoint increments the tick counter and checks: cancellation flag, tick limit, wall-clock timeout, and memory limit (in that order).
 
