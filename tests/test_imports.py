@@ -219,6 +219,27 @@ desc = f"dtype={d}, sum={s}"
     assert result.namespace["desc"] == "dtype=int64, sum=66"
 
 
+def test_pandas_astype_str():
+    """pandas .astype(str) works when builtin types are real.
+
+    When builtin types were wrapped with _GatedMeta proxies for checkpoint
+    gating, pandas' .astype(str) failed because np.dtype() didn't recognize
+    the proxy as the real str type.
+    """
+    pd = pytest.importorskip("pandas")
+
+    policy = Policy()
+    policy.module(pd, recursive=True)
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("""\
+import pandas as pd
+s = pd.Series([1, 2, 3])
+result = list(s.astype(str))
+""")
+    assert result.error is None, f"astype(str) failed: {result.error}"
+    assert result.namespace["result"] == ["1", "2", "3"]
+
+
 def test_registered_module_transitive_stdlib_import():
     """Library-internal imports of unregistered stdlib modules should not be blocked.
 
