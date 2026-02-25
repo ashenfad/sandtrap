@@ -29,7 +29,7 @@ All `obj.attr` access in sandboxed code -- including in f-strings and augmented 
 
 ## Builtins whitelist
 
-Sandboxed code gets a restricted `__builtins__` (frozen via `MappingProxyType`):
+Sandboxed code gets a restricted `__builtins__` (frozen via `_FrozenBuiltins`, which wraps `MappingProxyType` and blocks arbitrary attribute access):
 
 **Available**: `abs`, `all`, `any`, `ascii`, `bin`, `bool`, `bytearray`, `bytes`, `callable`, `chr`, `classmethod`, `complex`, `dict`, `divmod`, `enumerate`, `filter`, `float`, `format`, `frozenset`, `getattr` (policy-gated), `hasattr` (policy-gated), `hash`, `hex`, `id`, `int`, `isinstance`, `issubclass`, `iter`, `len`, `list`, `locals`, `map`, `max`, `min`, `next`, `object`, `oct`, `ord`, `pow`, `property`, `range`, `repr`, `reversed`, `round`, `set`, `slice`, `sorted`, `staticmethod`, `str`, `sum`, `super`, `tuple`, `type` (single-arg only), `zip`, plus ~40 exception types.
 
