@@ -50,7 +50,7 @@ Sandboxed code gets a restricted `__builtins__` (frozen via `MappingProxyType`):
 - **`__builtins__` mutation** -- frozen with `MappingProxyType`
 - **`__st_*` names** -- reserved namespace rejected at validation time
 - **`globals()`** -- not available
-- **Bare `except:`** -- automatically rewritten to `except Exception:` so sandboxed code cannot catch `BaseException` subclasses like `StTimeout` or `StCancelled`
+- **Bare `except:`** -- automatically rewritten to `except Exception:` so sandboxed code cannot catch `BaseException` subclasses (`StTimeout`, `StCancelled`, `KeyboardInterrupt`, `SystemExit`). This is a deliberate semantic change: Python's bare `except:` normally catches everything including `BaseException`, but in the sandbox it only catches `Exception` and below
 
 ## Checkpoint enforcement
 
@@ -66,6 +66,28 @@ Each checkpoint increments the tick counter and checks: cancellation flag, tick 
 sandtrap is a "walled garden" -- it controls what sandboxed code can access, not what the Python runtime can do. It is designed to prevent accidental or casual misuse by LLM-generated code.
 
 It is **not** a security boundary against a determined attacker with full CPython knowledge. It runs in-process and shares the same memory space as the host. If you need hard isolation, use process-level sandboxing (containers, seccomp, etc.) as an outer layer.
+
+### What's defended
+
+- Attribute traversal attacks (MRO walking, `__subclasses__()`, `__globals__`)
+- Dynamic class creation via `type(name, bases, dict)`
+- Import of unregistered modules
+- `str.format` field traversal (`{0.__class__}`)
+- Swallowing control exceptions via bare `except:`
+- Infinite loops and runaway computation (tick limits, timeouts)
+- Unauthorized file and network I/O
+
+### What's out of scope
+
+These vectors are **not** defended against and require process-level isolation if they are a concern:
+
+- **C extensions** -- a registered module with C code can do anything (call `ctypes`, access raw memory, spawn processes). Only register modules you trust.
+- **`ctypes` / `cffi`** -- if registered, these provide unrestricted access to the C layer. Never register them.
+- **`gc.get_objects()`** -- if the `gc` module is registered, sandboxed code can enumerate all live Python objects. Don't register `gc`.
+- **Signal handlers** -- `signal` module access would allow overriding the host's signal handling.
+- **Shared mutable state** -- objects passed into the sandbox namespace are not copied. Sandboxed code can mutate them in place.
+- **Side channels** -- timing attacks, cache probing, and other side channels are not mitigated.
+- **CPython internals** -- bytecode manipulation, `sys._getframe()`, `ctypes.pythonapi`, and other CPython-specific escape hatches are blocked by the attribute gate and builtins whitelist, but novel CPython exploits may bypass AST-level controls.
 
 ## Process-global patches
 
