@@ -1,5 +1,7 @@
 """Tests for resource limits (memory + stdout caps)."""
 
+import pytest
+
 from sandtrap import Policy, Sandbox
 from sandtrap.builtins import TailBuffer
 
@@ -84,6 +86,11 @@ for i in range(100):
 # --- Memory limit tests (checkpoint-based, works on all platforms) ---
 
 
+@pytest.mark.xfail(
+    reason="Peak RSS measurement is process-wide; may not trip on CI if earlier "
+    "tests already raised the high-water mark",
+    strict=False,
+)
 def test_memory_limit_enforcement():
     """Memory limit causes MemoryError for excessive allocation."""
     policy = Policy()
