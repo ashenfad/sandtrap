@@ -25,7 +25,7 @@ from .gates import make_gates, wrap_privileged
 from .net.context import deny_network
 from .net.patch import install as install_net
 from .policy import Policy
-from .resource_limits import get_rss_bytes
+from .resource_limits import get_rss_bytes, memory_limit_context
 from .rewriter import Rewriter
 from .wrappers import ModuleRef, StClass, StFunction, StInstance
 
@@ -249,7 +249,10 @@ class Sandbox:
         return TailBuffer(max_chars=self.policy.max_stdout)
 
     def _enter_sandbox_context(self, stack: ExitStack) -> None:
-        """Set up network denial and filesystem interception on the ExitStack."""
+        """Set up memory limits, network denial, and filesystem interception."""
+        if self.policy.memory_limit is not None:
+            stack.enter_context(memory_limit_context(self.policy.memory_limit))
+
         if not self.policy.allow_network:
             install_net()
             stack.enter_context(deny_network())

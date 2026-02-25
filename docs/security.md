@@ -64,6 +64,16 @@ Type builtins (`str`, `int`, `dict`, `range`, etc.) do not fire checkpoints -- t
 
 Each checkpoint increments the tick counter and checks: cancellation flag, tick limit, wall-clock timeout, and memory limit (in that order).
 
+## Memory limits
+
+When `Policy.memory_limit` is set (in MB), two layers of enforcement apply:
+
+1. **RLIMIT_AS (Linux only)** -- kernel-enforced virtual address space cap. Set via `setrlimit` for the duration of the sandbox execution. The kernel refuses allocations beyond `current_RSS + limit`, raising `MemoryError`. This catches single large allocations that happen between checkpoints. This is **process-wide** -- concurrent sandboxes share the limit.
+
+2. **Checkpoint-based detection** -- at each checkpoint, peak RSS (`ru_maxrss`) is compared against the baseline. If it exceeds the limit, `MemoryError` is raised. This works on both Linux and macOS but only fires at checkpoint boundaries.
+
+macOS does not support `RLIMIT_AS` (`setrlimit` returns `EINVAL`), so only checkpoint-based detection is available. Windows lacks the `resource` module entirely -- memory limits are a no-op.
+
 ## Threat model
 
 sandtrap is a "walled garden" -- it controls what sandboxed code can access, not what the Python runtime can do. It is designed to prevent accidental or casual misuse by LLM-generated code.
