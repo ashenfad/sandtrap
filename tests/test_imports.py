@@ -2,6 +2,8 @@
 
 import math
 
+import pytest
+
 from sandtrap import Policy, Sandbox
 from sandtrap.errors import StValidationError
 
@@ -175,85 +177,17 @@ def test_recursive_module_import():
 # unregistered ones.
 
 
-def test_clevel_import_allowed_for_registered_module():
-    """C-level __import__ succeeds for a policy-registered module."""
-    policy = Policy()
-    policy.module(math)
-    sandbox = Sandbox(policy)
-    # Simulate what C code does: builtins.__import__("math")
-    result = sandbox.exec("""\
-imp = __builtins__["__import__"]
-m = imp("math")
-x = m.sqrt(16)
-""")
-    assert result.error is None
-    assert result.namespace["x"] == 4.0
-
-
-def test_clevel_import_blocked_for_unregistered_module():
-    """C-level __import__ rejects modules not in the policy."""
+def test_builtins_access_blocked():
+    """User code cannot access __builtins__ to extract __import__."""
     policy = Policy()
     policy.module(math)
     sandbox = Sandbox(policy)
     result = sandbox.exec("""\
 imp = __builtins__["__import__"]
-m = imp("os")
 """)
     assert result.error is not None
-    assert isinstance(result.error, ImportError)
-    assert "not allowed" in str(result.error)
-
-
-def test_clevel_import_recursive_submodule():
-    """C-level __import__ allows submodules of a recursive registration."""
-    import json
-    import json.decoder  # ensure loaded
-
-    policy = Policy()
-    policy.module(json, recursive=True)
-    sandbox = Sandbox(policy)
-    result = sandbox.exec("""\
-imp = __builtins__["__import__"]
-dec = imp("json.decoder", fromlist=["JSONDecodeError"])
-x = hasattr(dec, "JSONDecodeError")
-""")
-    assert result.error is None
-    assert result.namespace["x"] is True
-
-
-def test_clevel_import_recursive_blocks_unrelated():
-    """Recursive registration for one module doesn't open others."""
-    import json
-
-    policy = Policy()
-    policy.module(json, recursive=True)
-    sandbox = Sandbox(policy)
-    result = sandbox.exec("""\
-imp = __builtins__["__import__"]
-m = imp("subprocess")
-""")
-    assert result.error is not None
-    assert isinstance(result.error, ImportError)
-
-
-def test_clevel_import_relative_passthrough():
-    """C-level __import__ delegates relative imports to real __import__."""
-    policy = Policy()
-    policy.module(math)
-    sandbox = Sandbox(policy)
-    # level > 0 is passed through to real __import__ (which will fail
-    # here because there's no package context, but it's not our gate
-    # that rejects it)
-    result = sandbox.exec("""\
-imp = __builtins__["__import__"]
-try:
-    m = imp("math", level=1)
-    failed = False
-except (ImportError, KeyError, TypeError):
-    failed = True
-""")
-    assert result.error is None
-    assert result.namespace["failed"] is True
+    assert isinstance(result.error, StValidationError)
+    assert "__builtins__" in str(result.error)
 
 
 def test_clevel_import_numpy_operations():
@@ -285,13 +219,38 @@ desc = f"dtype={d}, sum={s}"
     assert result.namespace["desc"] == "dtype=int64, sum=66"
 
 
-def test_builtins_import_not_accessible_via_getattr():
-    """Sandboxed code cannot access __import__ via attribute access.
+def test_registered_module_transitive_stdlib_import():
+    """Library-internal imports of unregistered stdlib modules should not be blocked.
 
-    The AST rewriter transforms obj.attr to __st_getattr__(obj, attr),
-    and __import__ is not in DEFAULT_ALLOWED_DUNDERS, so attribute-style
-    access is blocked.  Only item access (__builtins__["__import__"])
-    works, which is the path C-level code uses.
+    When a registered module (e.g. pandas) internally imports a stdlib module
+    (e.g. time) via C-level PyObject_GetAttr(builtins, "__import__"), the
+    sandbox's policy-gated __import__ intercepts the call and blocks it because
+    the stdlib module isn't registered.  This is a bug — the import gate should
+    only restrict exec'd user code, not library internals.
+    """
+    pd = pytest.importorskip("pandas")
+
+    policy = Policy()
+    policy.module(pd, recursive=True)
+    sandbox = Sandbox(policy)
+
+    # pd.Timestamp.strftime internally imports 'time' (via C-level __import__).
+    # This should succeed because it's a library-internal import, not user code.
+    result = sandbox.exec("""\
+import pandas as pd
+ts = pd.Timestamp('2024-01-15')
+result = ts.strftime('%B %Y')
+""")
+    assert result.error is None, f"Library-internal import blocked: {result.error}"
+    assert result.namespace["result"] == "January 2024"
+
+
+def test_builtins_import_not_accessible_via_getattr():
+    """Sandboxed code cannot access __builtins__ at all.
+
+    The AST rewriter blocks __builtins__ as a name in Load context,
+    preventing both item access (__builtins__["__import__"]) and
+    attribute access (__builtins__.__import__).
     """
     policy = Policy()
     policy.module(math)
@@ -300,4 +259,5 @@ def test_builtins_import_not_accessible_via_getattr():
 x = __builtins__.__import__
 """)
     assert result.error is not None
-    assert isinstance(result.error, AttributeError)
+    assert isinstance(result.error, StValidationError)
+    assert "__builtins__" in str(result.error)

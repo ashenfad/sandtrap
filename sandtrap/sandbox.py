@@ -223,21 +223,13 @@ class Sandbox:
         ns["print"] = print_fn
         injected["print"] = print_fn
 
-        # Add policy-gated __import__ for C-level imports.
-        # C extensions (e.g. numpy) call PyObject_GetAttr(builtins, "__import__")
-        # to import submodules.  Without this, those imports fail because the
-        # sandbox's safe builtins don't include __import__.
-        _real_import = _builtins.__import__
-        _policy = self.policy
-
-        def _policy_import(name, globals=None, locals=None, fromlist=(), level=0):
-            # Relative imports (level > 0) skip policy — they resolve within
-            # the VFS package hierarchy and are handled by monkeyfs.
-            if level == 0 and not _policy.is_import_allowed(name):
-                raise ImportError(f"Import of '{name}' is not allowed in the sandbox")
-            return _real_import(name, globals, locals, fromlist, level)
-
-        ns["__builtins__"]["__import__"] = _policy_import
+        # Provide the real __import__ so C extensions (e.g. numpy, pandas)
+        # can import their transitive dependencies.  User-code imports are
+        # gated at the AST level — the rewriter validates every import
+        # statement against the policy.  Direct access to __import__ via
+        # __builtins__ is blocked by the AST rewriter (it treats
+        # __builtins__ as a blocked name).
+        ns["__builtins__"]["__import__"] = _builtins.__import__
 
         # Freeze builtins so sandboxed code cannot mutate them.
         # _FrozenBuiltins adds __getattr__ so C-level PyObject_GetAttr
