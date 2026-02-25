@@ -60,7 +60,7 @@ Checkpoints are injected at:
 - Every comprehension iteration (`[x for x in ...]`)
 - Every call to a non-type builtin function (`len`, `sorted`, `sum`, etc.)
 
-Type builtins (`str`, `int`, `dict`, `range`, etc.) do not fire checkpoints -- they are real types so that library code receiving them (e.g. `df.astype(str)`) works correctly.
+Type builtins (`str`, `int`, `dict`, `range`, etc.) do not fire checkpoints -- they are real types so that library code receiving them (e.g. `df.astype(str)`) works correctly. This means a single type construction like `list(range(10**8))` won't checkpoint before allocating. In practice this is not a gap: the allocation is a single C-level call that no per-call checkpoint could interrupt mid-flight, and the memory limit is enforced at the next checkpoint.
 
 Each checkpoint increments the tick counter and checks: cancellation flag, tick limit, wall-clock timeout, and memory limit (in that order).
 
