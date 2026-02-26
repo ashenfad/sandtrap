@@ -3,6 +3,7 @@
 import ast
 import asyncio
 import builtins as _builtins
+import copy
 import itertools
 import linecache
 import threading
@@ -41,6 +42,7 @@ class ExecResult:
     stdout: str = ""
     error: BaseException | None = None
     ticks: int = 0
+    prints: list[tuple[Any, ...]] = field(default_factory=list)
 
 
 class Sandbox:
@@ -56,12 +58,12 @@ class Sandbox:
         *,
         mode: Literal["wrapped", "raw"] = "wrapped",
         filesystem: FileSystem | None = None,
-        print_handler: Any | None = None,
+        snapshot_prints: bool = False,
     ) -> None:
         self.policy = policy
         self.mode = mode
         self.filesystem = filesystem
-        self.print_handler = print_handler
+        self.snapshot_prints = snapshot_prints
         self._cancel_flag = threading.Event()
 
         # Install FS-aware patches once (idempotent, permanent) so that
@@ -156,6 +158,7 @@ class Sandbox:
         namespace: Mapping[str, Any] | None,
         gates: dict[str, Any],
         stdout_buf: TailBuffer,
+        prints_list: list[tuple[Any, ...]] | None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Build the execution namespace with builtins, gates, and registered items.
 
@@ -208,16 +211,19 @@ class Sandbox:
         if self.filesystem is not None:
             ns["__builtins__"]["open"] = _builtins.open
 
-        # Build print function: checkpoint (security) + output handler (configurable)
+        # Build print function: checkpoint + stdout capture + optional snapshot
         checkpoint = gates["__st_checkpoint__"]
-        if self.print_handler is not None:
-            handler = self.print_handler
-        else:
-            handler = make_print(stdout_buf)
+        stdout_handler = make_print(stdout_buf)
 
         def print_fn(*args: Any, **kwargs: Any) -> None:
             checkpoint()
-            handler(*args, **kwargs)
+            if prints_list is not None:
+                try:
+                    snapped = copy.deepcopy(args)
+                except Exception:
+                    snapped = args
+                prints_list.append(snapped)
+            stdout_handler(*args, **kwargs)
 
         ns["print"] = print_fn
         injected["print"] = print_fn
@@ -291,10 +297,18 @@ class Sandbox:
         rewriter: Rewriter,
         source: str,
         namespace: Mapping[str, Any] | None,
-    ) -> tuple[Any, str, dict[str, Any], dict[str, Any], dict[str, Any], TailBuffer]:
+    ) -> tuple[
+        Any,
+        str,
+        dict[str, Any],
+        dict[str, Any],
+        dict[str, Any],
+        TailBuffer,
+        list[tuple[Any, ...]] | None,
+    ]:
         """Fix locations, register linecache, compile, and build namespace.
 
-        Returns ``(code, filename, gates, ns, injected, stdout_buf)``.
+        Returns ``(code, filename, gates, ns, injected, stdout_buf, prints_list)``.
         """
         ast.fix_missing_locations(tree)
 
@@ -326,10 +340,11 @@ class Sandbox:
             _filesystem=self.filesystem,
         )
         stdout_buf = self._make_stdout_buf()
-        ns, injected = self._build_namespace(namespace, gates, stdout_buf)
+        prints_list = [] if self.snapshot_prints else None
+        ns, injected = self._build_namespace(namespace, gates, stdout_buf, prints_list)
         self._auto_activate(ns, gates)
 
-        return code, filename, gates, ns, injected, stdout_buf
+        return code, filename, gates, ns, injected, stdout_buf, prints_list
 
     def _build_result(
         self,
@@ -337,6 +352,7 @@ class Sandbox:
         injected: dict[str, Any],
         gates: dict[str, Any],
         stdout_buf: TailBuffer,
+        prints_list: list[tuple[Any, ...]] | None,
         filename: str,
         error: BaseException | None,
         extra_locals: dict[str, Any] | None = None,
@@ -367,6 +383,7 @@ class Sandbox:
             stdout=stdout_buf.getvalue(),
             error=error,
             ticks=ticks,
+            prints=prints_list or [],
         )
 
     # ------------------------------------------------------------------
@@ -385,8 +402,8 @@ class Sandbox:
             return prepared
         tree, rewriter = prepared
 
-        code, filename, gates, ns, injected, stdout_buf = self._compile_and_setup(
-            tree, rewriter, source, namespace
+        code, filename, gates, ns, injected, stdout_buf, prints_list = (
+            self._compile_and_setup(tree, rewriter, source, namespace)
         )
 
         error = None
@@ -399,7 +416,9 @@ class Sandbox:
                     raise  # Real Ctrl-C from host
                 error = strip_internal_frames(e)
 
-        return self._build_result(ns, injected, gates, stdout_buf, filename, error)
+        return self._build_result(
+            ns, injected, gates, stdout_buf, prints_list, filename, error
+        )
 
     def activate(
         self,
@@ -500,8 +519,8 @@ class Sandbox:
         wrapper = ast.AsyncFunctionDef(**wrapper_kwargs)
         tree.body = [wrapper]
 
-        code, filename, gates, ns, injected, stdout_buf = self._compile_and_setup(
-            tree, rewriter, source, namespace
+        code, filename, gates, ns, injected, stdout_buf, prints_list = (
+            self._compile_and_setup(tree, rewriter, source, namespace)
         )
         ns["__st_locals__"] = _builtins.locals
         ns["__st_local_capture__"] = {}
@@ -531,6 +550,7 @@ class Sandbox:
             injected,
             gates,
             stdout_buf,
+            prints_list,
             filename,
             error,
             extra_locals=result_locals,

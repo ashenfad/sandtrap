@@ -14,7 +14,7 @@ def sandbox(
     isolation: Literal["none", "process", "kernel"] = "none",
     mode: Literal["wrapped", "raw"] = "wrapped",
     filesystem: Any | None = None,
-    print_handler: Any | None = None,
+    snapshot_prints: bool = False,
 ) -> Sandbox:
     """Create a sandbox with the specified isolation level.
 
@@ -34,21 +34,17 @@ def sandbox(
         ``isolation="kernel"``, kernel-level filesystem restriction locks
         access to its root directory.  Optional -- when ``None``, sandboxed
         code has no file I/O.
-    print_handler:
-        Custom print handler.  Only valid with ``isolation="none"``.
+    snapshot_prints:
+        When ``True``, deep-copy ``print()`` arguments at call time and
+        populate ``result.prints``.  ``result.stdout`` is always captured
+        regardless.
     """
-    if print_handler is not None and isolation != "none":
-        raise ValueError(
-            "print_handler is only supported with isolation='none' "
-            f"(got isolation={isolation!r})"
-        )
-
     if isolation == "none":
         return Sandbox(
             policy,
             mode=mode,
             filesystem=filesystem,
-            print_handler=print_handler,
+            snapshot_prints=snapshot_prints,
         )
 
     # Deferred import — avoid loading multiprocessing for in-process use.
@@ -61,4 +57,5 @@ def sandbox(
         filesystem=filesystem,
         mode=mode,
         isolation=kernel_isolation,
+        snapshot_prints=snapshot_prints,
     )

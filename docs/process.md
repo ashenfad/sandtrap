@@ -39,6 +39,7 @@ All `sandbox()` parameters are documented in [sandbox.md](sandbox.md). The proce
 
 - `isolation` -- `"process"` or `"kernel"`.
 - `filesystem` -- a `monkeyfs.FileSystem` implementation (e.g., `IsolatedFS`, `VirtualFS`). Optional -- when `None`, sandboxed code has no file I/O. When an `IsolatedFS` is provided with `isolation="kernel"`, kernel-level filesystem restriction locks access to its root directory.
+- `snapshot_prints` -- works across all isolation levels. When `True`, `result.prints` contains deep-copied `print()` arguments from the worker, pickled back with the result.
 
 ## Running code
 

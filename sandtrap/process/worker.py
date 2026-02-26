@@ -14,6 +14,7 @@ from .protocol import (
     ShutdownMsg,
     WorkerErrorMsg,
     filter_namespace,
+    filter_prints,
 )
 
 
@@ -23,6 +24,7 @@ def worker_main(
     filesystem: Any | None,
     mode: Literal["wrapped", "raw"],
     isolation: Literal["auto", "none"],
+    snapshot_prints: bool = False,
 ) -> None:
     """Main loop for the worker subprocess.
 
@@ -68,7 +70,9 @@ def worker_main(
             allow_host_fs=policy.needs_host_fs(),
         )
 
-        sandbox = Sandbox(policy, mode=mode, filesystem=filesystem)
+        sandbox = Sandbox(
+            policy, mode=mode, filesystem=filesystem, snapshot_prints=snapshot_prints
+        )
 
         # Install SIGUSR1 handler for cancel — single reader on the pipe,
         # no race conditions.
@@ -101,6 +105,7 @@ def worker_main(
                         stdout=result.stdout,
                         error=result.error,
                         ticks=result.ticks,
+                        prints=filter_prints(result.prints),
                     )
                 )
             except BaseException:

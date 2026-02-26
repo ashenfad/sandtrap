@@ -57,11 +57,13 @@ class ProcessSandbox:
         filesystem: Any | None = None,
         mode: Literal["wrapped", "raw"] = "wrapped",
         isolation: Literal["auto", "none"] = "auto",
+        snapshot_prints: bool = False,
     ) -> None:
         self._policy = policy
         self._filesystem = filesystem
         self._mode = mode
         self._isolation = isolation
+        self._snapshot_prints = snapshot_prints
 
         self._process: multiprocessing.Process | None = None
         self._conn: multiprocessing.connection.Connection | None = None
@@ -104,6 +106,7 @@ class ProcessSandbox:
                 self._filesystem,
                 self._mode,
                 self._isolation,
+                self._snapshot_prints,
             ),
             daemon=True,
         )
@@ -214,6 +217,7 @@ class ProcessSandbox:
                 stdout=msg.stdout,
                 error=msg.error,
                 ticks=msg.ticks,
+                prints=msg.prints,
             )
         if isinstance(msg, WorkerErrorMsg):
             return ExecResult(error=RuntimeError(f"Worker error:\n{msg.message}"))
@@ -251,8 +255,9 @@ def _worker_entry(
     filesystem: Any | None,
     mode: Literal["wrapped", "raw"],
     isolation: Literal["auto", "none"],
+    snapshot_prints: bool = False,
 ) -> None:
     """Entry point for the worker process (target of multiprocessing.Process)."""
     from .worker import worker_main
 
-    worker_main(conn, policy, filesystem, mode, isolation)
+    worker_main(conn, policy, filesystem, mode, isolation, snapshot_prints)

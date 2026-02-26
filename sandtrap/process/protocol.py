@@ -12,6 +12,24 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 
+def filter_prints(
+    prints: list[tuple[Any, ...]],
+) -> list[tuple[Any, ...]]:
+    """Drop non-picklable print snapshots.
+
+    Each entry is a tuple of args from a single ``print()`` call.
+    Entries that fail to pickle are silently dropped.
+    """
+    safe: list[tuple[Any, ...]] = []
+    for entry in prints:
+        try:
+            pickle.dumps(entry)
+            safe.append(entry)
+        except (pickle.PicklingError, TypeError, AttributeError):
+            pass
+    return safe
+
+
 def filter_namespace(ns: Mapping[str, Any] | None) -> dict[str, Any] | None:
     """Drop non-picklable values from a namespace dict.
 
@@ -67,6 +85,7 @@ class ResultMsg:
     stdout: str
     error: BaseException | None
     ticks: int
+    prints: list[tuple[Any, ...]]
 
 
 @dataclass
