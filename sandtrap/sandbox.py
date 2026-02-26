@@ -19,6 +19,7 @@ from .builtins import (
     _make_gated_type,
     make_print,
     make_safe_builtins,
+    make_safe_help,
 )
 from .errors import StTimeout, StValidationError, strip_internal_frames
 from .fs import FileSystem, patch
@@ -227,6 +228,12 @@ class Sandbox:
 
         ns["print"] = print_fn
         injected["print"] = print_fn
+
+        # help() writes directly to stdout_buf/prints_list instead of
+        # sys.stdout, so sub-agent callbacks are not intercepted.
+        help_fn = make_safe_help(stdout_buf, prints_list)
+        ns["help"] = help_fn
+        injected["help"] = help_fn
 
         # Provide the real __import__ so C extensions (e.g. numpy, pandas)
         # can import their transitive dependencies.  User-code imports are

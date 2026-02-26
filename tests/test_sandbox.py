@@ -681,3 +681,45 @@ def test_overlapping_sandboxes():
     r2 = sandbox2.exec("f = open('/a.txt'); content = f.read(); f.close()")
     assert r2.error is None
     assert r2.namespace["content"] == "from fs2"
+
+
+def test_help_captured_in_stdout(sandbox):
+    """help() output is captured in result.stdout via custom help."""
+    result = sandbox.exec("help(int)")
+    assert result.error is None
+    assert "int" in result.stdout
+    assert "Return" in result.stdout  # docstring content
+
+
+def test_help_captured_in_prints():
+    """help() output lands in result.prints as plain strings."""
+    sb = Sandbox(Policy(), snapshot_prints=True)
+    result = sb.exec("help(len)")
+    assert result.error is None
+    combined = "".join(t[0] for t in result.prints)
+    assert "len" in combined
+    assert "Return the number of items" in combined
+
+
+def test_gated_builtins_preserve_docs():
+    """functools.wraps preserves __doc__ on gated builtin wrappers."""
+    from sandtrap.builtins import make_safe_builtins
+
+    builtins = make_safe_builtins(
+        getattr_gate=getattr,
+        checkpoint=lambda: None,
+    )
+    # Gated sorted should still have the original __doc__
+    assert builtins["sorted"].__doc__ is not None
+    assert "Return a new list" in builtins["sorted"].__doc__
+    assert builtins["len"].__doc__ is not None
+
+
+def test_help_on_gated_builtin_shows_real_docs(sandbox):
+    """help() on a gated builtin shows the original docs, not wrapper internals."""
+    result = sandbox.exec("help(sorted)")
+    assert result.error is None
+    assert "sorted" in result.stdout
+    # Should show real signature, not _gated wrapper
+    assert "_fn" not in result.stdout
+    assert "_gated" not in result.stdout
