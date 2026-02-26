@@ -106,9 +106,8 @@ def make_gates(
             return None
 
         # Read source
-        f = _filesystem.open(path, "r")
-        source = f.read()
-        f.close()
+        with _filesystem.open(path, "r") as f:
+            source = f.read()
 
         # Create module object and cache it before execution (circular import protection)
         mod = types.ModuleType(module_name)

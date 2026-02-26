@@ -220,10 +220,7 @@ class StFunction:
         for source in (frozen_globals, frozen_closure):
             if source:
                 for val in source.values():
-                    if isinstance(val, StFunction) and val._compiled is None:
-                        val.activate(gates, sandbox=sandbox, namespace=ns)
-                    elif isinstance(val, StClass) and val._compiled_cls is None:
-                        val.activate(gates, sandbox=sandbox, namespace=ns)
+                    activate_value(val, gates, sandbox=sandbox, namespace=ns)
 
         # Resolve ModuleRef objects in the namespace via the import gate
         import_gate = gates.get("__st_import__")
@@ -359,10 +356,7 @@ class StClass:
         if self._frozen_refs:
             for name in self._frozen_refs:
                 val = ns.get(name)
-                if isinstance(val, StFunction) and val._compiled is None:
-                    val.activate(gates, sandbox=sandbox, namespace=ns)
-                elif isinstance(val, StClass) and val._compiled_cls is None:
-                    val.activate(gates, sandbox=sandbox, namespace=ns)
+                activate_value(val, gates, sandbox=sandbox, namespace=ns)
 
         class_copy = copy.deepcopy(self._class_ast)
         module = ast.Module(body=[class_copy], type_ignores=[])
@@ -461,22 +455,31 @@ class StInstance:
         # Auto-activate nested wrappers in frozen attrs
         if gates is not None:
             for val in frozen.values():
-                if isinstance(val, StFunction) and val._compiled is None:
-                    val.activate(gates, sandbox=sandbox, namespace=namespace)
-                elif isinstance(val, StClass) and val._compiled_cls is None:
-                    val.activate(gates, sandbox=sandbox, namespace=namespace)
-                elif isinstance(val, StInstance):
-                    nested_class = object.__getattribute__(val, "_st_class")
-                    if nested_class._compiled_cls is None:
-                        nested_class.activate(
-                            gates, sandbox=sandbox, namespace=namespace
-                        )
-                    if object.__getattribute__(val, "_st_instance") is None:
-                        val.activate(gates=gates, sandbox=sandbox, namespace=namespace)
+                activate_value(val, gates, sandbox=sandbox, namespace=namespace)
 
         instance.__dict__.update(frozen)
         object.__setattr__(self, "_st_instance", instance)
         object.__setattr__(self, "_st_getattr_gate", sb_class._st_getattr_gate)
+
+
+def activate_value(
+    val: Any,
+    gates: dict[str, Any],
+    *,
+    sandbox: Any = None,
+    namespace: dict[str, Any] | None = None,
+) -> None:
+    """Activate an inactive StFunction, StClass, or StInstance."""
+    if isinstance(val, StFunction) and val._compiled is None:
+        val.activate(gates, sandbox=sandbox, namespace=namespace)
+    elif isinstance(val, StClass) and val._compiled_cls is None:
+        val.activate(gates, sandbox=sandbox, namespace=namespace)
+    elif isinstance(val, StInstance):
+        sb_class = object.__getattribute__(val, "_st_class")
+        if sb_class._compiled_cls is None:
+            sb_class.activate(gates, sandbox=sandbox, namespace=namespace)
+        if object.__getattribute__(val, "_st_instance") is None:
+            val.activate(gates=gates, sandbox=sandbox, namespace=namespace)
 
 
 def _make_dunder_forwarder(name: str):

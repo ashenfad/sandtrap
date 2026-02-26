@@ -27,7 +27,7 @@ from .net.patch import install as install_net
 from .policy import Policy
 from .resource_limits import get_rss_bytes, memory_limit_context
 from .rewriter import Rewriter
-from .wrappers import ModuleRef, StClass, StFunction, StInstance
+from .wrappers import ModuleRef, StClass, StFunction, StInstance, activate_value
 
 _exec_counter = itertools.count(1)
 _INTERNAL_KEYS = {"__builtins__", "__name__"}
@@ -87,17 +87,8 @@ class Sandbox:
         """Auto-activate any inactive StFunction/StClass/StInstance in namespace."""
         import_gate = gates.get("__st_import__")
         for k, v in list(ns.items()):
-            if isinstance(v, StFunction) and v._compiled is None:
-                v.activate(gates, sandbox=self, namespace=ns)
-            elif isinstance(v, StClass) and v._compiled_cls is None:
-                v.activate(gates, sandbox=self, namespace=ns)
-            elif isinstance(v, StInstance):
-                sb_class = object.__getattribute__(v, "_st_class")
-                if sb_class._compiled_cls is None:
-                    sb_class.activate(gates, sandbox=self, namespace=ns)
-                if object.__getattribute__(v, "_st_instance") is None:
-                    v.activate(gates=gates, sandbox=self, namespace=ns)
-            elif isinstance(v, ModuleRef) and import_gate is not None:
+            activate_value(v, gates, sandbox=self, namespace=ns)
+            if isinstance(v, ModuleRef) and import_gate is not None:
                 try:
                     top = v.name.split(".")[0]
                     if k == top:
