@@ -46,6 +46,10 @@ class _ClsRegistration:
     host_fs_access: bool = False
     network_access: bool = False
 
+    def __post_init__(self) -> None:
+        self._include_pred = _make_predicate(self.include)
+        self._exclude_pred = _make_predicate(self.exclude)
+
 
 @dataclass
 class _ModuleRegistration:
@@ -57,6 +61,10 @@ class _ModuleRegistration:
     recursive: bool = False
     host_fs_access: bool = False
     network_access: bool = False
+
+    def __post_init__(self) -> None:
+        self._include_pred = _make_predicate(self.include)
+        self._exclude_pred = _make_predicate(self.exclude)
 
 
 # Interpreter-internal attributes that don't start with underscore but
@@ -152,6 +160,10 @@ class Policy:
         self.classes: dict[str, _ClsRegistration] = {}
         self.modules: dict[str, _ModuleRegistration] = {}
 
+        # O(1) lookup for _find_registration_for
+        self._reg_by_cls_id: dict[int, _ClsRegistration] = {}
+        self._reg_by_module_id: dict[int, _ModuleRegistration] = {}
+
         # Global flags
         self.allow_network = allow_network
 
@@ -201,7 +213,7 @@ class Policy:
 
         def _register(c: type) -> type:
             cls_name = name or c.__name__
-            self.classes[cls_name] = _ClsRegistration(
+            reg = _ClsRegistration(
                 cls=c,
                 name=cls_name,
                 constructable=constructable,
@@ -211,6 +223,8 @@ class Policy:
                 host_fs_access=host_fs_access,
                 network_access=network_access,
             )
+            self.classes[cls_name] = reg
+            self._reg_by_cls_id[id(c)] = reg
             return c
 
         if cls is not None:
@@ -239,7 +253,7 @@ class Policy:
                 )
         else:
             mod_name = name
-        self.modules[mod_name] = _ModuleRegistration(
+        reg = _ModuleRegistration(
             obj=obj,
             name=mod_name,
             include=include,
@@ -249,6 +263,8 @@ class Policy:
             host_fs_access=host_fs_access,
             network_access=network_access,
         )
+        self.modules[mod_name] = reg
+        self._reg_by_module_id[id(obj)] = reg
 
     def is_attr_allowed(self, obj: Any, attr: str) -> bool:
         """Check if an attribute access is permitted by this policy."""
@@ -260,10 +276,8 @@ class Policy:
                 return True  # Explicitly configured members are allowed
 
             # Check include/exclude
-            if hasattr(reg, "include"):
-                include_pred = _make_predicate(reg.include)
-                exclude_pred = _make_predicate(reg.exclude)
-                if not include_pred(attr):
+            if hasattr(reg, "_include_pred"):
+                if not reg._include_pred(attr):
                     # Before denying, check if the attribute is a separately
                     # registered submodule (e.g., os.path registered alongside os)
                     sub_obj = getattr(obj, attr, None)
@@ -273,7 +287,7 @@ class Policy:
                     ):
                         return True
                     return False
-                if exclude_pred(attr):
+                if reg._exclude_pred(attr):
                     return False
                 # Block submodule access on non-recursive module registrations
                 if not getattr(reg, "recursive", False):
@@ -313,27 +327,27 @@ class Policy:
                     except ValueError:
                         pass
                 for cls in mro[start:]:
-                    for reg in self.classes.values():
-                        if cls is reg.cls:
-                            return reg
+                    reg = self._reg_by_cls_id.get(id(cls))
+                    if reg is not None and cls is reg.cls:
+                        return reg
             return None
 
         # Check if obj is a registered module
-        for reg in self.modules.values():
-            if obj is reg.obj:
-                return reg
+        reg = self._reg_by_module_id.get(id(obj))
+        if reg is not None and obj is reg.obj:
+            return reg
 
         # Check if type(obj) is a registered class
         obj_type = type(obj)
-        for reg in self.classes.values():
-            if obj_type is reg.cls:
-                return reg
+        reg = self._reg_by_cls_id.get(id(obj_type))
+        if reg is not None and obj_type is reg.cls:
+            return reg
 
         # Check if obj itself is a registered class (accessing class attrs)
         if isinstance(obj, type):
-            for reg in self.classes.values():
-                if obj is reg.cls:
-                    return reg
+            reg = self._reg_by_cls_id.get(id(obj))
+            if reg is not None and obj is reg.cls:
+                return reg
 
         return None
 
@@ -383,9 +397,7 @@ class Policy:
             raise ImportError(f"Module '{module_name}' not registered")
 
         # Check include/exclude filters
-        include_pred = _make_predicate(reg.include)
-        exclude_pred = _make_predicate(reg.exclude)
-        if not include_pred(member_name) or exclude_pred(member_name):
+        if not reg._include_pred(member_name) or reg._exclude_pred(member_name):
             raise ImportError(f"'{member_name}' is not available from '{module_name}'")
 
         # Get the member from the actual module object
