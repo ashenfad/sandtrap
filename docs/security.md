@@ -78,7 +78,23 @@ macOS does not support `RLIMIT_AS` (`setrlimit` returns `EINVAL`), so only check
 
 sandtrap is a "walled garden" -- it controls what sandboxed code can access, not what the Python runtime can do. It is designed to prevent accidental or casual misuse by LLM-generated code.
 
-It is **not** a security boundary against a determined attacker with full CPython knowledge. It runs in-process and shares the same memory space as the host. If you need hard isolation, use process-level sandboxing (containers, seccomp, etc.) as an outer layer.
+### In-process (`isolation="none"`)
+
+The default mode runs in-process and shares the host's memory space. It is **not** a security boundary against a determined attacker with full CPython knowledge. For hard isolation, use `isolation="kernel"`.
+
+### Subprocess (`isolation="process"` / `isolation="kernel"`)
+
+`isolation="kernel"` adds a process boundary with kernel-level restrictions:
+
+- **Filesystem** -- Landlock (Linux) or Seatbelt (macOS) restricts access to the `IsolatedFS` root directory
+- **Syscalls** -- seccomp (Linux) or Seatbelt (macOS) blocks process spawning, and blocks network when the policy doesn't need it
+- **Process isolation** -- crashes, OOM, or segfaults in the child don't affect the host
+
+Kernel restrictions are applied once at worker startup and **cannot be loosened afterward** (seccomp/Landlock are strictly monotonic; Seatbelt is one-shot). If any part of the policy grants `network_access=True` or `host_fs_access=True` to any registration, the corresponding kernel restriction is **completely off for the entire worker process.** In that case, only the Python-level `ContextVar` gating enforces per-callable access control. See [process.md](process.md) for details.
+
+`isolation="process"` provides crash protection without kernel restrictions.
+
+Both are a meaningful security improvement over `isolation="none"`, but kernel isolation is best-effort -- it degrades gracefully when platform features are unavailable (warnings are emitted).
 
 ### What's defended
 
@@ -89,16 +105,17 @@ It is **not** a security boundary against a determined attacker with full CPytho
 - Swallowing control exceptions via bare `except:`
 - Infinite loops and runaway computation (tick limits, timeouts)
 - Unauthorized file and network I/O
+- Process spawning and filesystem escape (`isolation="kernel"`, kernel-enforced)
 
 ### What's out of scope
 
-These vectors are **not** defended against and require process-level isolation if they are a concern:
+These vectors are **not** defended against by the Python-level policy. `isolation="kernel"` mitigates some of them via kernel enforcement, but they remain concerns for in-process execution:
 
-- **C extensions** -- a registered module with C code can do anything (call `ctypes`, access raw memory, spawn processes). Only register modules you trust.
+- **C extensions** -- a registered module with C code can do anything (call `ctypes`, access raw memory, spawn processes). Only register modules you trust. With `isolation="kernel"`, seccomp blocks `execve` and Landlock/Seatbelt restricts filesystem access, limiting the blast radius.
 - **`ctypes` / `cffi`** -- if registered, these provide unrestricted access to the C layer. Never register them.
 - **`gc.get_objects()`** -- if the `gc` module is registered, sandboxed code can enumerate all live Python objects. Don't register `gc`.
-- **Signal handlers** -- `signal` module access would allow overriding the host's signal handling.
-- **Shared mutable state** -- objects passed into the sandbox namespace are not copied. Sandboxed code can mutate them in place.
+- **Signal handlers** -- `signal` module access would allow overriding the host's signal handling. With process isolation, this only affects the child process.
+- **Shared mutable state** -- objects passed into the sandbox namespace are not copied. Sandboxed code can mutate them in place. With process isolation (`isolation="process"` or `"kernel"`), namespaces are serialized across the process boundary, so mutations don't propagate back to the host.
 - **Side channels** -- timing attacks, cache probing, and other side channels are not mitigated.
 - **CPython internals** -- bytecode manipulation, `sys._getframe()`, `ctypes.pythonapi`, and other CPython-specific escape hatches are blocked by the attribute gate and builtins whitelist, but novel CPython exploits may bypass AST-level controls.
 

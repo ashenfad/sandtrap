@@ -64,6 +64,14 @@ class Sandbox:
         self.print_handler = print_handler
         self._cancel_flag = threading.Event()
 
+        # Install FS-aware patches once (idempotent, permanent) so that
+        # builtins.open is the patched version *before* _build_namespace
+        # captures it into the sandbox namespace.
+        if filesystem is not None:
+            from monkeyfs.patching import install as install_fs
+
+            install_fs()
+
     def __enter__(self) -> "Sandbox":
         return self
 

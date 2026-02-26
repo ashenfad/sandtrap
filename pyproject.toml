@@ -1,7 +1,7 @@
 [project]
 name = "sandtrap"
 version = "0.1.3"
-description = "Lightweight in-process Python sandbox using AST rewriting."
+description = "Local Python sandbox using AST rewriting, with optional subprocess isolation and kernel-level enforcement."
 readme = "README.md"
 license = "MIT"
 authors = [
@@ -44,6 +44,10 @@ test = [
     "pytest-asyncio",
     "pytest-timeout",
     "pandas",
+]
+process = [
+    "landlock; sys_platform == 'linux'",
+    "pyseccomp; sys_platform == 'linux'",
 ]
 
 [tool.ruff]

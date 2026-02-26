@@ -2,6 +2,7 @@
 
 from monkeyfs import (
     FileSystem,
+    IsolatedFS,
     VirtualFS,
     current_fs,
     patch,
@@ -10,6 +11,7 @@ from monkeyfs import (
 
 __all__ = [
     "FileSystem",
+    "IsolatedFS",
     "VirtualFS",
     "current_fs",
     "patch",
