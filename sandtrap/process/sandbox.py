@@ -6,6 +6,7 @@ import asyncio
 import multiprocessing
 import os
 import signal
+import time
 import warnings
 from collections.abc import Mapping
 from typing import Any, Literal
@@ -189,9 +190,11 @@ class ProcessSandbox:
                     )
         self._conn.send(ExecMsg(source=source, namespace=safe_ns))
 
-        # Poll with a timeout so we don't hang forever if the child
-        # dies without closing the pipe cleanly.
-        while True:
+        # Poll with a deadline so we don't hang forever if the worker
+        # becomes unresponsive (e.g., stuck serializing the result).
+        # Grace period covers IPC overhead after the sandbox timeout fires.
+        deadline = time.monotonic() + self._policy.timeout + 5.0
+        while time.monotonic() < deadline:
             if not self._process or not self._process.is_alive():
                 # Child died — drain any remaining message
                 if self._conn.poll(0.1):
@@ -202,6 +205,9 @@ class ProcessSandbox:
                 )
             if self._conn.poll(1.0):
                 break
+        else:
+            self._kill()
+            return ExecResult(error=RuntimeError("Worker process became unresponsive"))
 
         try:
             msg = self._conn.recv()
