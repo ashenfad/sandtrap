@@ -266,6 +266,46 @@ class Policy:
         self.modules[mod_name] = reg
         self._reg_by_module_id[id(obj)] = reg
 
+    def needs_network(self) -> bool:
+        """Return True if any part of this policy requires network access."""
+        if self.allow_network:
+            return True
+        for reg in self.functions.values():
+            if reg.network_access:
+                return True
+        for reg in self.classes.values():
+            if reg.network_access:
+                return True
+            for spec in reg.configure.values():
+                if spec.network_access:
+                    return True
+        for reg in self.modules.values():
+            if reg.network_access:
+                return True
+            for spec in reg.configure.values():
+                if spec.network_access:
+                    return True
+        return False
+
+    def needs_host_fs(self) -> bool:
+        """Return True if any registration requires host filesystem access."""
+        for reg in self.functions.values():
+            if reg.host_fs_access:
+                return True
+        for reg in self.classes.values():
+            if reg.host_fs_access:
+                return True
+            for spec in reg.configure.values():
+                if spec.host_fs_access:
+                    return True
+        for reg in self.modules.values():
+            if reg.host_fs_access:
+                return True
+            for spec in reg.configure.values():
+                if spec.host_fs_access:
+                    return True
+        return False
+
     def is_attr_allowed(self, obj: Any, attr: str) -> bool:
         """Check if an attribute access is permitted by this policy."""
         # Check registered module/class-specific rules first

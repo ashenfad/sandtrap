@@ -1,28 +1,31 @@
 # Sandbox Execution
 
-The `Sandbox` class parses, validates, rewrites, compiles, and executes Python code under a policy-controlled security model.
+The `sandbox()` factory creates a sandbox for executing Python code under a policy-controlled security model. By default (`isolation="none"`), execution is in-process, lightweight, and shares the host's memory space. For subprocess-backed execution with kernel-level isolation, see [process.md](process.md).
 
 ## Creating a sandbox
 
 ```python
-from sandtrap import Policy, Sandbox
+from sandtrap import Policy, sandbox
 
 policy = Policy(timeout=5.0, tick_limit=100_000)
-sandbox = Sandbox(policy)
+sb = sandbox(policy)
 ```
 
-Options:
+**Parameters:**
+
+- `policy` -- a `Policy` instance controlling what sandboxed code can access.
+- `isolation` -- `"none"` (default), `"process"`, or `"kernel"`. See [process.md](process.md).
 - `mode` -- `"wrapped"` (default) wraps user-defined functions/classes for pickling. `"raw"` returns plain objects. See [serialization.md](serialization.md).
 - `filesystem` -- a `FileSystem` implementation for VFS interception (see [filesystem.md](filesystem.md)).
-- `print_handler` -- a callable replacing the default `print` output handler. Receives the same arguments as `print()`. When not set, output is captured to `result.stdout`.
+- `print_handler` -- a callable replacing the default `print` output handler. Receives the same arguments as `print()`. When not set, output is captured to `result.stdout`. Only valid with `isolation="none"`.
 
 ## Context manager
 
-`Sandbox` supports `with`:
+`sandbox()` returns objects that support `with`:
 
 ```python
-with Sandbox(policy, filesystem=fs) as sandbox:
-    result = sandbox.exec("x = 1")
+with sandbox(policy, filesystem=fs) as sb:
+    result = sb.exec("x = 1")
 ```
 
 Filesystem and network patches are installed once on first use and remain active for the process lifetime. They are inert when no sandbox is executing -- calls fall through to the original functions transparently.
@@ -111,10 +114,10 @@ Cancel a running execution from another thread:
 ```python
 import threading
 
-timer = threading.Timer(1.0, sandbox.cancel)
+timer = threading.Timer(1.0, sb.cancel)
 timer.start()
 
-result = sandbox.exec("while True: pass")
+result = sb.exec("while True: pass")
 assert isinstance(result.error, StCancelled)
 ```
 

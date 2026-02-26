@@ -129,3 +129,135 @@ def test_default_policy():
     assert policy.allow_network is False
     assert policy.timeout == 30.0
     assert policy.memory_limit is None
+
+
+# ------------------------------------------------------------------
+# needs_network()
+# ------------------------------------------------------------------
+
+
+def test_needs_network_default():
+    assert Policy().needs_network() is False
+
+
+def test_needs_network_global_flag():
+    assert Policy(allow_network=True).needs_network() is True
+
+
+def test_needs_network_fn_registration():
+    policy = Policy()
+    policy.fn(lambda: None, name="fetch", network_access=True)
+    assert policy.needs_network() is True
+
+
+def test_needs_network_fn_without_network():
+    policy = Policy()
+    policy.fn(lambda: None, name="compute")
+    assert policy.needs_network() is False
+
+
+def test_needs_network_cls_registration():
+    policy = Policy()
+    policy.cls(type("C", (), {}), name="C", network_access=True)
+    assert policy.needs_network() is True
+
+
+def test_needs_network_cls_member_spec():
+    from sandtrap.policy import MemberSpec
+
+    policy = Policy()
+    policy.cls(
+        type("C", (), {"fetch": lambda self: None}),
+        name="C",
+        configure={"fetch": MemberSpec(network_access=True)},
+    )
+    assert policy.needs_network() is True
+
+
+def test_needs_network_module_registration():
+    import types
+
+    mod = types.ModuleType("mymod")
+    policy = Policy()
+    policy.module(mod, name="mymod", network_access=True)
+    assert policy.needs_network() is True
+
+
+def test_needs_network_module_member_spec():
+    import types
+
+    from sandtrap.policy import MemberSpec
+
+    mod = types.ModuleType("mymod")
+    mod.fetch = lambda: None
+    policy = Policy()
+    policy.module(
+        mod,
+        name="mymod",
+        configure={"fetch": MemberSpec(network_access=True)},
+    )
+    assert policy.needs_network() is True
+
+
+# ------------------------------------------------------------------
+# needs_host_fs()
+# ------------------------------------------------------------------
+
+
+def test_needs_host_fs_default():
+    assert Policy().needs_host_fs() is False
+
+
+def test_needs_host_fs_fn_registration():
+    policy = Policy()
+    policy.fn(lambda: None, name="save", host_fs_access=True)
+    assert policy.needs_host_fs() is True
+
+
+def test_needs_host_fs_fn_without():
+    policy = Policy()
+    policy.fn(lambda: None, name="compute")
+    assert policy.needs_host_fs() is False
+
+
+def test_needs_host_fs_cls_registration():
+    policy = Policy()
+    policy.cls(type("C", (), {}), name="C", host_fs_access=True)
+    assert policy.needs_host_fs() is True
+
+
+def test_needs_host_fs_cls_member_spec():
+    from sandtrap.policy import MemberSpec
+
+    policy = Policy()
+    policy.cls(
+        type("C", (), {"save": lambda self: None}),
+        name="C",
+        configure={"save": MemberSpec(host_fs_access=True)},
+    )
+    assert policy.needs_host_fs() is True
+
+
+def test_needs_host_fs_module_registration():
+    import types
+
+    mod = types.ModuleType("mymod")
+    policy = Policy()
+    policy.module(mod, name="mymod", host_fs_access=True)
+    assert policy.needs_host_fs() is True
+
+
+def test_needs_host_fs_module_member_spec():
+    import types
+
+    from sandtrap.policy import MemberSpec
+
+    mod = types.ModuleType("mymod")
+    mod.save = lambda: None
+    policy = Policy()
+    policy.module(
+        mod,
+        name="mymod",
+        configure={"save": MemberSpec(host_fs_access=True)},
+    )
+    assert policy.needs_host_fs() is True
