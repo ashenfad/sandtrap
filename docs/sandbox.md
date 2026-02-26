@@ -17,7 +17,7 @@ sb = sandbox(policy)
 - `isolation` -- `"none"` (default), `"process"`, or `"kernel"`. See [process.md](process.md).
 - `mode` -- `"wrapped"` (default) wraps user-defined functions/classes for pickling. `"raw"` returns plain objects. See [serialization.md](serialization.md).
 - `filesystem` -- a `FileSystem` implementation for VFS interception (see [filesystem.md](filesystem.md)).
-- `print_handler` -- a callable replacing the default `print` output handler. Receives the same arguments as `print()`. When not set, output is captured to `result.stdout`. Only valid with `isolation="none"`.
+- `snapshot_prints` -- when `True`, deep-copies `print()` arguments at call time and populates `result.prints`. Default `False`. Works with all isolation levels.
 
 ## Context manager
 
@@ -35,13 +35,13 @@ Filesystem and network patches are installed once on first use and remain active
 ### Synchronous
 
 ```python
-result = sandbox.exec("x = 2 + 3")
+result = sb.exec("x = 2 + 3")
 ```
 
 With a pre-populated namespace:
 
 ```python
-result = sandbox.exec("y = x + 1", namespace={"x": 10})
+result = sb.exec("y = x + 1", namespace={"x": 10})
 ```
 
 ### Asynchronous
@@ -49,7 +49,7 @@ result = sandbox.exec("y = x + 1", namespace={"x": 10})
 ```python
 import asyncio
 
-result = asyncio.run(sandbox.aexec("""
+result = asyncio.run(sb.aexec("""
 import asyncio
 await asyncio.sleep(0.01)
 x = 42
@@ -63,11 +63,33 @@ Both `exec()` and `aexec()` return an `ExecResult`:
 | Field | Type | Description |
 |-------|------|-------------|
 | `namespace` | `dict[str, Any]` | Variables defined by the sandboxed code |
-| `stdout` | `str` | Captured print output |
+| `stdout` | `str` | Captured print output (formatted text) |
 | `error` | `BaseException \| None` | Runtime error, or `None` on success |
 | `ticks` | `int` | Number of checkpoint ticks consumed |
+| `prints` | `list[tuple[Any, ...]]` | Raw `print()` args, deep-copied at call time (empty unless `snapshot_prints=True`) |
 
 The namespace excludes sandbox internals (`__builtins__`, `__st_*` gates, registered functions/classes, `print`). If user code reassigns a registered name (e.g., `print = 42`), the new value is included.
+
+## Capturing print objects
+
+`result.stdout` always captures formatted text. When you need the original Python objects passed to `print()`, enable `snapshot_prints`:
+
+```python
+with sandbox(Policy(timeout=5.0), snapshot_prints=True) as sb:
+    result = sb.exec("""
+data = [1, 2, 3]
+print("result:", data)
+""")
+
+result.stdout    # 'result: [1, 2, 3]\n'
+result.prints    # [('result:', [1, 2, 3])]
+```
+
+Objects are deep-copied at print time, so mutations after `print()` don't affect `result.prints`. If deep-copy fails (e.g., for objects that don't support it), the raw reference is kept instead.
+
+`snapshot_prints` works with all isolation levels. With process isolation (`isolation="process"` or `"kernel"`), prints are pickled back with the result -- any entries that can't be pickled are silently dropped.
+
+If code errors mid-execution, `result.prints` still contains all prints that occurred before the error.
 
 ## Error handling
 
