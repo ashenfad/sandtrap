@@ -86,9 +86,35 @@ def test_no_vars_builtin(sandbox):
     assert result.error is not None
 
 
-def test_no_dir_builtin(sandbox):
-    result = sandbox.exec("d = dir()")
-    assert result.error is not None
+def test_dir_builtin_allowed(sandbox):
+    result = sandbox.exec("x = 1\nd = dir()")
+    assert result.error is None
+    assert isinstance(result.namespace["d"], list)
+    assert "x" in result.namespace["d"]
+    # Sandbox internals should be filtered out
+    assert not any(name.startswith("__st_") for name in result.namespace["d"])
+    assert "__builtins__" not in result.namespace["d"]
+
+
+def test_dir_with_argument(sandbox):
+    result = sandbox.exec("d = dir([1, 2, 3])")
+    assert result.error is None
+    assert "append" in result.namespace["d"]
+
+
+def test_help_with_argument(sandbox):
+    result = sandbox.exec("help(int)")
+    assert result.error is None
+    assert "int" in result.stdout
+
+
+def test_help_output_in_prints():
+    """help() output lands in result.prints as plain strings when snapshot_prints is on."""
+    sb = Sandbox(Policy(), snapshot_prints=True)
+    result = sb.exec("help(len)")
+    assert result.error is None
+    combined = "".join(t[0] for t in result.prints)
+    assert "len" in combined
 
 
 def test_no_breakpoint(sandbox):

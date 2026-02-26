@@ -2,6 +2,8 @@
 
 import builtins as _builtins
 import copyreg
+import functools
+import pydoc
 import sys
 from io import StringIO
 from typing import Any
@@ -361,12 +363,11 @@ def make_safe_builtins(
             elif callable(original):
                 fn = original
 
+                @functools.wraps(fn)
                 def _gated(*args: Any, _fn: Any = fn, **kwargs: Any) -> Any:
                     checkpoint()
                     return _fn(*args, **kwargs)
 
-                _gated.__name__ = name
-                _gated.__qualname__ = name
                 builtins[name] = _gated
 
         # __build_class__ must unwrap _GatedMeta bases (used for
@@ -400,7 +401,19 @@ def make_safe_builtins(
     builtins["getattr"] = _safe_getattr
     builtins["hasattr"] = _safe_hasattr
     builtins["locals"] = make_safe_locals()
+    builtins["dir"] = make_safe_dir()
+    # help is injected later by _build_namespace (needs stdout_buf/prints_list)
     return builtins
+
+
+def _is_internal_name(name: str) -> bool:
+    """Return True for sandbox-internal names that should be hidden."""
+    return (
+        name.startswith("__st_")
+        or name == "__builtins__"
+        or name == "__name__"
+        or name == "print"
+    )
 
 
 def make_safe_locals() -> Any:
@@ -412,13 +425,55 @@ def make_safe_locals() -> Any:
 
     def _safe_locals() -> dict[str, Any]:
         frame = sys._getframe(1)
-        return {
-            k: v
-            for k, v in frame.f_locals.items()
-            if not k.startswith("__st_")
-            and k != "__builtins__"
-            and k != "__name__"
-            and k != "print"
-        }
+        return {k: v for k, v in frame.f_locals.items() if not _is_internal_name(k)}
 
     return _safe_locals
+
+
+def make_safe_dir() -> Any:
+    """Create a safe dir() replacement for sandboxed code.
+
+    With no arguments, returns sorted names from the caller's scope with
+    sandbox internals filtered out.  With an argument, delegates to the
+    real ``dir(obj)``.
+    """
+    _real_dir = dir
+
+    def _safe_dir(obj: Any = _SENTINEL) -> list[str]:
+        if obj is not _SENTINEL:
+            return _real_dir(obj)
+        frame = sys._getframe(1)
+        return sorted(k for k in frame.f_locals if not _is_internal_name(k))
+
+    return _safe_dir
+
+
+_SENTINEL = object()
+
+
+def make_safe_help(
+    stdout_buf: StringIO | TailBuffer,
+    prints_list: list[tuple[Any, ...]] | None,
+) -> Any:
+    """Create a safe help() replacement for sandboxed code.
+
+    Renders documentation via ``pydoc`` and writes directly to the
+    sandbox's stdout buffer (and prints_list if snapshot_prints is on),
+    avoiding ``sys.stdout`` so that sub-agent callbacks and token
+    streaming are not intercepted.
+    """
+
+    def _safe_help(obj: Any = _SENTINEL) -> None:
+        if obj is _SENTINEL:
+            text = (
+                "Welcome to help!\n\n"
+                "To get help on a function or object, call help(thing).\n"
+                "For example: help(sorted), help(int), help(my_function)\n"
+            )
+        else:
+            text = pydoc.plain(pydoc.render_doc(obj, title="Help on %s"))
+        stdout_buf.write(text)
+        if prints_list is not None:
+            prints_list.append((text,))
+
+    return _safe_help
