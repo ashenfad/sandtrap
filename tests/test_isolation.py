@@ -21,7 +21,10 @@ def _run_in_child(fn, *args):
     p.start()
     child_conn.close()
     p.join(timeout=10)
-    result = parent_conn.recv() if parent_conn.poll(0.1) else None
+    try:
+        result = parent_conn.recv() if parent_conn.poll(0.1) else None
+    except EOFError:
+        result = None
     parent_conn.close()
     return p.exitcode, result
 
