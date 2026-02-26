@@ -60,6 +60,157 @@ def wrap_privileged(
     return wrapper
 
 
+class _VFSLoader:
+    """Resolves and caches modules from a virtual filesystem.
+
+    Handles parsing, rewriting, compiling, and executing VFS source files
+    into module objects, including package chains for dotted imports.
+    """
+
+    def __init__(
+        self,
+        filesystem: Any,
+        wrapped_mode: bool,
+        gates: dict[str, Any],
+    ) -> None:
+        self._filesystem = filesystem
+        self._wrapped_mode = wrapped_mode
+        self._gates = gates
+        self._cache: dict[str, Any] = {}
+
+    def _compile_and_exec(self, mod: Any, source: str, module_name: str) -> None:
+        """Parse, rewrite, compile, and execute VFS source into a module."""
+        tree = ast.parse(source)
+        rewriter = Rewriter(wrapped_mode=self._wrapped_mode)
+        tree = rewriter.visit(tree)
+        ast.fix_missing_locations(tree)
+        code = compile(tree, f"<sandtrap:vfs:{module_name}>", "exec")
+
+        ns = dict(mod.__dict__)
+        ns["__builtins__"] = make_safe_builtins(
+            self._gates["__st_getattr__"],
+            checkpoint=self._gates["__st_checkpoint__"],
+        )
+        ns.update(self._gates)
+
+        # Override defun/defclass gates with VFS-specific ones that
+        # reference this rewriter's AST lists (not the main code's)
+        if self._wrapped_mode and rewriter._func_asts:
+            vfs_func_asts = rewriter._func_asts
+
+            def _vfs_defun(name: str, compiled_fn: Any, ast_ref: int | str) -> Any:
+                if isinstance(ast_ref, str):
+                    func_ast = cast(ast.FunctionDef, ast.parse(ast_ref).body[0])
+                else:
+                    func_ast = vfs_func_asts[ast_ref]
+                return StFunction(name, compiled_fn, func_ast)
+
+            ns["__st_defun__"] = _vfs_defun
+
+        if self._wrapped_mode and rewriter._class_asts:
+            vfs_class_asts = rewriter._class_asts
+            getattr_gate = self._gates["__st_getattr__"]
+
+            def _vfs_defclass(
+                name: str, compiled_cls: Any, ast_idx: int, **frozen_refs: Any
+            ) -> Any:
+                cls_ast = vfs_class_asts[ast_idx]
+                sb_cls = StClass(name, compiled_cls, cls_ast, frozen_refs=frozen_refs)
+                sb_cls._st_getattr_gate = getattr_gate
+                return sb_cls
+
+            ns["__st_defclass__"] = _vfs_defclass
+
+        exec(code, ns)  # noqa: S102
+
+        # Update module dict (strip internal keys)
+        for k, v in ns.items():
+            if k != "__builtins__" and not k.startswith("__st_"):
+                setattr(mod, k, v)
+
+    def resolve_module(self, module_name: str) -> Any:
+        """Try to resolve a module from the VFS.  Returns None if not found."""
+        if self._filesystem is None:
+            return None
+
+        if module_name in self._cache:
+            return self._cache[module_name]
+
+        # Look for /<module_name>.py in the VFS (dots → path separators)
+        path = "/" + module_name.replace(".", "/") + ".py"
+        if not self._filesystem.exists(path):
+            return None
+
+        with self._filesystem.open(path, "r") as f:
+            source = f.read()
+
+        # Cache before execution (circular import protection)
+        mod = types.ModuleType(module_name)
+        mod.__file__ = path
+        self._cache[module_name] = mod
+
+        try:
+            self._compile_and_exec(mod, source, module_name)
+        except BaseException:
+            self._cache.pop(module_name, None)
+            raise
+
+        return mod
+
+    def ensure_package_chain(self, module_name: str) -> Any:
+        """Build the parent package chain for dotted VFS imports.
+
+        ``import pkg.mod`` must bind ``pkg`` in the namespace with
+        ``pkg.mod`` attached as an attribute — matching standard Python
+        import semantics.
+        """
+        parts = module_name.split(".")
+        if len(parts) <= 1:
+            return self.resolve_module(module_name)
+
+        # Resolve the leaf module first
+        leaf = self.resolve_module(module_name)
+        if leaf is None:
+            return None
+
+        # Build parent packages from top down
+        parent = None
+        for i in range(len(parts) - 1):
+            pkg_name = ".".join(parts[: i + 1])
+            if pkg_name in self._cache:
+                parent = self._cache[pkg_name]
+            else:
+                init_path = "/" + pkg_name.replace(".", "/") + "/__init__.py"
+                pkg = types.ModuleType(pkg_name)
+                pkg.__file__ = init_path
+                pkg.__path__ = ["/" + pkg_name.replace(".", "/")]
+                self._cache[pkg_name] = pkg
+
+                if self._filesystem is not None and self._filesystem.exists(init_path):
+                    with self._filesystem.open(init_path, "r") as f:
+                        source = f.read()
+                    try:
+                        self._compile_and_exec(pkg, source, pkg_name)
+                    except BaseException:
+                        self._cache.pop(pkg_name, None)
+                        raise
+
+                parent = pkg
+
+            # Attach child to parent
+            if i > 0:
+                prev_pkg_name = ".".join(parts[:i])
+                prev_pkg = self._cache.get(prev_pkg_name)
+                if prev_pkg is not None:
+                    setattr(prev_pkg, parts[i], parent)
+
+        # Attach leaf to its immediate parent
+        if parent is not None:
+            setattr(parent, parts[-1], leaf)
+
+        return self._cache[parts[0]]
+
+
 def make_gates(
     policy: Policy,
     *,
@@ -81,8 +232,8 @@ def make_gates(
     # VFS module compilation can inject the same gates.
     gates: dict[str, Any] = {}
 
-    # Per-execution module cache for VFS imports.
-    _vfs_module_cache: dict[str, Any] = {}
+    # VFS module loader (holds its own cache; reads gates dict by reference)
+    vfs = _VFSLoader(_filesystem, _wrapped_mode, gates)
 
     def _unwrap(obj: Any) -> Any:
         """Unwrap StInstance to access the real underlying instance."""
@@ -91,86 +242,6 @@ def make_gates(
             if real is not None:
                 return real
         return obj
-
-    def _resolve_vfs_module(module_name: str) -> Any:
-        """Try to resolve a module from the VFS.  Returns None if not found."""
-        if _filesystem is None:
-            return None
-
-        if module_name in _vfs_module_cache:
-            return _vfs_module_cache[module_name]
-
-        # Look for /<module_name>.py in the VFS (dots → path separators)
-        path = "/" + module_name.replace(".", "/") + ".py"
-        if not _filesystem.exists(path):
-            return None
-
-        # Read source
-        with _filesystem.open(path, "r") as f:
-            source = f.read()
-
-        # Create module object and cache it before execution (circular import protection)
-        mod = types.ModuleType(module_name)
-        mod.__file__ = path
-        _vfs_module_cache[module_name] = mod
-
-        try:
-            # Parse + rewrite (wrapped mode wraps functions/classes as StFunction/StClass)
-            tree = ast.parse(source)
-            rewriter = Rewriter(wrapped_mode=_wrapped_mode)
-            tree = rewriter.visit(tree)
-            ast.fix_missing_locations(tree)
-            code = compile(tree, f"<sandtrap:vfs:{module_name}>", "exec")
-
-            # Build namespace with same gates
-            ns = dict(mod.__dict__)
-            ns["__builtins__"] = make_safe_builtins(
-                __st_getattr__, checkpoint=__st_checkpoint__
-            )
-            ns.update(gates)
-
-            # Override defun/defclass gates with VFS-specific ones that
-            # reference this rewriter's AST lists (not the main code's)
-            if _wrapped_mode and rewriter._func_asts:
-                vfs_func_asts = rewriter._func_asts
-
-                def _vfs_defun(name: str, compiled_fn: Any, ast_ref: int | str) -> Any:
-                    if isinstance(ast_ref, str):
-                        func_ast = cast(ast.FunctionDef, ast.parse(ast_ref).body[0])
-                    else:
-                        func_ast = vfs_func_asts[ast_ref]
-                    return StFunction(name, compiled_fn, func_ast)
-
-                ns["__st_defun__"] = _vfs_defun
-
-            if _wrapped_mode and rewriter._class_asts:
-                vfs_class_asts = rewriter._class_asts
-
-                def _vfs_defclass(
-                    name: str, compiled_cls: Any, ast_idx: int, **frozen_refs: Any
-                ) -> Any:
-                    cls_ast = vfs_class_asts[ast_idx]
-                    sb_cls = StClass(
-                        name, compiled_cls, cls_ast, frozen_refs=frozen_refs
-                    )
-                    sb_cls._st_getattr_gate = __st_getattr__
-                    return sb_cls
-
-                ns["__st_defclass__"] = _vfs_defclass
-
-            # Execute module code
-            exec(code, ns)  # noqa: S102
-        except BaseException:
-            # Evict broken module so subsequent imports can retry
-            _vfs_module_cache.pop(module_name, None)
-            raise
-
-        # Update module dict (strip internal keys)
-        for k, v in ns.items():
-            if k != "__builtins__" and not k.startswith("__st_"):
-                setattr(mod, k, v)
-
-        return mod
 
     def _caller_lineno(depth: int = 2) -> int | None:
         """Get the line number of the sandboxed code that triggered a gate."""
@@ -245,73 +316,6 @@ def make_gates(
             )
         delattr(obj, attr)
 
-    def _ensure_vfs_package_chain(module_name: str) -> Any:
-        """For dotted VFS imports, build the parent package chain.
-
-        ``import pkg.mod`` must bind ``pkg`` in the namespace with
-        ``pkg.mod`` attached as an attribute — matching standard Python
-        import semantics.
-        """
-        parts = module_name.split(".")
-        if len(parts) <= 1:
-            return _resolve_vfs_module(module_name)
-
-        # Resolve the leaf module first
-        leaf = _resolve_vfs_module(module_name)
-        if leaf is None:
-            return None
-
-        # Build parent packages from top down
-        parent = None
-        for i in range(len(parts) - 1):
-            pkg_name = ".".join(parts[: i + 1])
-            if pkg_name in _vfs_module_cache:
-                parent = _vfs_module_cache[pkg_name]
-            else:
-                # Check for __init__.py
-                init_path = "/" + pkg_name.replace(".", "/") + "/__init__.py"
-                pkg = types.ModuleType(pkg_name)
-                pkg.__file__ = init_path
-                pkg.__path__ = ["/" + pkg_name.replace(".", "/")]
-                _vfs_module_cache[pkg_name] = pkg
-
-                if _filesystem is not None and _filesystem.exists(init_path):
-                    with _filesystem.open(init_path, "r") as f:
-                        source = f.read()
-                    try:
-                        tree = ast.parse(source)
-                        rewriter = Rewriter(wrapped_mode=_wrapped_mode)
-                        tree = rewriter.visit(tree)
-                        ast.fix_missing_locations(tree)
-                        code = compile(tree, f"<sandtrap:vfs:{pkg_name}>", "exec")
-                        ns = dict(pkg.__dict__)
-                        ns["__builtins__"] = make_safe_builtins(
-                            __st_getattr__, checkpoint=__st_checkpoint__
-                        )
-                        ns.update(gates)
-                        exec(code, ns)  # noqa: S102
-                        for k, v in ns.items():
-                            if k != "__builtins__" and not k.startswith("__st_"):
-                                setattr(pkg, k, v)
-                    except BaseException:
-                        _vfs_module_cache.pop(pkg_name, None)
-                        raise
-
-                parent = pkg
-
-            # Attach child to parent
-            if i > 0:
-                prev_pkg_name = ".".join(parts[:i])
-                prev_pkg = _vfs_module_cache.get(prev_pkg_name)
-                if prev_pkg is not None:
-                    setattr(prev_pkg, parts[i], parent)
-
-        # Attach leaf to its immediate parent
-        if parent is not None:
-            setattr(parent, parts[-1], leaf)
-
-        return _vfs_module_cache[parts[0]]
-
     def __st_import__(module_name: str, *, alias: str | None = None) -> Any:
         # Try policy-registered modules first
         if policy.is_import_allowed(module_name):
@@ -322,9 +326,9 @@ def make_gates(
 
         # Try VFS modules (with package chain for dotted imports)
         if alias is not None or "." not in module_name:
-            mod = _resolve_vfs_module(module_name)
+            mod = vfs.resolve_module(module_name)
         else:
-            mod = _ensure_vfs_package_chain(module_name)
+            mod = vfs.ensure_package_chain(module_name)
         if mod is not None:
             return mod
 
@@ -351,7 +355,7 @@ def make_gates(
                     (abs_parts.replace("/", ".") + "." + name) if abs_parts else name
                 )
 
-            mod = _resolve_vfs_module(abs_module if module_name else abs_module)
+            mod = vfs.resolve_module(abs_module if module_name else abs_module)
             if mod is not None:
                 if not module_name:
                     # from . import bar → return the module itself
@@ -368,18 +372,18 @@ def make_gates(
             return policy.resolve_module_member(module_name, name)
 
         # Try VFS modules
-        mod = _resolve_vfs_module(module_name)
+        mod = vfs.resolve_module(module_name)
         if mod is not None:
             if hasattr(mod, name):
                 return getattr(mod, name)
             # name might be a sub-module (from pkg import sub)
-            sub = _resolve_vfs_module(module_name + "." + name)
+            sub = vfs.resolve_module(module_name + "." + name)
             if sub is not None:
                 return sub
             raise ImportError(f"cannot import name '{name}' from '{module_name}'")
 
         # module_name might be a package directory without __init__.py
-        sub = _resolve_vfs_module(module_name + "." + name)
+        sub = vfs.resolve_module(module_name + "." + name)
         if sub is not None:
             return sub
 
