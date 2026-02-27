@@ -117,6 +117,13 @@ def test_help_output_in_prints():
     assert "len" in combined
 
 
+def test_help_string_import_blocked(sandbox):
+    """help('os') would trigger pydoc module import — must be blocked."""
+    result = sandbox.exec("help('os')")
+    assert result.error is not None
+    assert isinstance(result.error, TypeError)
+
+
 def test_no_breakpoint(sandbox):
     result = sandbox.exec("breakpoint()")
     assert result.error is not None
