@@ -182,42 +182,32 @@ class ProcessSandbox:
 
         st_types = (StFunction, StClass, StInstance)
 
-        # Check namespace values for inactive wrappers
-        needs = any(isinstance(v, st_types) for v in result.namespace.values())
+        def _find_st_objects(value):
+            """Yield St* objects from a value, walking one level into containers."""
+            if isinstance(value, st_types):
+                yield value
+            elif isinstance(value, (list, tuple)):
+                for item in value:
+                    if isinstance(item, st_types):
+                        yield item
+            elif isinstance(value, dict):
+                for v in value.values():
+                    if isinstance(v, st_types):
+                        yield v
 
-        # Error payload may carry St* objects (e.g. agex TaskSuccess.result)
-        err = result.error
-        if hasattr(err, "result"):
-            r = err.result
-            if isinstance(r, st_types):
-                needs = True
-            elif isinstance(r, (list, tuple)):
-                needs = needs or any(isinstance(v, st_types) for v in r)
-            elif isinstance(r, dict):
-                needs = needs or any(isinstance(v, st_types) for v in r.values())
+        # Collect all St* objects from namespace and error payload
+        sources = list(result.namespace.values())
+        if hasattr(result.error, "result"):
+            sources.append(result.error.result)
 
-        if not needs:
+        found = [obj for src in sources for obj in _find_st_objects(src)]
+        if not found:
             return result
 
         gates = make_gates(self._policy)
         ns = result.namespace
-
-        for v in ns.values():
-            if isinstance(v, st_types):
-                activate_value(v, gates, namespace=ns)
-
-        if hasattr(err, "result"):
-            r = err.result
-            if isinstance(r, st_types):
-                activate_value(r, gates, namespace=ns)
-            elif isinstance(r, (list, tuple)):
-                for item in r:
-                    if isinstance(item, st_types):
-                        activate_value(item, gates, namespace=ns)
-            elif isinstance(r, dict):
-                for v in r.values():
-                    if isinstance(v, st_types):
-                        activate_value(v, gates, namespace=ns)
+        for obj in found:
+            activate_value(obj, gates, namespace=ns)
 
         return result
 
