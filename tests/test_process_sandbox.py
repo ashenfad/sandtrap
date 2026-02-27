@@ -398,6 +398,39 @@ def test_mode_raw(root):
 
 
 # ------------------------------------------------------------------
+# St* reactivation across process boundary
+# ------------------------------------------------------------------
+
+
+def test_stfunction_reactivated(psandbox):
+    """Sandbox-defined functions are reactivated after crossing the process boundary."""
+    result = psandbox.exec("def double(n):\n    return n * 2")
+    assert result.error is None
+    fn = result.namespace["double"]
+    assert callable(fn)
+    assert fn(21) == 42
+
+
+def test_stclass_reactivated(psandbox):
+    """Sandbox-defined classes are reactivated and constructable."""
+    result = psandbox.exec(
+        "class Doubler:\n    def run(self, n):\n        return n * 2"
+    )
+    assert result.error is None
+    cls = result.namespace["Doubler"]
+    obj = cls()
+    assert obj.run(21) == 42
+
+
+def test_stfunction_with_closure(psandbox):
+    """Functions with closure variables are reactivated correctly."""
+    result = psandbox.exec("factor = 3\ndef scale(n):\n    return n * factor")
+    assert result.error is None
+    fn = result.namespace["scale"]
+    assert fn(10) == 30
+
+
+# ------------------------------------------------------------------
 # filter_namespace (shared utility)
 # ------------------------------------------------------------------
 
