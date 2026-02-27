@@ -471,6 +471,10 @@ def make_safe_help(
                 "For example: help(sorted), help(int), help(my_function)\n"
             )
         else:
+            if isinstance(obj, str):
+                raise TypeError(
+                    "help() with a string argument is not supported in the sandbox"
+                )
             text = pydoc.plain(pydoc.render_doc(obj, title="Help on %s"))
         stdout_buf.write(text)
         if prints_list is not None:
