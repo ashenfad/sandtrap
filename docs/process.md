@@ -182,4 +182,4 @@ If using `VirtualFS` or another non-`IsolatedFS` filesystem, there's no host pat
 
 Namespaces are sent to and from the worker via `multiprocessing.Pipe` (pickle). Non-picklable values (lambdas, locks, etc.) are silently dropped from both input and output namespaces. A `RuntimeWarning` is emitted for each dropped input key.
 
-`StFunction`, `StClass`, and `StInstance` wrappers are picklable and work normally.
+`StFunction`, `StClass`, and `StInstance` wrappers are picklable and survive the process boundary. `exec()` returns active wrappers regardless of isolation level -- the same contract as in-process execution.

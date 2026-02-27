@@ -37,21 +37,13 @@ Functions become `StFunction`, classes become `StClass`, and class instances bec
 
 ## Activation
 
-After unpickling, wrappers are "inactive" -- they hold the AST but have no compiled code. There are two ways to activate them:
+`exec()` always returns active wrappers, regardless of isolation level. In-process sandboxes return them active naturally; process/kernel-isolated sandboxes automatically reactivate them before returning the `ExecResult`.
 
-**Auto-activation** (typical workflow): pass inactive objects in `namespace` and they activate automatically:
+After a manual pickle round-trip (e.g., persisting to a database between turns), wrappers are "inactive" -- they hold the AST but have no compiled code. Pass them back via `namespace` and they auto-activate:
 
 ```python
 restored = pickle.loads(data)
 result = sandbox.exec("y = f(5)", namespace={"f": restored})
-```
-
-**Manual activation** (standalone direct calls from host code):
-
-```python
-restored = pickle.loads(data)
-sandbox.activate(restored)
-restored(5)  # call directly, not via sandbox.exec
 ```
 
 ## Dependencies come along
@@ -67,15 +59,8 @@ def sum_squares(lst): return sum(square(x) for x in lst)
 # Pickle only sum_squares -- square is captured automatically
 data = pickle.dumps(result.namespace["sum_squares"])
 restored = pickle.loads(data)
-
-sandbox.activate(restored)
-restored([1, 2, 3])  # 14 -- works without providing square
-```
-
-Namespace values override captured dependencies (preserving late-binding):
-
-```python
-sandbox.activate(restored, namespace={"square": different_square})
+result = sandbox.exec("y = sum_squares([1, 2, 3])", namespace={"sum_squares": restored})
+assert result.namespace["y"] == 14  # works without providing square
 ```
 
 This also works for functions imported from VFS modules -- they're wrapped in the same way and captured as dependencies.
@@ -102,6 +87,6 @@ The namespace can be any `Mapping`, including lazy containers that deserialize o
 
 ## Known limitations
 
-- **Policy-hosted functions** (`policy.fn()`, `policy.module()`) are real Python functions, not `StFunction`. They're injected automatically during `exec()` but must be provided explicitly for standalone direct calls after pickle.
+- **Policy-hosted functions** (`policy.fn()`, `policy.module()`) are real Python functions, not `StFunction`. They're injected automatically during `exec()` but must be provided explicitly via `namespace` when restoring from pickle.
 - **Classes with `__slots__`** are not supported for pickle round-trips (instance serialization assumes `__dict__`).
 - **Class-level mutable state** (e.g., `data = []` at class scope) is not preserved across pickle -- it lives on the class object, which is recompiled from AST.
