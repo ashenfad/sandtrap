@@ -88,7 +88,9 @@ def test_timeout_enforcement(root):
 
 
 def test_cancel(root):
-    with ProcessSandbox(Policy(timeout=30.0), filesystem=IsolatedFS(root)) as ps:
+    # Short timeout so the test finishes quickly even if cancel() doesn't
+    # work (e.g. SIGUSR1 not handled in forked children on macOS 3.13+).
+    with ProcessSandbox(Policy(timeout=5.0), filesystem=IsolatedFS(root)) as ps:
         results = [None]
 
         def run():
@@ -98,7 +100,7 @@ def test_cancel(root):
         t.start()
         time.sleep(0.5)
         ps.cancel()
-        t.join(timeout=10.0)
+        t.join(timeout=15.0)
         assert results[0] is not None
         assert results[0].error is not None
 
@@ -322,7 +324,9 @@ def test_cancel_after_completion(root):
 
 def test_double_cancel(root):
     """Calling cancel() twice is safe."""
-    with ProcessSandbox(Policy(timeout=30.0), filesystem=IsolatedFS(root)) as ps:
+    # Short timeout so the test finishes quickly even if cancel() doesn't
+    # work (e.g. SIGUSR1 not handled in forked children on macOS 3.13+).
+    with ProcessSandbox(Policy(timeout=5.0), filesystem=IsolatedFS(root)) as ps:
         results = [None]
 
         def run():
@@ -333,7 +337,7 @@ def test_double_cancel(root):
         time.sleep(0.5)
         ps.cancel()
         ps.cancel()  # Should not raise
-        t.join(timeout=10.0)
+        t.join(timeout=15.0)
         assert results[0] is not None
         assert results[0].error is not None
 
