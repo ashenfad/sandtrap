@@ -166,6 +166,62 @@ class ProcessSandbox:
         self._cleanup()
 
     # ------------------------------------------------------------------
+    # Reactivation
+    # ------------------------------------------------------------------
+
+    def _reactivate_namespace(self, result: ExecResult) -> ExecResult:
+        """Reactivate St* wrappers that crossed the process boundary.
+
+        Namespace values and error payloads (e.g. TaskSuccess.result)
+        containing StFunction/StClass/StInstance arrive inactive after
+        deserialization.  This rebuilds gates from the policy and
+        reactivates them so they're callable on the parent side.
+        """
+        from ..gates import make_gates
+        from ..wrappers import StClass, StFunction, StInstance, activate_value
+
+        st_types = (StFunction, StClass, StInstance)
+
+        # Check namespace values for inactive wrappers
+        needs = any(isinstance(v, st_types) for v in result.namespace.values())
+
+        # Error payload may carry St* objects (e.g. agex TaskSuccess.result)
+        err = result.error
+        if hasattr(err, "result"):
+            r = err.result
+            if isinstance(r, st_types):
+                needs = True
+            elif isinstance(r, (list, tuple)):
+                needs = needs or any(isinstance(v, st_types) for v in r)
+            elif isinstance(r, dict):
+                needs = needs or any(isinstance(v, st_types) for v in r.values())
+
+        if not needs:
+            return result
+
+        gates = make_gates(self._policy)
+        ns = result.namespace
+
+        for v in ns.values():
+            if isinstance(v, st_types):
+                activate_value(v, gates, namespace=ns)
+
+        if hasattr(err, "result"):
+            r = err.result
+            if isinstance(r, st_types):
+                activate_value(r, gates, namespace=ns)
+            elif isinstance(r, (list, tuple)):
+                for item in r:
+                    if isinstance(item, st_types):
+                        activate_value(item, gates, namespace=ns)
+            elif isinstance(r, dict):
+                for v in r.values():
+                    if isinstance(v, st_types):
+                        activate_value(v, gates, namespace=ns)
+
+        return result
+
+    # ------------------------------------------------------------------
     # Execution
     # ------------------------------------------------------------------
 
@@ -218,13 +274,14 @@ class ProcessSandbox:
             )
 
         if isinstance(msg, ResultMsg):
-            return ExecResult(
+            result = ExecResult(
                 namespace=msg.namespace,
                 stdout=msg.stdout,
                 error=msg.error,
                 ticks=msg.ticks,
                 prints=msg.prints,
             )
+            return self._reactivate_namespace(result)
         if isinstance(msg, WorkerErrorMsg):
             return ExecResult(error=RuntimeError(f"Worker error:\n{msg.message}"))
 
