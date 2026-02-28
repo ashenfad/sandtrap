@@ -680,7 +680,14 @@ class Rewriter(ast.NodeTransformer):
     # ------------------------------------------------------------------
 
     def visit_ExceptHandler(self, node: ast.ExceptHandler) -> ast.AST:
-        """Rewrite bare ``except:`` to ``except Exception:``."""
+        """Rewrite bare ``except:`` to ``except Exception:``.
+
+        Bare ``except:`` catches all exceptions including ``BaseException``
+        subclasses (``KeyboardInterrupt``, ``SystemExit``, ``StTimeout``,
+        ``StCancelled``).  Allowing that would let sandboxed code swallow
+        the sandbox's own control signals, defeating timeouts and
+        cancellation.
+        """
         if node.type is None:
             node.type = ast.Name(id="Exception", ctx=ast.Load())
             ast.copy_location(node.type, node)

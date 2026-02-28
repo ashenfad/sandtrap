@@ -50,7 +50,7 @@ Sandboxed code gets a restricted `__builtins__` (frozen via `_FrozenBuiltins`, a
 - **`__builtins__` access** -- blocked at the AST level; sandboxed code cannot read `__builtins__`
 - **`__st_*` names** -- reserved namespace rejected at validation time
 - **`globals()`** -- not available
-- **Bare `except:`** -- automatically rewritten to `except Exception:` so sandboxed code cannot catch `BaseException` subclasses (`StTimeout`, `StCancelled`, `KeyboardInterrupt`, `SystemExit`). This is a deliberate semantic change: Python's bare `except:` normally catches everything including `BaseException`, but in the sandbox it only catches `Exception` and below
+- **Bare `except:`** -- automatically rewritten to `except Exception:`. Without this, sandboxed code could swallow `BaseException` subclasses that the sandbox relies on for control flow (`StTimeout`, `StCancelled`, `KeyboardInterrupt`, `SystemExit`), defeating timeouts and cancellation. This is a deliberate semantic change -- Python's bare `except:` normally catches everything, but in the sandbox it only catches `Exception` and below. No warning is emitted; the rewrite is silent and unconditional
 
 ## Checkpoint enforcement
 
