@@ -42,7 +42,6 @@ dev = [
 test = [
     "pytest",
     "pytest-asyncio",
-    "pytest-timeout",
     "pandas",
 ]
 process = [
