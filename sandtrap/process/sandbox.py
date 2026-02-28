@@ -34,6 +34,24 @@ class ProcessSandbox:
     child process with optional kernel-level restrictions (seccomp,
     Landlock, Seatbelt).
 
+    The worker process is forked when entering the context manager.  If the
+    worker dies (crash, OOM, etc.), subsequent ``exec()`` calls raise
+    ``RuntimeError`` rather than silently re-forking.  To recover, exit and
+    re-enter the context manager::
+
+        with ProcessSandbox(policy) as sb:
+            result = sb.exec("1 + 1")  # OK
+            # ... worker crashes ...
+            result = sb.exec("2 + 2")  # RuntimeError: worker process died
+
+        # Re-enter to get a fresh worker
+        with ProcessSandbox(policy) as sb:
+            result = sb.exec("2 + 2")  # OK
+
+    **Threading:** The worker is forked via ``multiprocessing.get_context("fork")``.
+    Enter the context manager before starting threads or async tasks to avoid
+    forking a multithreaded process, which can deadlock on macOS.
+
     Parameters
     ----------
     policy:
@@ -222,7 +240,11 @@ class ProcessSandbox:
         namespace: Mapping[str, Any] | None = None,
     ) -> ExecResult:
         """Execute source code in the sandboxed subprocess."""
-        self._ensure_worker()
+        if self._process is None or not self._process.is_alive():
+            raise RuntimeError(
+                "Worker process is not running. "
+                "Use ProcessSandbox as a context manager to start it."
+            )
         if self._conn is None:
             raise RuntimeError("No connection to worker process")
 
