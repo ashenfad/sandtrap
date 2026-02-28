@@ -246,8 +246,8 @@ def test_worker_killed_during_exec(root):
         )
 
 
-def test_exec_after_worker_crash_respawns(root):
-    """After a worker crash, the next exec() spawns a new worker."""
+def test_exec_after_worker_crash_raises(root):
+    """After a worker crash, exec() raises instead of silently re-forking."""
     with ProcessSandbox(Policy(timeout=10.0), filesystem=IsolatedFS(root)) as ps:
         r1 = ps.exec("x = 1")
         assert r1.error is None
@@ -256,14 +256,19 @@ def test_exec_after_worker_crash_respawns(root):
         os.kill(ps._process.pid, signal.SIGKILL)
         ps._process.join(timeout=5.0)
 
-        # Next exec should auto-respawn
+        # Next exec should raise, not respawn
+        with pytest.raises(RuntimeError, match="Worker process is not running"):
+            ps.exec("y = 2")
+
+    # Recovery: re-enter context manager
+    with ProcessSandbox(Policy(timeout=10.0), filesystem=IsolatedFS(root)) as ps:
         r2 = ps.exec("y = 2")
         assert r2.error is None
         assert r2.namespace["y"] == 2
 
 
-def test_exec_after_shutdown_respawns(root):
-    """After explicit shutdown(), the next exec() spawns a new worker."""
+def test_exec_after_shutdown_raises(root):
+    """After explicit shutdown(), exec() raises instead of silently re-forking."""
     ps = ProcessSandbox(Policy(timeout=10.0), filesystem=IsolatedFS(root))
     with ps:
         r1 = ps.exec("x = 1")
@@ -272,10 +277,9 @@ def test_exec_after_shutdown_respawns(root):
         ps.shutdown()
         assert ps._process is None
 
-        # exec should respawn
-        r2 = ps.exec("y = 2")
-        assert r2.error is None
-        assert r2.namespace["y"] == 2
+        # exec should raise, not respawn
+        with pytest.raises(RuntimeError, match="Worker process is not running"):
+            ps.exec("y = 2")
 
     # Final cleanup
     assert ps._process is None
