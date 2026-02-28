@@ -42,7 +42,7 @@ class ProcessSandbox:
         with ProcessSandbox(policy) as sb:
             result = sb.exec("1 + 1")  # OK
             # ... worker crashes ...
-            result = sb.exec("2 + 2")  # RuntimeError: worker process died
+            result = sb.exec("2 + 2")  # RuntimeError: Worker process is not running.
 
         # Re-enter to get a fresh worker
         with ProcessSandbox(policy) as sb:
