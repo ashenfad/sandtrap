@@ -223,7 +223,8 @@ class ProcessSandbox:
     ) -> ExecResult:
         """Execute source code in the sandboxed subprocess."""
         self._ensure_worker()
-        assert self._conn is not None
+        if self._conn is None:
+            raise RuntimeError("No connection to worker process")
 
         safe_ns = filter_namespace(namespace)
         if namespace is not None and safe_ns is not None:
