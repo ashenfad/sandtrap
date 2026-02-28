@@ -24,7 +24,7 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "monkeyfs",
+    "monkeyfs<0.2.0",
 ]
 
 [project.urls]
