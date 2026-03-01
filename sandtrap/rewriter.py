@@ -424,9 +424,11 @@ class Rewriter(ast.NodeTransformer):
             node = self._prepend_checkpoint(node)
         finally:
             self._func_depth -= 1
-        if not self._wrapped_mode or self._class_depth > 0:
-            return node
-        return self._wrap_defun(node)
+        if self._wrapped_mode:
+            if self._class_depth > 0:
+                return node  # Wrapped mode: StClass handles methods
+            return self._wrap_defun(node)
+        return self._wrap_context_capture(node)
 
     def visit_AsyncFunctionDef(
         self, node: ast.AsyncFunctionDef
@@ -436,9 +438,11 @@ class Rewriter(ast.NodeTransformer):
             node = self._prepend_checkpoint(node)
         finally:
             self._func_depth -= 1
-        if not self._wrapped_mode or self._class_depth > 0:
-            return node
-        return self._wrap_defun(node)
+        if self._wrapped_mode:
+            if self._class_depth > 0:
+                return node  # Wrapped mode: StClass handles methods
+            return self._wrap_defun(node)
+        return self._wrap_context_capture(node)
 
     def _wrap_defun(
         self, node: ast.FunctionDef | ast.AsyncFunctionDef
@@ -523,7 +527,61 @@ class Rewriter(ast.NodeTransformer):
         ast.copy_location(wrap_assign, node)
         return [node, wrap_assign]
 
-    visit_Lambda = _recurse
+    def _wrap_context_capture(
+        self, node: ast.FunctionDef | ast.AsyncFunctionDef
+    ) -> list[ast.stmt]:
+        """Wrap a function def with __st_capture_context__ for raw mode.
+
+        Captures sandbox ContextVars (filesystem, network) at definition time
+        so that callbacks fired outside sb.exec() retain isolation.
+
+        For decorated functions, context capture is inserted *between* the bare
+        function def and the decorators so that decorator APIs (like .refresh()
+        on @ui.refreshable) are preserved on the outermost object.
+        """
+        capture_call = ast.Call(
+            func=ast.Name(id="__st_capture_context__", ctx=ast.Load()),
+            args=[ast.Name(id=node.name, ctx=ast.Load())],
+            keywords=[],
+        )
+        capture_assign = ast.Assign(
+            targets=[ast.Name(id=node.name, ctx=ast.Store())],
+            value=capture_call,
+        )
+        ast.copy_location(capture_assign, node)
+
+        if not node.decorator_list:
+            return [node, capture_assign]
+
+        # Strip decorators from the node and re-apply them as explicit
+        # calls after context capture so decorator APIs are preserved.
+        decorators = node.decorator_list[:]
+        node.decorator_list = []
+
+        result: list[ast.stmt] = [node, capture_assign]
+        for deco in decorators:
+            deco_call = ast.Call(
+                func=deco,
+                args=[ast.Name(id=node.name, ctx=ast.Load())],
+                keywords=[],
+            )
+            deco_assign = ast.Assign(
+                targets=[ast.Name(id=node.name, ctx=ast.Store())],
+                value=deco_call,
+            )
+            ast.copy_location(deco_assign, node)
+            result.append(deco_assign)
+        return result
+
+    def visit_Lambda(self, node: ast.Lambda) -> ast.AST:
+        node = self._recurse(node)
+        if self._wrapped_mode:
+            return node
+        return ast.Call(
+            func=ast.Name(id="__st_capture_context__", ctx=ast.Load()),
+            args=[node],
+            keywords=[],
+        )
 
     # ------------------------------------------------------------------
     # Control flow

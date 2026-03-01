@@ -1,6 +1,7 @@
 """Gate functions injected into sandboxed code at compile time."""
 
 import ast
+import asyncio
 import functools
 import posixpath
 import string as _string_mod
@@ -13,8 +14,8 @@ from typing import Any, cast
 
 from .builtins import make_safe_builtins
 from .errors import StCancelled, StTickLimit, StTimeout
-from .fs import suspend
-from .net.context import allow_network
+from .fs import current_fs, suspend
+from .net.context import allow_network, network_allowed
 from .policy import Policy
 from .resource_limits import get_rss_bytes
 from .rewriter import Rewriter
@@ -58,6 +59,53 @@ def wrap_privileged(
             return fn(*args, **kwargs)
 
     return wrapper
+
+
+def _capture_context(fn: Any) -> Any:
+    """Wrap a callable to restore sandbox ContextVars when called outside exec.
+
+    Used in raw mode to ensure that callbacks (NiceGUI on_click, on_change, etc.)
+    retain filesystem and network isolation even though they fire in a different
+    asyncio Task after sb.exec() has returned and its ContextVars have reset.
+
+    Captures the current ``current_fs`` and ``network_allowed`` values at
+    decoration time and restores them on every call.
+    """
+    captured_fs = current_fs.get(None)
+    captured_net = network_allowed.get()
+
+    # No restrictions active — skip wrapping entirely.
+    if captured_fs is None and captured_net:
+        return fn
+
+    if asyncio.iscoroutinefunction(fn):
+
+        @functools.wraps(fn)
+        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+            tok_fs = current_fs.set(captured_fs) if captured_fs is not None else None
+            tok_net = network_allowed.set(captured_net)
+            try:
+                return await fn(*args, **kwargs)
+            finally:
+                network_allowed.reset(tok_net)
+                if tok_fs is not None:
+                    current_fs.reset(tok_fs)
+
+        return async_wrapper
+    else:
+
+        @functools.wraps(fn)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            tok_fs = current_fs.set(captured_fs) if captured_fs is not None else None
+            tok_net = network_allowed.set(captured_net)
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                network_allowed.reset(tok_net)
+                if tok_fs is not None:
+                    current_fs.reset(tok_fs)
+
+        return wrapper
 
 
 class _VFSLoader:
@@ -450,6 +498,7 @@ def make_gates(
             "__st_defun__": __st_defun__,
             "__st_defclass__": __st_defclass__,
             "__st_checkpoint__": __st_checkpoint__,
+            "__st_capture_context__": _capture_context,
         }
     )
     return gates
