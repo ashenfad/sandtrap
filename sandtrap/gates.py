@@ -1,8 +1,8 @@
 """Gate functions injected into sandboxed code at compile time."""
 
 import ast
-import asyncio
 import functools
+import inspect
 import posixpath
 import string as _string_mod
 import sys
@@ -456,7 +456,7 @@ def make_gates(
         if captured_fs is None and captured_net:
             return fn
 
-        if asyncio.iscoroutinefunction(fn):
+        if inspect.iscoroutinefunction(fn):
 
             @functools.wraps(fn)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
