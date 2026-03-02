@@ -277,3 +277,64 @@ def read_data():
     time.sleep(0.6)
     read_data = result.namespace["read_data"]
     assert read_data() == "hello"
+
+
+def test_nested_calls_in_callback_share_budget():
+    """Nested function calls within a callback should not reset the budget."""
+    vfs = _make_vfs()
+    policy = Policy(timeout=0.5)
+    sb = Sandbox(policy, mode="raw", filesystem=vfs)
+
+    result = sb.exec("""\
+def inner():
+    pass
+
+def outer():
+    while True:
+        inner()
+""")
+    assert result.error is None
+
+    outer = result.namespace["outer"]
+    try:
+        outer()
+    except StTimeout:
+        pass  # Expected — nested inner() should not reset the budget
+    else:
+        raise AssertionError("Expected StTimeout from nested calls in callback")
+
+
+# -- Decorator ordering -------------------------------------------------------
+
+
+def test_multiple_decorators_applied_in_correct_order():
+    """Multiple decorators should be applied bottom-up, same as Python."""
+    vfs = _make_vfs()
+    policy = Policy(timeout=5.0)
+    sb = Sandbox(policy, mode="raw", filesystem=vfs)
+
+    result = sb.exec("""\
+order = []
+
+def deco_a(fn):
+    order.append('A')
+    fn.from_a = True
+    return fn
+
+def deco_b(fn):
+    order.append('B')
+    fn.from_b = True
+    return fn
+
+@deco_a
+@deco_b
+def my_func():
+    pass
+""")
+    assert result.error is None
+
+    # Python applies decorators bottom-up: B first, then A
+    assert result.namespace["order"] == ["B", "A"]
+    my_func = result.namespace["my_func"]
+    assert my_func.from_a is True
+    assert my_func.from_b is True

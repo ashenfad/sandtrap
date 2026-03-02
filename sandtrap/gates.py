@@ -422,6 +422,7 @@ def make_gates(
     _cancel_flag_box = [_cancel_flag]
     _memory_box = [_memory_limit_bytes, _start_rss]
     _in_exec_box = [True]  # True during sb.exec(), False after
+    _callback_depth = [0]  # Tracks nesting depth of callback invocations
 
     def __st_checkpoint__() -> None:
         if _cancel_flag_box[0] is not None and _cancel_flag_box[0].is_set():
@@ -460,9 +461,10 @@ def make_gates(
 
             @functools.wraps(fn)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-                if not _in_exec_box[0]:
+                if not _in_exec_box[0] and _callback_depth[0] == 0:
                     _tick_counter[0] = 0
                     _start_time_box[0] = time.monotonic()
+                _callback_depth[0] += 1
                 tok_fs = (
                     current_fs.set(captured_fs) if captured_fs is not None else None
                 )
@@ -470,6 +472,7 @@ def make_gates(
                 try:
                     return await fn(*args, **kwargs)
                 finally:
+                    _callback_depth[0] -= 1
                     network_allowed.reset(tok_net)
                     if tok_fs is not None:
                         current_fs.reset(tok_fs)
@@ -479,9 +482,10 @@ def make_gates(
 
             @functools.wraps(fn)
             def wrapper(*args: Any, **kwargs: Any) -> Any:
-                if not _in_exec_box[0]:
+                if not _in_exec_box[0] and _callback_depth[0] == 0:
                     _tick_counter[0] = 0
                     _start_time_box[0] = time.monotonic()
+                _callback_depth[0] += 1
                 tok_fs = (
                     current_fs.set(captured_fs) if captured_fs is not None else None
                 )
@@ -489,6 +493,7 @@ def make_gates(
                 try:
                     return fn(*args, **kwargs)
                 finally:
+                    _callback_depth[0] -= 1
                     network_allowed.reset(tok_net)
                     if tok_fs is not None:
                         current_fs.reset(tok_fs)

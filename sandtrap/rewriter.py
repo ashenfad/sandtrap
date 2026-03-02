@@ -559,7 +559,7 @@ class Rewriter(ast.NodeTransformer):
         node.decorator_list = []
 
         result: list[ast.stmt] = [node, capture_assign]
-        for deco in decorators:
+        for deco in reversed(decorators):
             deco_call = ast.Call(
                 func=deco,
                 args=[ast.Name(id=node.name, ctx=ast.Load())],
