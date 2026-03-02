@@ -421,6 +421,7 @@ def make_gates(
     _start_time_box = [_start_time]
     _cancel_flag_box = [_cancel_flag]
     _memory_box = [_memory_limit_bytes, _start_rss]
+    _in_exec_box = [True]  # True during sb.exec(), False after
 
     def __st_checkpoint__() -> None:
         if _cancel_flag_box[0] is not None and _cancel_flag_box[0].is_set():
@@ -459,8 +460,9 @@ def make_gates(
 
             @functools.wraps(fn)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-                _tick_counter[0] = 0
-                _start_time_box[0] = time.monotonic()
+                if not _in_exec_box[0]:
+                    _tick_counter[0] = 0
+                    _start_time_box[0] = time.monotonic()
                 tok_fs = (
                     current_fs.set(captured_fs) if captured_fs is not None else None
                 )
@@ -477,8 +479,9 @@ def make_gates(
 
             @functools.wraps(fn)
             def wrapper(*args: Any, **kwargs: Any) -> Any:
-                _tick_counter[0] = 0
-                _start_time_box[0] = time.monotonic()
+                if not _in_exec_box[0]:
+                    _tick_counter[0] = 0
+                    _start_time_box[0] = time.monotonic()
                 tok_fs = (
                     current_fs.set(captured_fs) if captured_fs is not None else None
                 )
@@ -496,6 +499,7 @@ def make_gates(
     gates["__st_start_time__"] = _start_time_box
     gates["__st_cancel_flag__"] = _cancel_flag_box
     gates["__st_memory__"] = _memory_box
+    gates["__st_in_exec__"] = _in_exec_box
     gates.update(
         {
             "__st_getattr__": __st_getattr__,
