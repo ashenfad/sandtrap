@@ -61,53 +61,6 @@ def wrap_privileged(
     return wrapper
 
 
-def _capture_context(fn: Any) -> Any:
-    """Wrap a callable to restore sandbox ContextVars when called outside exec.
-
-    Used in raw mode to ensure that callbacks (NiceGUI on_click, on_change, etc.)
-    retain filesystem and network isolation even though they fire in a different
-    asyncio Task after sb.exec() has returned and its ContextVars have reset.
-
-    Captures the current ``current_fs`` and ``network_allowed`` values at
-    decoration time and restores them on every call.
-    """
-    captured_fs = current_fs.get(None)
-    captured_net = network_allowed.get()
-
-    # No restrictions active — skip wrapping entirely.
-    if captured_fs is None and captured_net:
-        return fn
-
-    if asyncio.iscoroutinefunction(fn):
-
-        @functools.wraps(fn)
-        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-            tok_fs = current_fs.set(captured_fs) if captured_fs is not None else None
-            tok_net = network_allowed.set(captured_net)
-            try:
-                return await fn(*args, **kwargs)
-            finally:
-                network_allowed.reset(tok_net)
-                if tok_fs is not None:
-                    current_fs.reset(tok_fs)
-
-        return async_wrapper
-    else:
-
-        @functools.wraps(fn)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            tok_fs = current_fs.set(captured_fs) if captured_fs is not None else None
-            tok_net = network_allowed.set(captured_net)
-            try:
-                return fn(*args, **kwargs)
-            finally:
-                network_allowed.reset(tok_net)
-                if tok_fs is not None:
-                    current_fs.reset(tok_fs)
-
-        return wrapper
-
-
 class _VFSLoader:
     """Resolves and caches modules from a virtual filesystem.
 
@@ -484,6 +437,61 @@ def make_gates(
                     f"Execution exceeded {policy.memory_limit}MB memory limit"
                 )
 
+    def __st_capture_context__(fn: Any) -> Any:
+        """Wrap a callable to restore sandbox ContextVars when called outside exec.
+
+        Used in raw mode to ensure that callbacks (NiceGUI on_click, on_change,
+        etc.) retain filesystem and network isolation even though they fire in a
+        different asyncio Task after sb.exec() has returned.
+
+        Captures the current ``current_fs`` and ``network_allowed`` values at
+        decoration time and restores them on every call.  Also resets the
+        checkpoint timer and tick counter so each callback gets a fresh budget.
+        """
+        captured_fs = current_fs.get(None)
+        captured_net = network_allowed.get()
+
+        # No restrictions active — skip wrapping entirely.
+        if captured_fs is None and captured_net:
+            return fn
+
+        if asyncio.iscoroutinefunction(fn):
+
+            @functools.wraps(fn)
+            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                _tick_counter[0] = 0
+                _start_time_box[0] = time.monotonic()
+                tok_fs = (
+                    current_fs.set(captured_fs) if captured_fs is not None else None
+                )
+                tok_net = network_allowed.set(captured_net)
+                try:
+                    return await fn(*args, **kwargs)
+                finally:
+                    network_allowed.reset(tok_net)
+                    if tok_fs is not None:
+                        current_fs.reset(tok_fs)
+
+            return async_wrapper
+        else:
+
+            @functools.wraps(fn)
+            def wrapper(*args: Any, **kwargs: Any) -> Any:
+                _tick_counter[0] = 0
+                _start_time_box[0] = time.monotonic()
+                tok_fs = (
+                    current_fs.set(captured_fs) if captured_fs is not None else None
+                )
+                tok_net = network_allowed.set(captured_net)
+                try:
+                    return fn(*args, **kwargs)
+                finally:
+                    network_allowed.reset(tok_net)
+                    if tok_fs is not None:
+                        current_fs.reset(tok_fs)
+
+            return wrapper
+
     gates["__st_tick_counter__"] = _tick_counter
     gates["__st_start_time__"] = _start_time_box
     gates["__st_cancel_flag__"] = _cancel_flag_box
@@ -498,7 +506,7 @@ def make_gates(
             "__st_defun__": __st_defun__,
             "__st_defclass__": __st_defclass__,
             "__st_checkpoint__": __st_checkpoint__,
-            "__st_capture_context__": _capture_context,
+            "__st_capture_context__": __st_capture_context__,
         }
     )
     return gates
