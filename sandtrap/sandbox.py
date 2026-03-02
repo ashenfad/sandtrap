@@ -423,6 +423,8 @@ class Sandbox:
                     raise  # Real Ctrl-C from host
                 error = strip_internal_frames(e)
 
+        gates["__st_in_exec__"][0] = False
+
         return self._build_result(
             ns, injected, gates, stdout_buf, prints_list, filename, error
         )
@@ -551,6 +553,8 @@ class Sandbox:
                     raise  # Real Ctrl-C from host
                 error = strip_internal_frames(e)
                 result_locals = ns.get("__st_local_capture__", {})
+
+        gates["__st_in_exec__"][0] = False
 
         return self._build_result(
             ns,

@@ -1,8 +1,10 @@
 """Tests for raw mode ContextVar capture on functions and lambdas."""
 
 import asyncio
+import time
 
 from sandtrap import Policy, Sandbox
+from sandtrap.errors import StTimeout
 from sandtrap.fs import VirtualFS
 from sandtrap.net.context import network_allowed
 
@@ -234,3 +236,44 @@ def identity(x):
     from sandtrap.wrappers import StFunction
 
     assert isinstance(fn, StFunction)
+
+
+# -- Timeout not bypassed during exec ----------------------------------------
+
+
+def test_loop_calling_functions_still_times_out():
+    """A loop calling wrapped functions during exec should still timeout."""
+    vfs = _make_vfs()
+    policy = Policy(timeout=0.5)
+    sb = Sandbox(policy, mode="raw", filesystem=vfs)
+
+    result = sb.exec("""\
+def noop():
+    pass
+
+while True:
+    noop()
+""")
+    assert isinstance(result.error, StTimeout)
+
+
+# -- Timer resets for external callbacks --------------------------------------
+
+
+def test_external_callback_gets_fresh_timeout():
+    """A callback called after exec should get a fresh timeout budget."""
+    vfs = _make_vfs({"/data.txt": "hello"})
+    policy = Policy(timeout=0.5)
+    sb = Sandbox(policy, mode="raw", filesystem=vfs)
+
+    result = sb.exec("""\
+def read_data():
+    with open('/data.txt') as f:
+        return f.read()
+""")
+    assert result.error is None
+
+    # Wait longer than the timeout, then call — should succeed
+    time.sleep(0.6)
+    read_data = result.namespace["read_data"]
+    assert read_data() == "hello"
