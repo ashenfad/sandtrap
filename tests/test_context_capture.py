@@ -122,7 +122,7 @@ async def read_data():
     assert result.error is None
 
     read_data = result.namespace["read_data"]
-    assert asyncio.get_event_loop().run_until_complete(read_data()) == "async-test"
+    assert asyncio.run(read_data()) == "async-test"
 
 
 # -- Decorated functions ------------------------------------------------------
