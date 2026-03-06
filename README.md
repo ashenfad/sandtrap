@@ -64,6 +64,10 @@ print(result.namespace)    # {"total": 45}
 - Network blocked at the kernel level (unless the policy enables it)
 - Worker crash doesn't take down the host process
 
+## Part of the agex stack
+
+sandtrap powers sandboxed code execution in [agex](https://github.com/ashenfad/agex), where AI agents write and execute Python directly against host libraries. Filesystem interception is provided by [monkeyfs](https://github.com/ashenfad/monkeyfs).
+
 ## Documentation
 
 - [Policy & Registration](docs/policy.md) -- configuring what sandboxed code can access
