@@ -133,3 +133,38 @@ async def test_async_cancellation():
         timer.cancel()
     assert result.error is not None
     assert isinstance(result.error, StCancelled)
+
+
+@pytest.mark.asyncio
+async def test_aexec_dir_includes_namespace_globals():
+    """dir() inside aexec should include injected namespace keys, not just locals."""
+    sandbox = Sandbox(Policy())
+    namespace = {"my_var": 42, "my_func": lambda: None}
+    result = await sandbox.aexec(
+        "local_x = 1\nnames = dir()",
+        namespace=namespace,
+    )
+    assert result.error is None
+    names = result.namespace["names"]
+    # Injected namespace globals should be visible
+    assert "my_var" in names
+    assert "my_func" in names
+    # Locals defined in the code should also be visible
+    assert "local_x" in names
+    # Dunder keys should be excluded
+    assert all(not n.startswith("__") for n in names)
+
+
+@pytest.mark.asyncio
+async def test_aexec_dir_with_arg_unchanged():
+    """dir(obj) should still return the object's attributes, not namespace keys."""
+    sandbox = Sandbox(Policy())
+    namespace = {"my_var": 42}
+    result = await sandbox.aexec(
+        "names = dir([])",
+        namespace=namespace,
+    )
+    assert result.error is None
+    names = result.namespace["names"]
+    assert "append" in names
+    assert "my_var" not in names

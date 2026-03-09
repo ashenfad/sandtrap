@@ -534,6 +534,33 @@ class Sandbox:
         ns["__st_locals__"] = _builtins.locals
         ns["__st_local_capture__"] = {}
 
+        # Override dir() so it includes namespace globals even inside the
+        # async wrapper function, where bare dir() only shows locals.
+        _real_dir = _builtins.dir
+        _ns_ref = ns
+
+        class _Dir:
+            """dir() replacement that includes namespace globals."""
+
+            @staticmethod
+            def __call__(obj=_builtins, /):
+                if obj is not _builtins:  # sentinel: called with an arg
+                    return _real_dir(obj)
+                # Merge caller's locals with namespace globals
+                import sys
+
+                caller_locals = sys._getframe(1).f_locals
+                local_names = set(caller_locals.keys())
+                ns_names = {k for k in _ns_ref if not k.startswith("__")}
+                return sorted(local_names | ns_names)
+
+            def __repr__(self):
+                return repr(_real_dir)
+
+        if "dir" not in ns:
+            ns["dir"] = _Dir()
+            injected["dir"] = True
+
         error = None
         result_locals: dict[str, Any] = {}
         with ExitStack() as stack:
