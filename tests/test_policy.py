@@ -110,6 +110,21 @@ def test_import_recursive():
     assert policy.is_import_allowed("mathx") is False
 
 
+def test_resolve_lazy_submodule():
+    """Recursive resolve_module handles submodules not yet loaded as attributes."""
+    import email
+
+    policy = Policy()
+    policy.module(email, recursive=True)
+
+    # email.mime.text is a lazy submodule — not an attribute on email until imported
+    mod = policy.resolve_module("email.mime.text")
+    assert mod.__name__ == "email.mime.text"
+
+    member = policy.resolve_module_member("email.mime.text", "MIMEText")
+    assert member.__name__ == "MIMEText"
+
+
 def test_attr_allowed_dunders():
     policy = Policy()
     assert policy.is_attr_allowed(None, "__init__") is True

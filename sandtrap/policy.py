@@ -413,8 +413,16 @@ class Policy:
             parent = ".".join(parts[:i])
             if parent in self.modules and self.modules[parent].recursive:
                 obj = self.modules[parent].obj
+                path = parent
                 for part in parts[i:]:
-                    obj = getattr(obj, part)
+                    path = f"{path}.{part}"
+                    try:
+                        obj = getattr(obj, part)
+                    except AttributeError:
+                        # Lazy submodule not yet loaded as a parent attribute.
+                        import importlib
+
+                        obj = importlib.import_module(path)
                 return obj
         raise ImportError(f"Module '{module_name}' not registered")
 
