@@ -1,6 +1,7 @@
 """Gate functions injected into sandboxed code at compile time."""
 
 import ast
+import builtins as _builtins
 import functools
 import inspect
 import posixpath
@@ -92,6 +93,9 @@ class _VFSLoader:
             self._gates["__st_getattr__"],
             checkpoint=self._gates["__st_checkpoint__"],
         )
+        # Provide __import__ so C extensions can import transitive deps.
+        # User-code imports are gated at the AST level.
+        ns["__builtins__"]["__import__"] = _builtins.__import__
         ns.update(self._gates)
 
         # Override defun/defclass gates with VFS-specific ones that
