@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.8] - 2026-03-12
+
+### Added
+- **`from main import X` support**: Sandboxed code can use `from main import X` or `from __main__ import X` to reference names defined earlier in the sandbox namespace, matching a common LLM code pattern.
+- **`dir()` override in `aexec`**: `dir()` with no arguments now includes sandbox namespace globals instead of returning interpreter internals.
+
+### Fixed
+- **`__import__` in VFS module builtins**: Modules loaded via the virtual filesystem now have access to `__import__`, allowing nested imports to work correctly.
+- **`print` and `help` in module builtins**: Injected into builtins so imported modules can use them without explicit registration.
+- **Lazy submodule resolution**: Recursive module registrations now fall back to `importlib.import_module()` for submodules not yet loaded as parent attributes.
+- **`dir()` sentinel**: Use a proper `object()` sentinel instead of the `_builtins` module reference.
+- **Top-level imports**: Moved `sys` and `importlib` imports from inline to module level.
+
 ## [0.1.7] - 2026-03-02
 
 ### Added
