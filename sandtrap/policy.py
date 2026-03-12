@@ -1,4 +1,5 @@
 import fnmatch
+import importlib
 from dataclasses import dataclass, field
 from types import ModuleType
 from typing import Any, Callable, Iterable, Union
@@ -420,8 +421,6 @@ class Policy:
                         obj = getattr(obj, part)
                     except AttributeError:
                         # Lazy submodule not yet loaded as a parent attribute.
-                        import importlib
-
                         obj = importlib.import_module(path)
                 return obj
         raise ImportError(f"Module '{module_name}' not registered")
