@@ -282,3 +282,41 @@ x = __builtins__.__import__
     assert result.error is not None
     assert isinstance(result.error, StValidationError)
     assert "__builtins__" in str(result.error)
+
+
+# ---- "from main import X" fallback ----
+
+
+def test_from_main_import_resolves_sandbox_globals():
+    """'from main import X' resolves X from the sandbox namespace."""
+    policy = Policy()
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("""\
+Response = 'I am Response'
+from main import Response as R
+x = R
+""")
+    assert result.error is None
+    assert result.namespace["x"] == "I am Response"
+
+
+def test_from_dunder_main_import_resolves_sandbox_globals():
+    """'from __main__ import X' also resolves from the sandbox namespace."""
+    policy = Policy()
+    policy.module(math)
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("""\
+from __main__ import math as m
+x = m.sqrt(16)
+""")
+    assert result.error is None
+    assert result.namespace["x"] == 4.0
+
+
+def test_from_main_import_missing_name_still_errors():
+    """'from main import X' raises ImportError when X is not in namespace."""
+    policy = Policy()
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("from main import NoSuchThing")
+    assert result.error is not None
+    assert isinstance(result.error, ImportError)
