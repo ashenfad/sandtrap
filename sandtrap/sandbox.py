@@ -6,6 +6,7 @@ import builtins as _builtins
 import copy
 import itertools
 import linecache
+import sys
 import threading
 import time
 from collections.abc import Mapping
@@ -542,17 +543,16 @@ class Sandbox:
         # async wrapper function, where bare dir() only shows locals.
         _real_dir = _builtins.dir
         _ns_ref = ns
+        _sentinel = object()
 
         class _Dir:
             """dir() replacement that includes namespace globals."""
 
             @staticmethod
-            def __call__(obj=_builtins, /):
-                if obj is not _builtins:  # sentinel: called with an arg
+            def __call__(obj=_sentinel, /):
+                if obj is not _sentinel:  # called with an arg
                     return _real_dir(obj)
                 # Merge caller's locals with namespace globals
-                import sys
-
                 caller_locals = sys._getframe(1).f_locals
                 local_names = set(caller_locals.keys())
                 ns_names = {k for k in _ns_ref if not k.startswith("__")}
