@@ -337,6 +337,17 @@ def make_gates(
         if mod is not None:
             return mod
 
+        # "import main" / "import __main__" — return a namespace proxy so
+        # that LLM-generated code like "from main import X" works when X is
+        # already available in the sandbox globals.
+        if module_name in ("main", "__main__"):
+            caller_globals = sys._getframe(1).f_globals
+            proxy = types.ModuleType(module_name)
+            proxy.__dict__.update(
+                {k: v for k, v in caller_globals.items() if not k.startswith("__st_")}
+            )
+            return proxy
+
         lineno = _caller_lineno()
         loc = f" (line {lineno})" if lineno else ""
         raise ImportError(f"Import of '{module_name}' is not allowed{loc}")
@@ -391,6 +402,14 @@ def make_gates(
         sub = vfs.resolve_module(module_name + "." + name)
         if sub is not None:
             return sub
+
+        # "from main import X" / "from __main__ import X" — resolve from
+        # the sandbox namespace.  LLMs frequently attempt this pattern to
+        # import globals that are already available in the execution scope.
+        if module_name in ("main", "__main__"):
+            caller_globals = sys._getframe(1).f_globals
+            if name in caller_globals:
+                return caller_globals[name]
 
         lineno = _caller_lineno()
         loc = f" (line {lineno})" if lineno else ""
