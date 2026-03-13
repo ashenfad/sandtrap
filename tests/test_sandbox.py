@@ -339,6 +339,53 @@ def test_print_file_kwarg_rejected(sandbox):
     assert "file=" in str(result.error)
 
 
+def test_print_from_registered_fn():
+    """print() inside a registered function is captured in sandbox stdout."""
+
+    def greet():
+        print("hello from registered fn")
+
+    policy = Policy()
+    policy.fn(greet)
+    sb = Sandbox(policy)
+    result = sb.exec("greet()")
+    assert result.error is None
+    assert "hello from registered fn" in result.stdout
+
+
+def test_print_from_nested_registered_fn():
+    """print() in functions called by registered functions is also captured."""
+
+    def inner():
+        print("from inner")
+
+    def outer():
+        inner()
+        print("from outer")
+
+    policy = Policy()
+    policy.fn(outer)
+    sb = Sandbox(policy)
+    result = sb.exec("outer()")
+    assert result.error is None
+    assert "from inner" in result.stdout
+    assert "from outer" in result.stdout
+
+
+def test_print_normal_outside_sandbox():
+    """print() works normally outside sandbox execution."""
+    import builtins
+
+    # Run a sandbox to trigger install_print()
+    policy = Policy()
+    sb = Sandbox(policy)
+    sb.exec("print('inside')")
+
+    # builtins.print should still work (patched but contextvar is unset)
+    # Just verify no exception is raised
+    builtins.print("outside still works")
+
+
 def test_base_exception_captured(sandbox):
     """BaseException raised in sandbox is captured, not propagated."""
     result = sandbox.exec("raise Exception('test')")

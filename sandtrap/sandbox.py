@@ -18,9 +18,11 @@ from .builtins import (
     TailBuffer,
     _FrozenBuiltins,
     _make_gated_type,
+    install_print,
     make_print,
     make_safe_builtins,
     make_safe_help,
+    redirect_print,
 )
 from .errors import StTimeout, StValidationError, strip_internal_frames
 from .fs import FileSystem, patch
@@ -265,8 +267,9 @@ class Sandbox:
         """Create a stdout buffer, respecting max_stdout policy."""
         return TailBuffer(max_chars=self.policy.max_stdout)
 
-    def _enter_sandbox_context(self, stack: ExitStack) -> None:
-        """Set up memory limits, network denial, and filesystem interception."""
+    def _enter_sandbox_context(self, stack: ExitStack, print_fn: Any = None) -> None:
+        """Set up memory limits, network denial, filesystem interception,
+        and print redirection."""
         if self.policy.memory_limit is not None:
             stack.enter_context(memory_limit_context(self.policy.memory_limit))
 
@@ -276,6 +279,10 @@ class Sandbox:
 
         if self.filesystem is not None:
             stack.enter_context(patch(self.filesystem))
+
+        if print_fn is not None:
+            install_print()
+            stack.enter_context(redirect_print(print_fn))
 
     # ------------------------------------------------------------------
     # Shared pipeline helpers
@@ -420,7 +427,7 @@ class Sandbox:
 
         error = None
         with ExitStack() as stack:
-            self._enter_sandbox_context(stack)
+            self._enter_sandbox_context(stack, print_fn=ns["print"])
             try:
                 exec(code, ns)  # noqa: S102
             except BaseException as e:
@@ -568,7 +575,7 @@ class Sandbox:
         error = None
         result_locals: dict[str, Any] = {}
         with ExitStack() as stack:
-            self._enter_sandbox_context(stack)
+            self._enter_sandbox_context(stack, print_fn=ns["print"])
             try:
                 exec(code, ns)  # noqa: S102
                 coro = ns["__st_aexec__"]()

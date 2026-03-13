@@ -54,6 +54,21 @@ async def test_async_print_capture(sandbox):
 
 
 @pytest.mark.asyncio
+async def test_async_print_from_registered_fn():
+    """print() inside a registered async function is captured in sandbox stdout."""
+
+    async def greet():
+        print("hello from async registered fn")
+
+    policy = Policy()
+    policy.fn(greet)
+    sb = Sandbox(policy)
+    result = await sb.aexec("await greet()")
+    assert result.error is None
+    assert "hello from async registered fn" in result.stdout
+
+
+@pytest.mark.asyncio
 async def test_async_timeout():
     import asyncio as _asyncio
 
