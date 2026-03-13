@@ -1,12 +1,14 @@
 """Safe builtins for sandboxed execution."""
 
 import builtins as _builtins
+import contextvars
 import copyreg
 import functools
 import pydoc
 import sys
+from contextlib import contextmanager
 from io import StringIO
-from typing import Any
+from typing import Any, Iterator
 
 # Safe builtin functions (pass-through from real builtins).
 SAFE_FN_NAMES = (
@@ -327,6 +329,45 @@ def make_print(buffer: StringIO | TailBuffer) -> Any:
         buffer.write(text)
 
     return _print
+
+
+_sandbox_print: contextvars.ContextVar[Any] = contextvars.ContextVar("sandtrap_print")
+
+_original_print = _builtins.print
+_print_installed = False
+
+
+def _patched_print(*args: Any, **kwargs: Any) -> None:
+    """Global print replacement that delegates to sandbox print when active."""
+    fn = _sandbox_print.get(None)
+    if fn is not None:
+        fn(*args, **kwargs)
+    else:
+        _original_print(*args, **kwargs)
+
+
+def install_print() -> None:
+    """Monkeypatch ``builtins.print`` to delegate to the sandbox print
+    function when active (via :func:`redirect_print` context manager).
+
+    Outside sandbox execution, ``print()`` behaves normally.
+    Idempotent — safe to call multiple times.
+    """
+    global _print_installed
+    if _print_installed:
+        return
+    _builtins.print = _patched_print
+    _print_installed = True
+
+
+@contextmanager
+def redirect_print(print_fn: Any) -> Iterator[None]:
+    """Route all print() calls to the sandbox print function."""
+    token = _sandbox_print.set(print_fn)
+    try:
+        yield
+    finally:
+        _sandbox_print.reset(token)
 
 
 def make_safe_builtins(
