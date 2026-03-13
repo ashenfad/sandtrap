@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.9] - 2026-03-13
+
+### Added
+- **Print redirection for registered functions**: `print()` calls from registered functions, their callees, and any library code during sandbox execution now route to the sandbox stdout buffer instead of the host's real stdout. Uses a `ContextVar` + context manager, matching the existing pattern for network denial.
+
 ## [0.1.8] - 2026-03-12
 
 ### Added
