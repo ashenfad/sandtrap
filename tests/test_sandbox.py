@@ -386,6 +386,38 @@ def test_print_normal_outside_sandbox():
     builtins.print("outside still works")
 
 
+def test_print_in_vfs_module():
+    """print() inside a VFS helper module is captured in sandbox stdout."""
+    from sandtrap import VirtualFS
+
+    fs = VirtualFS({})
+    fs.write("/helpers/__init__.py", b"")
+    fs.write("/helpers/greet.py", b"def hello():\n    print('hi from helper')\n")
+
+    sb = Sandbox(Policy(), filesystem=fs)
+    result = sb.exec("from helpers.greet import hello\nhello()")
+    assert result.error is None
+    assert "hi from helper" in result.stdout
+
+
+def test_open_in_vfs_module():
+    """open() inside a VFS helper module can read sandbox files."""
+    from sandtrap import VirtualFS
+
+    fs = VirtualFS({})
+    fs.write("/data.txt", b"hello data")
+    fs.write("/helpers/__init__.py", b"")
+    fs.write(
+        "/helpers/reader.py",
+        b"def read_data():\n    with open('/data.txt') as f:\n        return f.read()\n",
+    )
+
+    sb = Sandbox(Policy(), filesystem=fs)
+    result = sb.exec("from helpers.reader import read_data\nresult = read_data()")
+    assert result.error is None
+    assert result.namespace["result"] == "hello data"
+
+
 def test_base_exception_captured(sandbox):
     """BaseException raised in sandbox is captured, not propagated."""
     result = sandbox.exec("raise Exception('test')")
