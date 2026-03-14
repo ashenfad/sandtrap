@@ -79,6 +79,8 @@ class _VFSLoader:
         self._wrapped_mode = wrapped_mode
         self._gates = gates
         self._cache: dict[str, Any] = {}
+        self._print_fn: Any = None
+        self._help_fn: Any = None
 
     def _compile_and_exec(self, mod: Any, source: str, module_name: str) -> None:
         """Parse, rewrite, compile, and execute VFS source into a module."""
@@ -96,6 +98,13 @@ class _VFSLoader:
         # Provide __import__ so C extensions can import transitive deps.
         # User-code imports are gated at the AST level.
         ns["__builtins__"]["__import__"] = _builtins.__import__
+        # Inject print/help/open so VFS modules can use them like top-level code.
+        if self._print_fn is not None:
+            ns["__builtins__"]["print"] = self._print_fn
+        if self._help_fn is not None:
+            ns["__builtins__"]["help"] = self._help_fn
+        if self._filesystem is not None:
+            ns["__builtins__"]["open"] = _builtins.open
         ns.update(self._gates)
 
         # Override defun/defclass gates with VFS-specific ones that
@@ -539,6 +548,7 @@ def make_gates(
             "__st_defclass__": __st_defclass__,
             "__st_checkpoint__": __st_checkpoint__,
             "__st_capture_context__": __st_capture_context__,
+            "__st_vfs__": vfs,
         }
     )
     return gates

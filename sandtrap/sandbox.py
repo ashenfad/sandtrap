@@ -242,6 +242,12 @@ class Sandbox:
         injected["help"] = help_fn
         ns["__builtins__"]["help"] = help_fn
 
+        # Push print/help to VFS loader so helper modules can use them too.
+        vfs = gates.get("__st_vfs__")
+        if vfs is not None:
+            vfs._print_fn = print_fn
+            vfs._help_fn = help_fn
+
         # Provide the real __import__ so C extensions (e.g. numpy, pandas)
         # can import their transitive dependencies.  User-code imports are
         # gated at the AST level — the rewriter validates every import
