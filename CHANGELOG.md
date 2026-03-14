@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.10] - 2026-03-13
+
+### Fixed
+- **`print`/`help`/`open` in VFS helper modules**: Modules loaded via the virtual filesystem were missing `print`, `help`, and `open` in their builtins, causing `NameError` when agents used these in helper modules. All three are now injected into VFS module builtins.
+- **Frozen VFS module builtins**: VFS module builtins are now wrapped in `_FrozenBuiltins` to prevent sandboxed code from mutating them, matching the main sandbox behavior.
+
 ## [0.1.9] - 2026-03-13
 
 ### Added
