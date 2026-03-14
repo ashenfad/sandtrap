@@ -418,6 +418,40 @@ def test_open_in_vfs_module():
     assert result.namespace["result"] == "hello data"
 
 
+def test_help_in_vfs_module():
+    """help() inside a VFS helper module writes to sandbox stdout."""
+    from sandtrap import VirtualFS
+
+    fs = VirtualFS({})
+    fs.write("/helpers/__init__.py", b"")
+    fs.write(
+        "/helpers/docs.py",
+        b"def show_help():\n    help(sorted)\n",
+    )
+
+    sb = Sandbox(Policy(), filesystem=fs)
+    result = sb.exec("from helpers.docs import show_help\nshow_help()")
+    assert result.error is None
+    assert "sorted" in result.stdout
+
+
+def test_help_string_blocked_in_vfs_module():
+    """help('string') in a VFS module is blocked to prevent import bypass."""
+    from sandtrap import VirtualFS
+
+    fs = VirtualFS({})
+    fs.write("/helpers/__init__.py", b"")
+    fs.write(
+        "/helpers/docs.py",
+        b"def bad_help():\n    help('os')\n",
+    )
+
+    sb = Sandbox(Policy(), filesystem=fs)
+    result = sb.exec("from helpers.docs import bad_help\nbad_help()")
+    assert result.error is not None
+    assert "not supported" in str(result.error)
+
+
 def test_base_exception_captured(sandbox):
     """BaseException raised in sandbox is captured, not propagated."""
     result = sandbox.exec("raise Exception('test')")

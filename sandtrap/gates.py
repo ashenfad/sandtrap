@@ -13,7 +13,7 @@ import types
 from contextlib import ExitStack
 from typing import Any, cast
 
-from .builtins import make_safe_builtins
+from .builtins import _FrozenBuiltins, make_safe_builtins
 from .errors import StCancelled, StTickLimit, StTimeout
 from .fs import current_fs, suspend
 from .net.context import allow_network, network_allowed
@@ -105,6 +105,7 @@ class _VFSLoader:
             ns["__builtins__"]["help"] = self._help_fn
         if self._filesystem is not None:
             ns["__builtins__"]["open"] = _builtins.open
+        ns["__builtins__"] = _FrozenBuiltins(ns["__builtins__"])
         ns.update(self._gates)
 
         # Override defun/defclass gates with VFS-specific ones that
