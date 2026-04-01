@@ -6,8 +6,9 @@ They are inert when network access is allowed (``network_allowed`` is
 
 Threading patches ensure that ``contextvars`` state (including
 ``network_allowed``) propagates to worker threads spawned via
-``threading.Thread``, ``ThreadPoolExecutor.submit``, and
-``ThreadPoolExecutor.map``.
+``threading.Thread`` and ``ThreadPoolExecutor.submit``.
+``ThreadPoolExecutor.map`` is covered implicitly because CPython's
+``Executor.map`` delegates to ``self.submit`` for each item.
 """
 
 import concurrent.futures
@@ -56,7 +57,6 @@ _PATCHES = {
 # --- Threading originals ---
 _original_thread_start: Any = None
 _original_executor_submit: Any = None
-_original_executor_map: Any = None
 
 
 # --- Threading patches ---
@@ -80,20 +80,9 @@ def _p_executor_submit(self: Any, fn: Any, /, *args: Any, **kwargs: Any) -> Any:
     return _original_executor_submit(self, ctx.run, fn, *args, **kwargs)
 
 
-def _p_executor_map(self: Any, fn: Any, *iterables: Any, **kwargs: Any) -> Any:
-    """Patched ThreadPoolExecutor.map() that propagates contextvars."""
-    ctx = contextvars.copy_context()
-
-    def _ctx_fn(*args: Any) -> Any:
-        return ctx.run(fn, *args)
-
-    return _original_executor_map(self, _ctx_fn, *iterables, **kwargs)
-
-
 def install() -> None:
     """Install network and threading patches (idempotent, permanent)."""
-    global _installed, _original_thread_start
-    global _original_executor_submit, _original_executor_map
+    global _installed, _original_thread_start, _original_executor_submit
     with _lock:
         if _installed:
             return
@@ -114,8 +103,5 @@ def install() -> None:
         if _original_executor_submit is None:
             _original_executor_submit = concurrent.futures.ThreadPoolExecutor.submit
             concurrent.futures.ThreadPoolExecutor.submit = _p_executor_submit  # type: ignore[assignment]
-        if _original_executor_map is None:
-            _original_executor_map = concurrent.futures.ThreadPoolExecutor.map
-            concurrent.futures.ThreadPoolExecutor.map = _p_executor_map  # type: ignore[method-assign]
 
         _installed = True

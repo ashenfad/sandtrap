@@ -363,6 +363,25 @@ t.join()
     assert "Network access denied" in result.namespace["errors"][0]
 
 
+def test_executor_map_concurrent_workers():
+    """ThreadPoolExecutor.map with concurrent workers doesn't crash.
+
+    Regression test: a single shared Context object cannot be entered
+    by multiple workers simultaneously.  Each worker needs its own copy.
+    """
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    def slow_worker(_):
+        time.sleep(0.05)  # Force concurrent execution
+        return network_allowed.get()
+
+    with deny_network():
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(slow_worker, range(4)))
+    assert results == [False, False, False, False]
+
+
 def test_timer_propagates_context():
     """threading.Timer (subclass of Thread) inherits context."""
     import threading
