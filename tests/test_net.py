@@ -132,3 +132,143 @@ def test_net_install_idempotent():
     # Second call is a no-op
     net_patch.install()
     assert net_patch._installed
+
+
+# --- ContextVar propagation to worker threads ---
+
+
+def test_thread_propagates_deny_network():
+    """threading.Thread inherits network_allowed=False from parent."""
+    import threading
+
+    results = []
+
+    def worker():
+        results.append(network_allowed.get())
+
+    with deny_network():
+        t = threading.Thread(target=worker)
+        t.start()
+        t.join()
+
+    assert results == [False]
+
+
+def test_thread_propagates_allow_network():
+    """threading.Thread inherits network_allowed=True override from parent."""
+    import threading
+
+    results = []
+
+    def worker():
+        results.append(network_allowed.get())
+
+    with deny_network():
+        with allow_network():
+            t = threading.Thread(target=worker)
+            t.start()
+            t.join()
+
+    assert results == [True]
+
+
+def test_executor_submit_propagates_deny_network():
+    """ThreadPoolExecutor.submit inherits network_allowed=False."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def worker():
+        return network_allowed.get()
+
+    with deny_network():
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(worker)
+            assert future.result() is False
+
+
+def test_executor_submit_propagates_allow_network():
+    """ThreadPoolExecutor.submit inherits network_allowed=True override."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def worker():
+        return network_allowed.get()
+
+    with deny_network():
+        with allow_network():
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(worker)
+                assert future.result() is True
+
+
+def test_executor_map_propagates_deny_network():
+    """ThreadPoolExecutor.map inherits network_allowed=False."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def worker(_):
+        return network_allowed.get()
+
+    with deny_network():
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(worker, range(3)))
+    assert results == [False, False, False]
+
+
+def test_executor_map_propagates_allow_network():
+    """ThreadPoolExecutor.map inherits network_allowed=True override."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def worker(_):
+        return network_allowed.get()
+
+    with deny_network():
+        with allow_network():
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                results = list(pool.map(worker, range(3)))
+    assert results == [True, True, True]
+
+
+def test_thread_network_blocked_in_sandbox():
+    """Worker threads in sandbox can't use network when denied."""
+    import threading
+
+    policy = Policy()
+    policy.module(socket)
+    policy.module(threading)
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("""\
+import socket
+import threading
+
+errors = []
+
+def worker():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect(('127.0.0.1', 1))
+        s.close()
+    except Exception as e:
+        errors.append(str(e))
+
+t = threading.Thread(target=worker)
+t.start()
+t.join()
+""")
+    assert result.error is None
+    assert len(result.namespace["errors"]) == 1
+    assert "Network access denied" in result.namespace["errors"][0]
+
+
+def test_timer_propagates_context():
+    """threading.Timer (subclass of Thread) inherits context."""
+    import threading
+
+    results = []
+
+    def worker():
+        results.append(network_allowed.get())
+
+    with deny_network():
+        t = threading.Timer(0, worker)
+        t.start()
+        t.join()
+
+    assert results == [False]
