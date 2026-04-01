@@ -265,6 +265,25 @@ def make_gates(
         except (ValueError, AttributeError):
             return None
 
+    def _maybe_wrap_privileged(value: Any, reg: Any, member_name: str) -> Any:
+        """Wrap *value* if its registration requires network or host-fs access."""
+        if not callable(value) or reg is None:
+            return value
+        needs_network = getattr(reg, "network_access", False)
+        needs_host_fs = getattr(reg, "host_fs_access", False)
+        # Check per-member overrides
+        if hasattr(reg, "configure") and member_name in reg.configure:
+            spec = reg.configure[member_name]
+            needs_network = needs_network or spec.network_access
+            needs_host_fs = needs_host_fs or spec.host_fs_access
+        if needs_network or needs_host_fs:
+            return wrap_privileged(
+                value,
+                network_access=needs_network,
+                host_fs_access=needs_host_fs,
+            )
+        return value
+
     def __st_getattr__(obj: Any, attr: str) -> Any:
         obj = _unwrap(obj)
         if not policy.is_attr_allowed(obj, attr):
@@ -290,26 +309,8 @@ def make_gates(
                 return safe_format_map
 
         value = getattr(obj, attr)
-
-        # Wrap callables from privileged registrations
-        if callable(value):
-            reg = policy._find_registration_for(obj)
-            if reg is not None:
-                needs_network = getattr(reg, "network_access", False)
-                needs_host_fs = getattr(reg, "host_fs_access", False)
-                # Check per-member overrides
-                if hasattr(reg, "configure") and attr in reg.configure:
-                    spec = reg.configure[attr]
-                    needs_network = needs_network or spec.network_access
-                    needs_host_fs = needs_host_fs or spec.host_fs_access
-                if needs_network or needs_host_fs:
-                    value = wrap_privileged(
-                        value,
-                        network_access=needs_network,
-                        host_fs_access=needs_host_fs,
-                    )
-
-        return value
+        reg = policy._find_registration_for(obj)
+        return _maybe_wrap_privileged(value, reg, attr)
 
     def __st_setattr__(obj: Any, attr: str, value: Any) -> None:
         obj = _unwrap(obj)
@@ -395,7 +396,10 @@ def make_gates(
 
         # Try policy first
         if policy.is_import_allowed(module_name):
-            return policy.resolve_module_member(module_name, name)
+            value = policy.resolve_module_member(module_name, name)
+            module_obj = policy.resolve_module(module_name)
+            reg = policy._find_registration_for(module_obj)
+            return _maybe_wrap_privileged(value, reg, name)
 
         # Try VFS modules
         mod = vfs.resolve_module(module_name)
