@@ -90,6 +90,120 @@ result = netmod.fetch()
     assert result.namespace["result"] == "ok"
 
 
+def test_from_import_network_allowed_for_module_member():
+    """from X import Y wraps Y with network privileges."""
+    import types
+
+    mod = types.ModuleType("netmod2")
+
+    def fetch():
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.close()
+        return "ok"
+
+    mod.fetch = fetch
+    policy = Policy()
+    policy.module(mod, name="netmod2", network_access=True)
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("""\
+from netmod2 import fetch
+result = fetch()
+""")
+    assert result.error is None
+    assert result.namespace["result"] == "ok"
+
+
+def test_from_import_network_blocked_without_flag():
+    """from X import Y does NOT grant network when module lacks flag."""
+    import types
+
+    mod = types.ModuleType("netmod3")
+
+    def fetch():
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect(("127.0.0.1", 1))
+        s.close()
+
+    mod.fetch = fetch
+    policy = Policy()
+    policy.module(mod, name="netmod3")  # no network_access
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("""\
+from netmod3 import fetch
+fetch()
+""")
+    assert result.error is not None
+    assert "Network access denied" in str(result.error)
+
+
+def test_from_import_per_member_network_override():
+    """from X import Y applies per-member configure overrides."""
+    import types
+
+    from sandtrap.policy import MemberSpec
+
+    mod = types.ModuleType("netmod4")
+
+    def safe():
+        return "safe"
+
+    def privileged():
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.close()
+        return "ok"
+
+    mod.safe = safe
+    mod.privileged = privileged
+    policy = Policy()
+    policy.module(
+        mod,
+        name="netmod4",
+        configure={"privileged": MemberSpec(network_access=True)},
+    )
+    sandbox = Sandbox(policy)
+
+    # privileged() should work via from-import
+    result = sandbox.exec("""\
+from netmod4 import privileged
+result = privileged()
+""")
+    assert result.error is None
+    assert result.namespace["result"] == "ok"
+
+    # safe() should work but not grant network privileges
+    result2 = sandbox.exec("""\
+from netmod4 import safe
+result = safe()
+""")
+    assert result2.error is None
+    assert result2.namespace["result"] == "safe"
+
+
+def test_from_import_dotted_module_network():
+    """from X.Y import Z wraps Z with network privileges."""
+    import types
+
+    parent = types.ModuleType("netpkg")
+    child = types.ModuleType("netpkg.sub")
+
+    def fetch():
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.close()
+        return "ok"
+
+    child.fetch = fetch
+    parent.sub = child
+    policy = Policy()
+    policy.module(parent, name="netpkg", network_access=True, recursive=True)
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("""\
+from netpkg.sub import fetch
+result = fetch()
+""")
+    assert result.error is None
+    assert result.namespace["result"] == "ok"
+
+
 def test_af_unix_passes_through():
     """AF_UNIX sockets are not blocked even during denied network context."""
     with deny_network():
