@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.11] - 2026-04-01
+
+### Fixed
+- **ContextVar propagation to worker threads**: Patched `threading.Thread.start`, `ThreadPoolExecutor.submit`, and `ThreadPoolExecutor.map` to snapshot and propagate `contextvars` to worker threads. This ensures `network_allowed` (and other ContextVars like `current_fs`) are inherited correctly when registered functions dispatch work to thread pools.
+- **Patch installation resilience**: Each socket and threading patch now guards against partial installation, preventing infinite recursion if `install()` is retried after a mid-install failure.
+
 ## [0.1.10] - 2026-03-13
 
 ### Fixed

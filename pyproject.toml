@@ -1,6 +1,6 @@
 [project]
 name = "sandtrap"
-version = "0.1.10"
+version = "0.1.11"
 description = "Local Python sandbox using AST rewriting, with optional subprocess isolation and kernel-level enforcement."
 readme = "README.md"
 license = "MIT"
