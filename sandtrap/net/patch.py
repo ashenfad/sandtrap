@@ -98,26 +98,24 @@ def install() -> None:
         if _installed:
             return
 
-        # Store originals — sockets
+        # Store originals and install patches — sockets
         for name in _METHODS:
-            _gated._originals[name] = getattr(socket.socket, name)
-        _gated._original_getaddrinfo = socket.getaddrinfo
+            if name not in _gated._originals:
+                _gated._originals[name] = getattr(socket.socket, name)
+                setattr(socket.socket, name, _PATCHES[name])
+        if _gated._original_getaddrinfo is None:
+            _gated._original_getaddrinfo = socket.getaddrinfo
+            socket.getaddrinfo = _gated._p_getaddrinfo
 
-        # Install patches on socket.socket methods
-        for name, patch_fn in _PATCHES.items():
-            setattr(socket.socket, name, patch_fn)
-
-        # Install getaddrinfo patch at module level
-        socket.getaddrinfo = _gated._p_getaddrinfo
-
-        # Store originals — threading
-        _original_thread_start = threading.Thread.start
-        _original_executor_submit = concurrent.futures.ThreadPoolExecutor.submit
-        _original_executor_map = concurrent.futures.ThreadPoolExecutor.map
-
-        # Install threading patches
-        threading.Thread.start = _p_thread_start  # type: ignore[assignment]
-        concurrent.futures.ThreadPoolExecutor.submit = _p_executor_submit  # type: ignore[assignment]
-        concurrent.futures.ThreadPoolExecutor.map = _p_executor_map  # type: ignore[method-assign]
+        # Store originals and install patches — threading
+        if _original_thread_start is None:
+            _original_thread_start = threading.Thread.start
+            threading.Thread.start = _p_thread_start  # type: ignore[assignment]
+        if _original_executor_submit is None:
+            _original_executor_submit = concurrent.futures.ThreadPoolExecutor.submit
+            concurrent.futures.ThreadPoolExecutor.submit = _p_executor_submit  # type: ignore[assignment]
+        if _original_executor_map is None:
+            _original_executor_map = concurrent.futures.ThreadPoolExecutor.map
+            concurrent.futures.ThreadPoolExecutor.map = _p_executor_map  # type: ignore[method-assign]
 
         _installed = True
