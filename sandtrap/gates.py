@@ -309,8 +309,10 @@ def make_gates(
                 return safe_format_map
 
         value = getattr(obj, attr)
-        reg = policy._find_registration_for(obj)
-        return _maybe_wrap_privileged(value, reg, attr)
+        if callable(value):
+            reg = policy._find_registration_for(obj)
+            return _maybe_wrap_privileged(value, reg, attr)
+        return value
 
     def __st_setattr__(obj: Any, attr: str, value: Any) -> None:
         obj = _unwrap(obj)
@@ -397,8 +399,18 @@ def make_gates(
         # Try policy first
         if policy.is_import_allowed(module_name):
             value = policy.resolve_module_member(module_name, name)
-            module_obj = policy.resolve_module(module_name)
-            reg = policy._find_registration_for(module_obj)
+            # Find effective registration by name to support submodules
+            # of recursive registrations (e.g. from os.path import join
+            # when only os is registered with recursive=True).
+            reg = policy.modules.get(module_name)
+            if reg is None:
+                parts = module_name.split(".")
+                for i in range(len(parts) - 1, 0, -1):
+                    parent = ".".join(parts[:i])
+                    p_reg = policy.modules.get(parent)
+                    if p_reg and p_reg.recursive:
+                        reg = p_reg
+                        break
             return _maybe_wrap_privileged(value, reg, name)
 
         # Try VFS modules

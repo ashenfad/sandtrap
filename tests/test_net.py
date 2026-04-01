@@ -54,9 +54,8 @@ def test_network_allowed_for_registered_function():
     policy = Policy()
 
     def do_network():
-        """Create a socket and close it (proves no StError raised)."""
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.close()
+        """Call getaddrinfo (a gated operation) to prove access is granted."""
+        socket.getaddrinfo("localhost", 80)
         return True
 
     policy.fn(do_network, network_access=True)
@@ -70,12 +69,10 @@ def test_network_allowed_for_module_member():
     """Module members with network_access=True are wrapped."""
     import types
 
-    # Create a module-like object with a network function
     mod = types.ModuleType("netmod")
 
     def fetch():
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.close()
+        socket.getaddrinfo("localhost", 80)
         return "ok"
 
     mod.fetch = fetch
@@ -97,8 +94,7 @@ def test_from_import_network_allowed_for_module_member():
     mod = types.ModuleType("netmod2")
 
     def fetch():
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.close()
+        socket.getaddrinfo("localhost", 80)
         return "ok"
 
     mod.fetch = fetch
@@ -120,9 +116,7 @@ def test_from_import_network_blocked_without_flag():
     mod = types.ModuleType("netmod3")
 
     def fetch():
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.connect(("127.0.0.1", 1))
-        s.close()
+        socket.getaddrinfo("localhost", 80)
 
     mod.fetch = fetch
     policy = Policy()
@@ -148,8 +142,7 @@ def test_from_import_per_member_network_override():
         return "safe"
 
     def privileged():
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.close()
+        socket.getaddrinfo("localhost", 80)
         return "ok"
 
     mod.safe = safe
@@ -187,8 +180,7 @@ def test_from_import_dotted_module_network():
     child = types.ModuleType("netpkg.sub")
 
     def fetch():
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.close()
+        socket.getaddrinfo("localhost", 80)
         return "ok"
 
     child.fetch = fetch
