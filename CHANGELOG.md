@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.14] - 2026-04-09
+
+### Fixed
+- **Recursive module registration network access for class instances**: Instances of classes from recursively registered modules were denied network access because `_find_registration_for` didn't check `type(obj).__module__` against recursive module registrations. Method calls on those instances now correctly inherit `network_access` and `host_fs_access` from the module's registration.
+
 ## [0.1.13] - 2026-04-01
 
 ### Fixed
