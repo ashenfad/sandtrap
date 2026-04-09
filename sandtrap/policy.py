@@ -390,6 +390,15 @@ class Policy:
             if reg is not None and obj is reg.cls:
                 return reg
 
+        # Check if type(obj)'s module is covered by a recursive module registration
+        obj_module = getattr(obj_type, "__module__", None)
+        if obj_module:
+            for reg in self.modules.values():
+                if reg.recursive and (
+                    obj_module == reg.name or obj_module.startswith(reg.name + ".")
+                ):
+                    return reg
+
         return None
 
     def is_import_allowed(self, module_name: str) -> bool:

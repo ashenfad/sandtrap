@@ -196,6 +196,34 @@ result = fetch()
     assert result.namespace["result"] == "ok"
 
 
+def test_recursive_module_class_instance_network():
+    """Instances of classes from recursively registered modules get network access."""
+    import types
+
+    parent = types.ModuleType("netmod")
+    child = types.ModuleType("netmod.sub")
+
+    class Client:
+        def fetch(self):
+            socket.getaddrinfo("localhost", 80)
+            return "ok"
+
+    Client.__module__ = "netmod.sub"
+    child.Client = Client
+    parent.sub = child
+
+    policy = Policy()
+    policy.module(parent, name="netmod", network_access=True, recursive=True)
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("""\
+from netmod.sub import Client
+c = Client()
+result = c.fetch()
+""")
+    assert result.error is None
+    assert result.namespace["result"] == "ok"
+
+
 def test_af_unix_passes_through():
     """AF_UNIX sockets are not blocked even during denied network context."""
     with deny_network():
