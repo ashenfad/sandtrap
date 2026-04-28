@@ -204,6 +204,63 @@ def test_from_import_lazy_submodule():
     assert result.namespace["draw_cls"] is PIL.ImageDraw.Draw
 
 
+def test_from_import_submodule_blocked_when_non_recursive_eager():
+    """``from os import path`` should be blocked when ``os`` is
+    registered with ``recursive=False`` — even though ``os.path`` is
+    eager-loaded as a parent attribute at ``import os`` time.
+
+    Without this gate, agents bypass the ``recursive=False`` posture
+    entirely for any submodule that the parent package happens to
+    pre-import in its ``__init__.py`` (``os.path``, ``email.mime``,
+    ``urllib.parse``, etc.).  Submodule access goes through the
+    import policy, the same as ``import os.path`` would.
+    """
+    import os
+
+    policy = Policy()
+    policy.module(os)  # recursive=False (default)
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("from os import path")
+    assert isinstance(result.error, ImportError), (
+        f"expected ImportError, got: {result.error!r}"
+    )
+
+
+def test_from_import_submodule_blocked_when_non_recursive_lazy():
+    """Same gate as the eager case, exercised through the lazy
+    fallback path: a non-recursive registration must not let agents
+    pull in arbitrary submodules via ``importlib.import_module``."""
+    PIL = pytest.importorskip("PIL")
+
+    sys.modules.pop("PIL.ImageDraw", None)
+    if hasattr(PIL, "ImageDraw"):
+        delattr(PIL, "ImageDraw")
+
+    policy = Policy()
+    policy.module(PIL)  # recursive=False (default)
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("from PIL import ImageDraw")
+    assert isinstance(result.error, ImportError), (
+        f"expected ImportError, got: {result.error!r}"
+    )
+
+
+def test_from_import_regular_member_unaffected_by_submodule_gate():
+    """The submodule gate must not interfere with regular member
+    imports (functions, constants).  ``from os import getcwd``
+    should still work against a non-recursive ``os`` registration —
+    ``getcwd`` is a function, not a submodule, so the policy posture
+    on ``os`` itself is what governs."""
+    import os
+
+    policy = Policy()
+    policy.module(os)  # recursive=False
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("from os import getcwd\ncwd = getcwd()")
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert isinstance(result.namespace["cwd"], str)
+
+
 # ---- C-level __import__ tests ----
 #
 # C extensions (e.g. numpy) call PyObject_GetAttr(builtins, "__import__")
