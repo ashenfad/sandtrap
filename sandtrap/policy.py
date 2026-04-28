@@ -459,6 +459,16 @@ class Policy:
         # Get the member from the actual module object
         module_obj = self.resolve_module(module_name)
         if not hasattr(module_obj, member_name):
+            # Submodule not yet loaded as a parent attribute —
+            # namespace-package-style modules (``PIL``, ``email``,
+            # ``urllib``, ...) don't eager-import their submodules
+            # in ``__init__.py``.  Mirror ``resolve_module``'s
+            # lazy fallback so ``from PIL import ImageDraw`` works
+            # the same as ``import PIL.ImageDraw``.
+            try:
+                return importlib.import_module(f"{module_name}.{member_name}")
+            except ImportError:
+                pass
             raise ImportError(
                 f"Module '{module_name}' has no attribute '{member_name}'"
             )
