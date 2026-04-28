@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.15] - 2026-04-28
+
+### Fixed
+- **`from X import Y` for lazy submodules of recursive modules.**
+  `policy.resolve_module_member` now mirrors `resolve_module`'s
+  `importlib.import_module` fallback when the submodule isn't yet a
+  parent attribute. Unblocks `from PIL import ImageDraw` and the same
+  pattern on any namespace-package-style module that doesn't
+  eager-import its submodules.
+
 ## [0.1.14] - 2026-04-09
 
 ### Fixed

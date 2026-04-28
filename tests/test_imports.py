@@ -1,6 +1,7 @@
 """Tests for import gates (Phase 3)."""
 
 import math
+import sys
 
 import pytest
 
@@ -167,6 +168,40 @@ def test_recursive_module_import():
     result = sandbox.exec("import json\nx = json.dumps([1, 2, 3])")
     assert result.error is None
     assert result.namespace["x"] == "[1, 2, 3]"
+
+
+def test_from_import_lazy_submodule():
+    """``from PIL import ImageDraw`` should work when ``PIL`` is
+    registered with ``recursive=True``, even when ``PIL.ImageDraw``
+    hasn't been pre-loaded as an attribute on the parent package.
+
+    Namespace-package-style modules (``PIL``, ``email``, ``urllib``,
+    etc.) don't eager-import their submodules in ``__init__.py``,
+    so ``hasattr(PIL, "ImageDraw")`` is ``False`` until something
+    has explicitly imported it.  ``policy.resolve_module`` already
+    falls back to ``importlib.import_module`` in this case (path
+    used by ``import PIL.ImageDraw``); ``policy.resolve_module_member``
+    (path used by ``from PIL import ImageDraw``) must do the same
+    or this asymmetry leaves agents stuck on the from-form.
+    """
+    PIL = pytest.importorskip("PIL")
+
+    # Defensively unload PIL.ImageDraw and detach it from the parent
+    # so the fresh-load condition is reproducible regardless of
+    # whether earlier tests / imports have already pulled it in.
+    sys.modules.pop("PIL.ImageDraw", None)
+    if hasattr(PIL, "ImageDraw"):
+        delattr(PIL, "ImageDraw")
+    assert not hasattr(PIL, "ImageDraw"), (
+        "test setup failed: PIL.ImageDraw should not be a parent attr"
+    )
+
+    policy = Policy()
+    policy.module(PIL, recursive=True)
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("from PIL import ImageDraw\ndraw_cls = ImageDraw.Draw")
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert result.namespace["draw_cls"] is PIL.ImageDraw.Draw
 
 
 # ---- C-level __import__ tests ----
