@@ -456,20 +456,35 @@ class Policy:
         if not reg._include_pred(member_name) or reg._exclude_pred(member_name):
             raise ImportError(f"'{member_name}' is not available from '{module_name}'")
 
-        # Get the member from the actual module object
+        # Resolve the member from the actual module object.  Prefer
+        # the eager attribute, fall back to importlib for submodules
+        # that aren't yet bound on the parent (PIL-style packages
+        # whose __init__ doesn't eager-import their submodules).
         module_obj = self.resolve_module(module_name)
-        if not hasattr(module_obj, member_name):
-            # Submodule not yet loaded as a parent attribute —
-            # namespace-package-style modules (``PIL``, ``email``,
-            # ``urllib``, ...) don't eager-import their submodules
-            # in ``__init__.py``.  Mirror ``resolve_module``'s
-            # lazy fallback so ``from PIL import ImageDraw`` works
-            # the same as ``import PIL.ImageDraw``.
+        if hasattr(module_obj, member_name):
+            candidate = getattr(module_obj, member_name)
+        else:
             try:
-                return importlib.import_module(f"{module_name}.{member_name}")
+                candidate = importlib.import_module(f"{module_name}.{member_name}")
             except ImportError:
-                pass
-            raise ImportError(
-                f"Module '{module_name}' has no attribute '{member_name}'"
-            )
-        return getattr(module_obj, member_name)
+                raise ImportError(
+                    f"Module '{module_name}' has no attribute '{member_name}'"
+                ) from None
+
+        # Submodule access bypasses the include/exclude filter (which
+        # is for top-level members), so gate it through the same
+        # ``is_import_allowed`` check that ``import X.Y`` would hit.
+        # Without this, agents could import any submodule the parent
+        # happens to expose — eagerly (``os.path`` is bound at import
+        # time) or lazily (``PIL.ImageDraw`` via importlib) — even
+        # when the parent registration is ``recursive=False``.
+        if isinstance(candidate, ModuleType):
+            full_name = f"{module_name}.{member_name}"
+            if not self.is_import_allowed(full_name):
+                raise ImportError(
+                    f"Submodule '{full_name}' is not allowed "
+                    f"(register '{module_name}' with recursive=True or "
+                    f"add '{full_name}' explicitly)."
+                )
+
+        return candidate

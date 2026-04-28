@@ -8,12 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.15] - 2026-04-28
 
 ### Fixed
-- **`from X import Y` for lazy submodules of recursive modules.**
-  `policy.resolve_module_member` now mirrors `resolve_module`'s
-  `importlib.import_module` fallback when the submodule isn't yet a
-  parent attribute. Unblocks `from PIL import ImageDraw` and the same
-  pattern on any namespace-package-style module that doesn't
-  eager-import its submodules.
+- **`from X import Y` submodule access now respects `recursive=`.**
+  `resolve_module_member` resolved submodules via direct attribute
+  lookup with no policy gate, so `from os import path` slipped past
+  a non-recursive `os` registration whenever the parent already had
+  the submodule bound (eager case: `os.path`, `email.mime`, ...).
+  Submodule access — eager or lazy — now goes through
+  `is_import_allowed`, the same as `import X.Y` would. Also adds
+  the lazy `importlib.import_module` fallback so `from PIL import
+  ImageDraw` works against `recursive=True` parents that don't
+  eager-import their submodules.
 
 ## [0.1.14] - 2026-04-09
 
