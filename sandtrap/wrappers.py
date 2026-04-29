@@ -93,22 +93,6 @@ class StFunction:
         status = "active" if self._compiled is not None else "inactive"
         return f"<StFunction '{self._name}' ({status})>"
 
-    @property
-    def global_refs(self) -> set[str]:
-        """Names this function references as globals (excluding builtins/gates)."""
-        stored = getattr(self, "_global_ref_names", None)
-        if stored is not None:
-            return set(stored)
-        if self._compiled is not None and hasattr(self._compiled, "__code__"):
-            return {
-                n
-                for n in _collect_global_names(self._compiled.__code__)
-                if not n.startswith("__st_")
-                and n not in _SAFE_BUILTIN_NAMES
-                and n != self._name
-            }
-        return set()
-
     def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
         compiled = state.pop("_compiled", None)
@@ -134,13 +118,12 @@ class StFunction:
             if frozen:
                 state["_frozen_closure"] = frozen
 
-        # Freeze global references (StFunction/StClass only) and store
-        # all global ref names for introspection via global_refs property
-        # (skip if _compiled is a wrapper like StFunction, not a raw function)
+        # Freeze sandbox-defined StFunction/StClass globals so the
+        # unpickled function can find its dependencies after activate
+        # rebuilds its globals dict.
         if compiled is not None and hasattr(compiled, "__globals__"):
             globs = compiled.__globals__
             frozen_globals: dict[str, Any] = {}
-            global_ref_names: set[str] = set()
             for name in _collect_global_names(compiled.__code__):
                 if name.startswith("__st_"):
                     continue
@@ -148,13 +131,10 @@ class StFunction:
                     continue
                 if name == self._name:
                     continue
-                global_ref_names.add(name)
                 if name in globs and isinstance(globs[name], (StFunction, StClass)):
                     frozen_globals[name] = globs[name]
             if frozen_globals:
                 state["_frozen_globals"] = frozen_globals
-            if global_ref_names:
-                state["_global_ref_names"] = global_ref_names
 
         return state
 

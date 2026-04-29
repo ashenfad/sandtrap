@@ -98,7 +98,17 @@ class Sandbox:
         ns: dict[str, Any],
         gates: dict[str, Any],
     ) -> None:
-        """Auto-activate any inactive StFunction/StClass/StInstance in namespace."""
+        """Auto-activate any inactive StFunction/StClass/StInstance in namespace.
+
+        Walks top-level namespace entries and activates wrappers in place.
+        Container objects (e.g. agex's ``Cache``) that hold their own
+        sandbox-defined values can opt into activation by implementing
+        ``__sandtrap_activate__(activate_value, gates, sandbox)`` — the
+        hook is invoked with the activator function and current
+        ``gates`` / ``sandbox`` references so the container can walk and
+        activate whatever it stores.  Hook exceptions are swallowed so
+        a misbehaving container doesn't break ``exec``.
+        """
         import_gate = gates.get("__st_import__")
         for k, v in list(ns.items()):
             activate_value(v, gates, sandbox=self, namespace=ns)
@@ -113,6 +123,12 @@ class Sandbox:
                         ns[k] = import_gate(v.name, alias=k)
                 except Exception:
                     pass  # VFS file may no longer exist
+            hook = getattr(v, "__sandtrap_activate__", None)
+            if callable(hook):
+                try:
+                    hook(activate_value, gates, self)
+                except Exception:
+                    pass  # container hook is best-effort; never break exec
 
     def _attach_sandbox_refs(
         self,
