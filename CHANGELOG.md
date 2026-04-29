@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-04-29
+
+### Added
+- **`__sandtrap_activate__` container hook.** ``Sandbox._auto_activate``
+  now invokes ``v.__sandtrap_activate__(activate_value, gates, sandbox)``
+  on any namespace value that exposes the method, giving containers
+  (e.g. agex's ``Cache``) a chance to walk and activate
+  sandbox-defined values they hold one level below the namespace top.
+  Hook exceptions are swallowed so a misbehaving container can't
+  break ``exec``.
+
+### Removed
+- **`find_refs` and the `refs` module.** The static reference analyzer
+  was used by agex for selective state hydration and mutation
+  detection in the old cross-emission persistence model; agex no
+  longer hydrates state into the namespace, so the analyzer has no
+  consumers. Removed with it: ``StFunction.global_refs`` property,
+  the ``_global_ref_names`` pickle slot, and the ``tests/test_refs.py``
+  + selective-restore stress tests that exercised them.
+  ``StFunction._frozen_globals`` (which holds the actual sandbox
+  -defined ``StFunction``/``StClass`` values for re-activation) is
+  unchanged.
+
 ## [0.1.15] - 2026-04-28
 
 ### Fixed

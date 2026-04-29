@@ -596,6 +596,59 @@ def mul(a, b): return a * b
     assert result2.namespace["r"] == 25
 
 
+def test_container_activation_hook():
+    """A namespace value that exposes ``__sandtrap_activate__`` is given
+    a chance to walk and activate its own contents.
+
+    This is the protocol that lets callers like agex's ``Cache`` keep
+    sandbox-defined functions usable across pickle round-trips when
+    they live one level below the namespace top.
+    """
+    policy = Policy()
+    sandbox = Sandbox(policy, mode="wrapped")
+
+    # Turn 1: define a function and pickle it (inactive after pickle).
+    r1 = sandbox.exec("def add(a, b): return a + b")
+    pickled_add = pickle.loads(pickle.dumps(r1.namespace["add"]))
+    assert pickled_add._compiled is None  # confirm inactive
+
+    # A minimal container that holds StFunctions and opts in via the
+    # protocol.  Real consumers (e.g. Cache) would walk their backing
+    # store; here we just hold a dict.
+    class Bag:
+        def __init__(self, contents):
+            self.contents = contents
+
+        def __sandtrap_activate__(self, activate_value, gates, sandbox):
+            for v in self.contents.values():
+                activate_value(v, gates, sandbox=sandbox)
+
+    bag = Bag({"add": pickled_add})
+
+    # Turn 2: bag in namespace; the hook should activate its contents
+    # before agent code runs, so calling bag.contents["add"] works.
+    r2 = sandbox.exec(
+        "r = bag.contents['add'](2, 3)",
+        namespace={"bag": bag},
+    )
+    assert r2.error is None
+    assert r2.namespace["r"] == 5
+
+
+def test_container_activation_hook_failure_is_swallowed():
+    """A misbehaving hook must not break ``exec``."""
+    policy = Policy()
+    sandbox = Sandbox(policy, mode="wrapped")
+
+    class Bad:
+        def __sandtrap_activate__(self, activate_value, gates, sandbox):
+            raise RuntimeError("boom")
+
+    # Should run cleanly despite the hook raising.
+    r = sandbox.exec("x = 1", namespace={"bad": Bad()})
+    assert r.error is None
+
+
 # --- _call_in_context tests (direct calls with sandbox protections) ---
 
 
@@ -813,41 +866,6 @@ add5 = make_fn(5)
 
     # Closure value n=5 should be preserved
     assert restored(10) == 15
-
-
-def test_global_refs_property():
-    """global_refs returns names of global references."""
-    policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="wrapped")
-
-    result = sandbox.exec("""\
-def square(x): return x * x
-def sum_squares(lst):
-    return sum(square(x) for x in lst)
-""")
-    assert result.error is None
-    sum_sq = result.namespace["sum_squares"]
-
-    refs = sum_sq.global_refs
-    assert "square" in refs
-
-
-def test_global_refs_property_after_pickle():
-    """global_refs works after pickle round-trip."""
-    policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="wrapped")
-
-    result = sandbox.exec("""\
-def square(x): return x * x
-def sum_squares(lst):
-    return sum(square(x) for x in lst)
-""")
-    assert result.error is None
-    sum_sq = result.namespace["sum_squares"]
-
-    restored = pickle.loads(pickle.dumps(sum_sq))
-    refs = restored.global_refs
-    assert "square" in refs
 
 
 def test_frozen_globals_auto_activate():

@@ -4,7 +4,7 @@ import pickle
 
 import pytest
 
-from sandtrap import Policy, Sandbox, VirtualFS, find_refs
+from sandtrap import Policy, Sandbox, VirtualFS
 from sandtrap.errors import StTickLimit
 from sandtrap.wrappers import StClass, StFunction
 
@@ -628,54 +628,6 @@ tripled_inc = triple(inc)
     r2 = sandbox.exec("result = tripled_inc(4)", namespace={"tripled_inc": restored})
     assert r2.error is None
     assert r2.namespace["result"] == 15  # (4 + 1) * 3
-
-
-# --- Selective restore via find_refs ---
-
-
-def test_selective_restore_via_find_refs():
-    """Large namespace, only subset restored via find_refs, still works."""
-    policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="wrapped")
-
-    # Turn 1: define many functions
-    r1 = sandbox.exec("""\
-def add(a, b): return a + b
-def mul(a, b): return a * b
-def sub(a, b): return a - b
-def div(a, b): return a / b
-def square(x): return mul(x, x)
-def cube(x): return mul(x, mul(x, x))
-def sum_squares(lst):
-    return add(0, sum(square(x) for x in lst))
-""")
-    assert r1.error is None
-
-    # Pickle everything
-    pickled = {
-        k: pickle.dumps(v) for k, v in r1.namespace.items() if isinstance(v, StFunction)
-    }
-
-    # Turn 2: only need sum_squares — use find_refs to discover deps
-    source = "result = sum_squares([1, 2, 3])"
-    all_pickled = {k: pickle.loads(v) for k, v in pickled.items()}
-    refs = find_refs(source, namespace=all_pickled)
-
-    # Should discover sum_squares, square, mul, add (transitive)
-    assert "sum_squares" in refs
-    assert "square" in refs
-    assert "mul" in refs
-    assert "add" in refs
-    # Should NOT include unneeded functions
-    assert "sub" not in refs
-    assert "div" not in refs
-    assert "cube" not in refs
-
-    # Restore only what's needed
-    ns = {k: pickle.loads(pickled[k]) for k in refs if k in pickled}
-    r2 = sandbox.exec(source, namespace=ns)
-    assert r2.error is None
-    assert r2.namespace["result"] == 14  # 1 + 4 + 9
 
 
 # --- Inner functions survive cross-turn activation ---
@@ -1339,35 +1291,6 @@ def a(x): return b(x) * 3
     # a(5) = b(5) * 3 = (c(5) + 10) * 3 = (d(5) * 2 + 10) * 3
     #       = (6 * 2 + 10) * 3 = 22 * 3 = 66
     assert restored(5) == 66
-
-
-# --- find_refs with inactive (pickled) StFunctions ---
-
-
-def test_find_refs_with_pickled_inactive_namespace():
-    """find_refs follows transitive deps through inactive (pickled) StFunctions."""
-    policy = Policy(tick_limit=10_000)
-    sandbox = Sandbox(policy, mode="wrapped")
-
-    r1 = sandbox.exec("""\
-def helper(x): return x + 1
-def process(x): return helper(x) * 2
-def main(x): return process(x) + 100
-""")
-    assert r1.error is None
-
-    # Pickle everything — StFunctions are inactive (_compiled=None)
-    ns = {
-        k: pickle.loads(pickle.dumps(v))
-        for k, v in r1.namespace.items()
-        if isinstance(v, StFunction)
-    }
-
-    # find_refs should still discover transitive deps via _global_ref_names
-    refs = find_refs("result = main(5)", namespace=ns)
-    assert "main" in refs
-    assert "process" in refs
-    assert "helper" in refs
 
 
 # --- StInstance with nested StInstance in attrs ---
