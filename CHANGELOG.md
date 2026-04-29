@@ -9,12 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **`__sandtrap_activate__` container hook.** ``Sandbox._auto_activate``
-  now invokes ``v.__sandtrap_activate__(activate_value, gates, sandbox)``
-  on any namespace value that exposes the method, giving containers
-  (e.g. agex's ``Cache``) a chance to walk and activate
+  now invokes
+  ``v.__sandtrap_activate__(activate_value, gates, sandbox, namespace)``
+  on any host-side namespace value that exposes the method, giving
+  containers (e.g. agex's ``Cache``) a chance to walk and activate
   sandbox-defined values they hold one level below the namespace top.
-  Hook exceptions are swallowed so a misbehaving container can't
-  break ``exec``.
+  The ``namespace`` argument lets nested wrappers resolve late-bound
+  globals via ``activate_value(..., namespace=namespace)``.  Hook
+  exceptions are swallowed so a misbehaving container can't break
+  ``exec``.  The hook is **not** invoked on ``StFunction`` /
+  ``StClass`` / ``StInstance`` / ``ModuleRef`` — sandboxed wrappers
+  are untrusted, and exposing the live ``gates`` dict to one would
+  permit a sandbox escape.
 
 ### Removed
 - **`find_refs` and the `refs` module.** The static reference analyzer

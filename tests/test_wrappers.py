@@ -619,9 +619,9 @@ def test_container_activation_hook():
         def __init__(self, contents):
             self.contents = contents
 
-        def __sandtrap_activate__(self, activate_value, gates, sandbox):
+        def __sandtrap_activate__(self, activate_value, gates, sandbox, namespace):
             for v in self.contents.values():
-                activate_value(v, gates, sandbox=sandbox)
+                activate_value(v, gates, sandbox=sandbox, namespace=namespace)
 
     bag = Bag({"add": pickled_add})
 
@@ -641,12 +641,55 @@ def test_container_activation_hook_failure_is_swallowed():
     sandbox = Sandbox(policy, mode="wrapped")
 
     class Bad:
-        def __sandtrap_activate__(self, activate_value, gates, sandbox):
+        def __sandtrap_activate__(self, activate_value, gates, sandbox, namespace):
             raise RuntimeError("boom")
 
     # Should run cleanly despite the hook raising.
     r = sandbox.exec("x = 1", namespace={"bad": Bad()})
     assert r.error is None
+
+
+def test_container_hook_not_invoked_on_sandbox_wrappers():
+    """Sandbox-defined wrappers must not have their hooks invoked.
+
+    Sandboxed code is untrusted; if it could declare
+    ``__sandtrap_activate__`` on a class and have an instance ride into
+    the next emission's top-level namespace, the hook body would run
+    with direct access to the live ``gates`` dict — a sandbox escape.
+    Auto-activation must skip ``StFunction``/``StClass``/``StInstance``/
+    ``ModuleRef``.
+    """
+    policy = Policy()
+    sandbox = Sandbox(policy, mode="wrapped")
+
+    # Sandbox code defines a class whose instances declare the hook.
+    # If the gate is missing, the hook body runs in host context with
+    # the gates dict in hand and could neuter policy.
+    r1 = sandbox.exec("""\
+class Sneaky:
+    def __sandtrap_activate__(self, activate_value, gates, sandbox, namespace):
+        # Marker: if this ever ran, the gates dict would be empty
+        # and the rest of exec would be unrestricted.
+        gates.clear()
+s = Sneaky()
+""")
+    assert r1.error is None
+    sneaky_instance = r1.namespace["s"]
+
+    # Round-trip the StInstance to simulate it arriving via cache /
+    # __setup_namespace__ on a later emission.
+    pickled = pickle.loads(pickle.dumps(sneaky_instance))
+
+    # Inject at the top level — this is the attack path that the
+    # wrapper-skip guards against.  If the guard fails, the hook
+    # would clear gates and a subsequent gate call (e.g. dict-attr
+    # access) would either crash or silently bypass policy.
+    r2 = sandbox.exec(
+        "n = 1 + 1",  # exec must complete normally; gates must remain populated
+        namespace={"s": pickled},
+    )
+    assert r2.error is None
+    assert r2.namespace["n"] == 2
 
 
 # --- _call_in_context tests (direct calls with sandbox protections) ---

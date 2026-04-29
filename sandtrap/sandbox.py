@@ -101,13 +101,23 @@ class Sandbox:
         """Auto-activate any inactive StFunction/StClass/StInstance in namespace.
 
         Walks top-level namespace entries and activates wrappers in place.
-        Container objects (e.g. agex's ``Cache``) that hold their own
-        sandbox-defined values can opt into activation by implementing
-        ``__sandtrap_activate__(activate_value, gates, sandbox)`` — the
-        hook is invoked with the activator function and current
-        ``gates`` / ``sandbox`` references so the container can walk and
-        activate whatever it stores.  Hook exceptions are swallowed so
-        a misbehaving container doesn't break ``exec``.
+        Host-side container objects (e.g. agex's ``Cache``) that hold
+        their own sandbox-defined values can opt into activation by
+        implementing
+        ``__sandtrap_activate__(activate_value, gates, sandbox, namespace)``
+        — the hook receives the activator function plus the current
+        ``gates`` / ``sandbox`` / top-level ``namespace`` so the
+        container can walk its contents and activate them with full
+        late-binding resolution.  Hook exceptions are swallowed so a
+        misbehaving container doesn't break ``exec``.
+
+        The hook is **not** invoked on sandbox-defined wrappers
+        (``StFunction``/``StClass``/``StInstance``) or ``ModuleRef``.
+        Sandbox-defined code is untrusted; allowing it to receive the
+        live ``gates`` dict would be a sandbox escape (the hook body
+        could mutate gates to bypass policy on later operations).
+        Hook callers must therefore be host-side containers defined by
+        the embedder, not values produced by sandboxed code.
         """
         import_gate = gates.get("__st_import__")
         for k, v in list(ns.items()):
@@ -123,10 +133,15 @@ class Sandbox:
                         ns[k] = import_gate(v.name, alias=k)
                 except Exception:
                     pass  # VFS file may no longer exist
+            # Skip sandbox-defined wrappers — they're untrusted, and
+            # invoking a hook on them would hand the live gates dict
+            # to sandboxed code.  Only host-side containers may opt in.
+            if isinstance(v, (StFunction, StClass, StInstance, ModuleRef)):
+                continue
             hook = getattr(v, "__sandtrap_activate__", None)
             if callable(hook):
                 try:
-                    hook(activate_value, gates, self)
+                    hook(activate_value, gates, self, ns)
                 except Exception:
                     pass  # container hook is best-effort; never break exec
 
