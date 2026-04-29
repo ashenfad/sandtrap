@@ -8,7 +8,7 @@ import os
 import signal
 import time
 import warnings
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any, Literal
 
 from ..policy import Policy
@@ -17,10 +17,18 @@ from .protocol import (
     ExecMsg,
     ReadyMsg,
     ResultMsg,
+    RpcCallMsg,
+    RpcReturnMsg,
     ShutdownMsg,
     WorkerErrorMsg,
     filter_namespace,
 )
+
+# Type alias for RPC handler callables registered with the sandbox.
+# A handler receives (method_name, args, kwargs) and returns the
+# call's result (or raises an exception that gets shipped back to
+# the worker and re-raised in the proxy's call site).
+RpcHandler = Callable[[str, tuple, dict], Any]
 
 # Timeout (seconds) waiting for worker to become ready
 _READY_TIMEOUT = 30.0
@@ -77,12 +85,14 @@ class ProcessSandbox:
         mode: Literal["wrapped", "raw"] = "wrapped",
         isolation: Literal["auto", "none"] = "auto",
         snapshot_prints: bool = False,
+        rpc_handlers: Mapping[str, RpcHandler] | None = None,
     ) -> None:
         self._policy = policy
         self._filesystem = filesystem
         self._mode = mode
         self._isolation = isolation
         self._snapshot_prints = snapshot_prints
+        self._rpc_handlers: dict[str, RpcHandler] = dict(rpc_handlers or {})
 
         self._process: multiprocessing.Process | None = None
         self._conn: multiprocessing.connection.Connection | None = None
@@ -258,47 +268,131 @@ class ProcessSandbox:
                         stacklevel=2,
                     )
         self._conn.send(ExecMsg(source=source, namespace=safe_ns))
+        return self._await_result()
 
+    def _await_result(self) -> ExecResult:
+        """Receive messages from the worker until execution finishes.
+
+        Dispatches RPC calls (``RpcCallMsg``) inline by invoking the
+        registered handler and replying with ``RpcReturnMsg``.
+        Returns when ``ResultMsg`` arrives or the worker dies /
+        becomes unresponsive.
+
+        Unknown message types are warned-and-ignored so future
+        protocol additions (e.g. streamed prints) don't break older
+        parents.
+        """
         # Poll with a deadline so we don't hang forever if the worker
         # becomes unresponsive (e.g., stuck serializing the result).
-        # Grace period covers IPC overhead after the sandbox timeout fires.
+        # Grace period covers IPC overhead after the sandbox timeout
+        # fires.  Reset the deadline whenever we successfully process
+        # an RPC call — host-side handler latency shouldn't count
+        # against the sandbox timeout.
+        assert self._conn is not None  # checked by caller
         deadline = time.monotonic() + self._policy.timeout + 5.0
-        while time.monotonic() < deadline:
+        while True:
+            now = time.monotonic()
+            if now >= deadline:
+                self._kill()
+                return ExecResult(
+                    error=RuntimeError("Worker process became unresponsive")
+                )
             if not self._process or not self._process.is_alive():
-                # Child died — drain any remaining message
                 if self._conn.poll(0.1):
-                    break
+                    pass  # drain final message
+                else:
+                    self._cleanup()
+                    return ExecResult(
+                        error=RuntimeError("Worker process died during execution")
+                    )
+            elif not self._conn.poll(min(1.0, deadline - now)):
+                continue
+
+            try:
+                msg = self._conn.recv()
+            except (EOFError, OSError):
                 self._cleanup()
                 return ExecResult(
                     error=RuntimeError("Worker process died during execution")
                 )
-            if self._conn.poll(1.0):
-                break
-        else:
-            self._kill()
-            return ExecResult(error=RuntimeError("Worker process became unresponsive"))
+
+            if isinstance(msg, ResultMsg):
+                result = ExecResult(
+                    namespace=msg.namespace,
+                    stdout=msg.stdout,
+                    error=msg.error,
+                    ticks=msg.ticks,
+                    prints=msg.prints,
+                )
+                return self._reactivate_namespace(result)
+            if isinstance(msg, WorkerErrorMsg):
+                return ExecResult(error=RuntimeError(f"Worker error:\n{msg.message}"))
+            if isinstance(msg, RpcCallMsg):
+                self._dispatch_rpc(msg)
+                # Reset deadline: handler-side time doesn't count
+                # against the sandbox's exec timeout.
+                deadline = time.monotonic() + self._policy.timeout + 5.0
+                continue
+
+            warnings.warn(
+                f"Unknown protocol message {type(msg).__name__!r}; ignoring",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
+    def _dispatch_rpc(self, msg: RpcCallMsg) -> None:
+        """Invoke the named handler and send the result back.
+
+        Errors from the handler are shipped to the worker as
+        ``RpcReturnMsg(error=...)`` and re-raised at the worker's
+        proxy call site.  Errors that escape *this* method (e.g.
+        unpicklable handler return values) become ``RpcReturnMsg``
+        carrying a synthesized ``RuntimeError``.
+        """
+        handler = self._rpc_handlers.get(msg.target)
+        if handler is None:
+            err: BaseException = RuntimeError(
+                f"no rpc handler registered for target {msg.target!r}"
+            )
+            self._send_rpc_return(msg.call_id, error=err)
+            return
 
         try:
-            msg = self._conn.recv()
-        except (EOFError, OSError):
-            self._cleanup()
-            return ExecResult(
-                error=RuntimeError("Worker process died during execution")
-            )
+            value = handler(msg.method, msg.args, msg.kwargs)
+        except BaseException as exc:
+            self._send_rpc_return(msg.call_id, error=exc)
+            return
 
-        if isinstance(msg, ResultMsg):
-            result = ExecResult(
-                namespace=msg.namespace,
-                stdout=msg.stdout,
-                error=msg.error,
-                ticks=msg.ticks,
-                prints=msg.prints,
-            )
-            return self._reactivate_namespace(result)
-        if isinstance(msg, WorkerErrorMsg):
-            return ExecResult(error=RuntimeError(f"Worker error:\n{msg.message}"))
+        self._send_rpc_return(msg.call_id, value=value)
 
-        return ExecResult(error=RuntimeError(f"Unexpected message: {msg!r}"))
+    def _send_rpc_return(
+        self,
+        call_id: str,
+        *,
+        value: Any = None,
+        error: BaseException | None = None,
+    ) -> None:
+        """Send an ``RpcReturnMsg``, sanitizing the payload if the
+        original value/error doesn't pickle.
+
+        We try the happy-path send first; if pickling fails we
+        substitute a stringified ``RuntimeError`` so the worker at
+        least gets a clear (if reduced) signal instead of the
+        connection blocking on a half-sent buffer.
+        """
+        assert self._conn is not None
+        try:
+            self._conn.send(RpcReturnMsg(call_id=call_id, value=value, error=error))
+        except (TypeError, AttributeError, Exception) as send_exc:  # noqa: BLE001
+            fallback = RuntimeError(
+                f"rpc return for call_id={call_id!r} could not be serialized: "
+                f"{send_exc}"
+            )
+            try:
+                self._conn.send(RpcReturnMsg(call_id=call_id, error=fallback))
+            except Exception:
+                # Connection itself is wedged; let the deadline kick in.
+                pass
 
     async def aexec(
         self,

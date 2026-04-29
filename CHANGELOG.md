@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-04-29
+
+### Added
+- **Worker → parent RPC channel.** ``ProcessSandbox`` now accepts an
+  ``rpc_handlers: dict[str, Callable[[str, tuple, dict], Any]]``
+  argument (also exposed via ``sandbox(...)``).  Inject
+  ``RpcProxyMarker(target=...)`` into the namespace and the worker
+  substitutes it with an ``RpcProxy`` (or a wrapper class instance,
+  via ``marker.wrapper="module:Class"``) whose method calls are
+  forwarded over the existing parent-worker connection to the
+  registered handler.  The parent's ``exec`` dispatch loop runs each
+  ``RpcCallMsg`` to completion and replies with ``RpcReturnMsg``
+  before returning to waiting on ``ResultMsg``.
+
+  This is the mechanism agex (≥ 0.13) uses to give the agent a
+  working ``cache`` under process / kernel isolation: the worker
+  sees a proxy in its namespace, the parent's handler dispatches to
+  the live ``Cache(state)`` in the parent process, and writes
+  propagate naturally.  The protocol generalises — any host-side
+  resource that follows the ``handler(method, args, kwargs) →
+  value`` shape works the same way.
+
+  New exports: ``RpcProxyMarker`` from the package root.  Internal
+  message types ``RpcCallMsg`` / ``RpcReturnMsg`` live in
+  ``sandtrap.process.protocol``.
+
+  Forward-compatibility: the dispatch loop warns on unknown message
+  types instead of failing, so future protocol additions (e.g.
+  streamed prints) won't break existing parents.
+
+### Fixed
+- ``RpcProxy.__reduce__`` raises ``PicklingError`` so
+  ``filter_namespace`` drops it from result namespaces.  Without
+  this the worker could try to pickle a Connection-bearing proxy on
+  the way back to the parent, hitting a syscall blocked by Seatbelt
+  under kernel isolation.
+
 ## [0.2.0] - 2026-04-29
 
 ### Added

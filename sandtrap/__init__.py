@@ -2,6 +2,7 @@ from .errors import StCancelled, StError, StTickLimit, StTimeout, StValidationEr
 from .factory import sandbox
 from .fs import FileSystem, IsolatedFS, VirtualFS
 from .policy import MemberSpec, Policy
+from .process.protocol import RpcProxyMarker
 from .sandbox import ExecResult
 from .sandbox import Sandbox as Sandbox
 
@@ -11,6 +12,7 @@ __all__ = [
     "IsolatedFS",
     "MemberSpec",
     "Policy",
+    "RpcProxyMarker",
     "StCancelled",
     "StError",
     "StTickLimit",
