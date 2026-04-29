@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from typing import Any, Literal
 
 from .policy import Policy
@@ -15,6 +16,7 @@ def sandbox(
     mode: Literal["wrapped", "raw"] = "wrapped",
     filesystem: Any | None = None,
     snapshot_prints: bool = False,
+    rpc_handlers: Mapping[str, Callable[[str, tuple, dict], Any]] | None = None,
 ) -> Sandbox:
     """Create a sandbox with the specified isolation level.
 
@@ -38,6 +40,16 @@ def sandbox(
         When ``True``, deep-copy ``print()`` arguments at call time and
         populate ``result.prints``.  ``result.stdout`` is always captured
         regardless.
+    rpc_handlers:
+        Optional mapping of target name to handler callable, only used
+        for process / kernel isolation.  When the namespace contains
+        an :class:`~sandtrap.RpcProxyMarker` whose ``target`` matches
+        a key, the worker substitutes the marker with a proxy whose
+        method calls reach the handler in the parent process.  The
+        handler receives ``(method, args, kwargs)`` and returns a
+        value or raises an exception that propagates to the agent.
+        Ignored under in-process isolation (in-process consumers can
+        place real objects directly in the namespace).
     """
     if isolation == "none":
         return Sandbox(
@@ -58,4 +70,5 @@ def sandbox(
         mode=mode,
         isolation=kernel_isolation,
         snapshot_prints=snapshot_prints,
+        rpc_handlers=rpc_handlers,
     )
