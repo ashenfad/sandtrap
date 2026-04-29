@@ -147,28 +147,4 @@ assert isinstance(result.error, StCancelled)
 
 ## Reactivation
 
-See [serialization.md](serialization.md) for `sandbox.activate()`.
-
-## Static analysis
-
-`find_refs` does a conservative static analysis to determine which names a piece of source code reads from the namespace:
-
-```python
-from sandtrap import find_refs
-
-refs = find_refs("y = x + math.sqrt(4)")
-# refs == {"x", "math"}
-```
-
-This enables lazy deserialization -- only load the state entries the code actually needs.
-
-Pass a `namespace` (any `Mapping`) to follow transitive dependencies through `StFunction.global_refs`:
-
-```python
-refs = find_refs("result = process(data)", namespace=state)
-# Discovers process + all StFunction deps process references
-```
-
-The namespace can be a lazy container that deserializes on `get()` -- only values in the dependency chain are touched.
-
-See [serialization.md](serialization.md) for details.
+See [serialization.md](serialization.md) for `sandbox.activate()` and the `__sandtrap_activate__` container hook.

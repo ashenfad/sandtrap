@@ -65,25 +65,23 @@ assert result.namespace["y"] == 14  # works without providing square
 
 This also works for functions imported from VFS modules -- they're wrapped in the same way and captured as dependencies.
 
-## Selective restore with find_refs
+## Container activation hook
 
-When you have a large serialized state, `find_refs` tells you which names a code snippet needs:
-
-```python
-from sandtrap import find_refs
-
-refs = find_refs("y = process(data)")
-# refs == {"process", "data"}
-```
-
-Pass a namespace to follow transitive dependencies through `StFunction.global_refs`:
+`Sandbox.exec()` auto-activates inactive wrappers (`StFunction`, `StClass`, `StInstance`) sitting at the top level of `namespace`. If you keep wrappers one level deeper -- in a custom dict-like, a registered store, an LRU cache -- they would otherwise stay inactive and raise on call. Containers can opt in by exposing `__sandtrap_activate__`:
 
 ```python
-refs = find_refs("result = sum_squares([1, 2, 3])", namespace=state)
-# refs == {"sum_squares", "square"} -- square discovered transitively
+class Bag:
+    def __init__(self, contents):
+        self.contents = contents
+
+    def __sandtrap_activate__(self, activate_value, gates, sandbox):
+        for v in self.contents.values():
+            activate_value(v, gates, sandbox=sandbox)
 ```
 
-The namespace can be any `Mapping`, including lazy containers that deserialize on `get()` -- only values in the dependency chain are accessed.
+Sandbox iterates the top-level namespace and calls `v.__sandtrap_activate__(activate_value, gates, sandbox)` on any value that exposes the method. The container decides what to walk and which entries to activate. Hook exceptions are swallowed so a misbehaving container can't break `exec()`.
+
+This is the protocol agex's `Cache` uses to keep cached sandbox-defined helpers callable across tasks.
 
 ## Known limitations
 
