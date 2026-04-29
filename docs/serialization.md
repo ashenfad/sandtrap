@@ -67,19 +67,21 @@ This also works for functions imported from VFS modules -- they're wrapped in th
 
 ## Container activation hook
 
-`Sandbox.exec()` auto-activates inactive wrappers (`StFunction`, `StClass`, `StInstance`) sitting at the top level of `namespace`. If you keep wrappers one level deeper -- in a custom dict-like, a registered store, an LRU cache -- they would otherwise stay inactive and raise on call. Containers can opt in by exposing `__sandtrap_activate__`:
+`Sandbox.exec()` auto-activates inactive wrappers (`StFunction`, `StClass`, `StInstance`) sitting at the top level of `namespace`. If you keep wrappers one level deeper -- in a custom dict-like, a registered store, an LRU cache -- they would otherwise stay inactive and raise on call. Host-side containers can opt in by exposing `__sandtrap_activate__`:
 
 ```python
 class Bag:
     def __init__(self, contents):
         self.contents = contents
 
-    def __sandtrap_activate__(self, activate_value, gates, sandbox):
+    def __sandtrap_activate__(self, activate_value, gates, sandbox, namespace):
         for v in self.contents.values():
-            activate_value(v, gates, sandbox=sandbox)
+            activate_value(v, gates, sandbox=sandbox, namespace=namespace)
 ```
 
-Sandbox iterates the top-level namespace and calls `v.__sandtrap_activate__(activate_value, gates, sandbox)` on any value that exposes the method. The container decides what to walk and which entries to activate. Hook exceptions are swallowed so a misbehaving container can't break `exec()`.
+Sandbox iterates the top-level namespace and calls `v.__sandtrap_activate__(activate_value, gates, sandbox, namespace)` on any value that exposes the method. The `namespace` argument is the top-level dict; passing it through to `activate_value` lets nested wrappers resolve late-bound globals. Hook exceptions are swallowed so a misbehaving container can't break `exec()`.
+
+The hook is **not** invoked on `StFunction` / `StClass` / `StInstance` / `ModuleRef`. Sandbox-defined wrappers are untrusted: the hook body would run with the live `gates` dict in scope and could clear or replace gates to bypass policy on later operations. Only host-side containers defined by the embedder may opt in.
 
 This is the protocol agex's `Cache` uses to keep cached sandbox-defined helpers callable across tasks.
 
