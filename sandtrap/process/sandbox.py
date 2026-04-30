@@ -328,10 +328,15 @@ class ProcessSandbox:
             if isinstance(msg, WorkerErrorMsg):
                 return ExecResult(error=RuntimeError(f"Worker error:\n{msg.message}"))
             if isinstance(msg, RpcCallMsg):
+                # Extend the deadline by the handler's wall-clock
+                # duration so host-side time isn't charged to the
+                # worker's exec budget — but only by that exact
+                # amount.  Resetting the deadline to a fresh
+                # ``timeout + grace`` window would let a worker spam
+                # RPC calls and dodge the wall-clock limit.
+                rpc_start = time.monotonic()
                 self._dispatch_rpc(msg)
-                # Reset deadline: handler-side time doesn't count
-                # against the sandbox's exec timeout.
-                deadline = time.monotonic() + self._policy.timeout + 5.0
+                deadline += time.monotonic() - rpc_start
                 continue
 
             warnings.warn(

@@ -257,6 +257,67 @@ def test_many_sequential_rpc_calls():
 
 
 # ---------------------------------------------------------------------------
+# Wall-clock budget: RPC traffic doesn't bypass the sandbox timeout
+# ---------------------------------------------------------------------------
+
+
+def test_rpc_calls_do_not_extend_worker_budget():
+    """Spamming RPC calls must not refresh the worker's wall-clock
+    budget.  Only the handler's actual run time should be credited
+    back to the worker.
+
+    Without this guard a worker could loop on cheap RPC calls
+    indefinitely — each one resetting the deadline — and bypass the
+    sandbox timeout entirely.
+    """
+    import time as _t
+
+    from sandtrap import StTimeout
+
+    # Cheap handler: returns immediately so the time it spends is
+    # near-zero.  An infinite worker loop must therefore be killed
+    # by the wall-clock timeout despite the constant RPC traffic.
+    def fast_handler(method, args, kwargs):
+        return None
+
+    # Tight timeout so the test runs quickly even if the guard is
+    # broken (otherwise we'd wait for the parent's grace period
+    # before noticing a budget bypass).
+    policy = Policy(timeout=0.5, tick_limit=10_000_000_000)
+    started = _t.monotonic()
+    with sandbox(
+        policy,
+        isolation="process",
+        rpc_handlers={"e": fast_handler},
+    ) as sb:
+        result = sb.exec(
+            # Loop forever calling a no-op RPC.  If the deadline
+            # gets reset on each call, this never terminates and
+            # the test hangs.  With the fix, the worker's own
+            # sandbox timeout fires (StTimeout) — the parent's
+            # deadline is only extended by handler duration, not
+            # reset, so the worker still has to fit within ~0.5s.
+            "while True:\n    e.ping()\n",
+            namespace={"e": RpcProxyMarker(target="e")},
+        )
+        elapsed = _t.monotonic() - started
+
+    # The expected exit is the worker's own ``StTimeout`` from its
+    # sandbox-side wall clock.  RuntimeError (parent's "worker
+    # unresponsive" fallback) is also acceptable — both indicate
+    # the budget held.  What's NOT acceptable is the loop running
+    # to completion (impossible — it's infinite) or hanging past
+    # a generous ceiling.
+    assert isinstance(result.error, (StTimeout, RuntimeError)), (
+        f"unexpected exit: {result.error!r}"
+    )
+    assert elapsed < 15.0, (
+        f"RPC traffic appears to extend the worker budget "
+        f"indefinitely; ran for {elapsed:.1f}s"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Forward-compat: unknown protocol message types are warned, not fatal
 # ---------------------------------------------------------------------------
 
