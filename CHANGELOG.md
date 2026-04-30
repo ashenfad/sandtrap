@@ -41,6 +41,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   this the worker could try to pickle a Connection-bearing proxy on
   the way back to the parent, hitting a syscall blocked by Seatbelt
   under kernel isolation.
+- The exec dispatch loop now extends the wall-clock deadline by
+  exactly the host-side handler's duration on each ``RpcCallMsg``,
+  rather than resetting it to ``timeout + grace`` afresh.  The
+  reset variant let a worker dodge the sandbox timeout by spamming
+  cheap RPC calls (each one granting a new full budget); the
+  duration-only extension credits back only the parent-side time
+  consumed, so the worker's own execution still has to fit within
+  the original budget.
 
 ## [0.2.0] - 2026-04-29
 
