@@ -20,6 +20,34 @@ def _make_predicate(pattern: Pattern | None) -> Callable[[str], bool]:
     return lambda name: any(p(name) for p in sub_preds)
 
 
+def _dotted_only(pattern: Pattern | None) -> list[str]:
+    """The string patterns containing a dot — the only ones that can
+    match owner-qualified names. Bare patterns (and callables) apply to
+    bare member names only; without this split, ``"_*"`` would match a
+    qualified candidate like ``"_ParseResultBase.path"`` and block
+    every attribute of classes with private-named bases."""
+    if pattern is None or callable(pattern):
+        return []
+    if isinstance(pattern, str):
+        return [pattern] if "." in pattern else []
+    return [p for p in pattern if isinstance(p, str) and "." in p]
+
+
+def _qualified_names(obj: Any, attr: str) -> list[str]:
+    """Owner-qualified forms of an attribute access, so dotted patterns
+    match: ``"DataFrame.eval"`` (class-qualified, checked against every
+    class in the MRO), ``"numpy.random.seed"`` / ``"pandas.core*"``
+    (module-path-qualified). Bare patterns keep matching the bare
+    attribute name; these are additional candidates checked only
+    against dotted patterns."""
+    if isinstance(obj, ModuleType):
+        name = getattr(obj, "__name__", None)
+        return [f"{name}.{attr}"] if name else []
+    klass = obj if isinstance(obj, type) else type(obj)
+    mro = getattr(klass, "__mro__", (klass,))
+    return [f"{c.__name__}.{attr}" for c in mro if c is not object]
+
+
 @dataclass
 class MemberSpec:
     """Per-member configuration overrides for use in the `configure` dict."""
@@ -50,6 +78,8 @@ class _ClsRegistration:
     def __post_init__(self) -> None:
         self._include_pred = _make_predicate(self.include)
         self._exclude_pred = _make_predicate(self.exclude)
+        self._include_qual_pred = _make_predicate(_dotted_only(self.include))
+        self._exclude_qual_pred = _make_predicate(_dotted_only(self.exclude))
 
 
 @dataclass
@@ -66,6 +96,8 @@ class _ModuleRegistration:
     def __post_init__(self) -> None:
         self._include_pred = _make_predicate(self.include)
         self._exclude_pred = _make_predicate(self.exclude)
+        self._include_qual_pred = _make_predicate(_dotted_only(self.include))
+        self._exclude_qual_pred = _make_predicate(_dotted_only(self.exclude))
 
 
 # Interpreter-internal attributes that don't start with underscore but
@@ -316,9 +348,14 @@ class Policy:
             if hasattr(reg, "configure") and attr in reg.configure:
                 return True  # Explicitly configured members are allowed
 
-            # Check include/exclude
+            # Check include/exclude — against the bare attribute name and
+            # its owner-qualified forms (dotted patterns).
             if hasattr(reg, "_include_pred"):
-                if not reg._include_pred(attr):
+                quals = _qualified_names(obj, attr)
+                if not (
+                    reg._include_pred(attr)
+                    or any(reg._include_qual_pred(q) for q in quals)
+                ):
                     # Before denying, check if the attribute is a separately
                     # registered submodule (e.g., os.path registered alongside os)
                     sub_obj = getattr(obj, attr, None)
@@ -328,7 +365,9 @@ class Policy:
                     ):
                         return True
                     return False
-                if reg._exclude_pred(attr):
+                if reg._exclude_pred(attr) or any(
+                    reg._exclude_qual_pred(q) for q in quals
+                ):
                     return False
                 # Block submodule access on non-recursive module registrations
                 if not getattr(reg, "recursive", False):
@@ -378,6 +417,16 @@ class Policy:
         if reg is not None and obj is reg.obj:
             return reg
 
+        # Submodules of a recursive registration inherit the parent's
+        # registration (filters included). Without this, members reached
+        # via attribute traversal (numpy.random.seed) escaped the very
+        # include/exclude that the from-import path already enforced.
+        if isinstance(obj, ModuleType):
+            mod_name = getattr(obj, "__name__", "")
+            for mreg in self.modules.values():
+                if mreg.recursive and mod_name.startswith(mreg.name + "."):
+                    return mreg
+
         # Check if type(obj) is a registered class
         obj_type = type(obj)
         reg = self._reg_by_cls_id.get(id(obj_type))
@@ -406,9 +455,18 @@ class Policy:
         # Direct match
         if module_name in self.modules:
             return True
-        # Check if it's a submodule of a recursive registration
+        # Check if it's a submodule of a recursive registration. The
+        # parent's excludes apply: dotted patterns against the full
+        # path (exclude=("pandas.core*",) blocks `import
+        # pandas.core.frame`), bare patterns against the terminal
+        # segment (the default "_*" blocks `import numpy._core`) —
+        # matching what attribute traversal already enforces.
         for reg_name, reg in self.modules.items():
             if reg.recursive and module_name.startswith(reg_name + "."):
+                if reg._exclude_qual_pred(module_name):
+                    return False
+                if reg._exclude_pred(module_name.rsplit(".", 1)[-1]):
+                    return False
                 return True
         return False
 
@@ -452,8 +510,12 @@ class Policy:
         if reg is None:
             raise ImportError(f"Module '{module_name}' not registered")
 
-        # Check include/exclude filters
-        if not reg._include_pred(member_name) or reg._exclude_pred(member_name):
+        # Check include/exclude filters — bare member name plus the
+        # module-qualified form, so dotted patterns work here too.
+        qual = f"{module_name}.{member_name}"
+        if not (reg._include_pred(member_name) or reg._include_qual_pred(qual)) or (
+            reg._exclude_pred(member_name) or reg._exclude_qual_pred(qual)
+        ):
             raise ImportError(f"'{member_name}' is not available from '{module_name}'")
 
         # Resolve the member from the actual module object.  Prefer
