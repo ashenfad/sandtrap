@@ -421,11 +421,17 @@ class Policy:
         # registration (filters included). Without this, members reached
         # via attribute traversal (numpy.random.seed) escaped the very
         # include/exclude that the from-import path already enforced.
+        # Walk parents most-specific-first so nested registrations
+        # resolve deterministically; a non-recursive parent ends the
+        # walk (its submodules inherit nothing — and stay unreachable:
+        # traversal and import are both gated on this returning None).
         if isinstance(obj, ModuleType):
             mod_name = getattr(obj, "__name__", "")
-            for mreg in self.modules.values():
-                if mreg.recursive and mod_name.startswith(mreg.name + "."):
-                    return mreg
+            parts = mod_name.split(".")
+            for i in range(len(parts) - 1, 0, -1):
+                mreg = self.modules.get(".".join(parts[:i]))
+                if mreg is not None:
+                    return mreg if mreg.recursive else None
 
         # Check if type(obj) is a registered class
         obj_type = type(obj)
@@ -455,14 +461,21 @@ class Policy:
         # Direct match
         if module_name in self.modules:
             return True
-        # Check if it's a submodule of a recursive registration. The
-        # parent's excludes apply: dotted patterns against the full
-        # path (exclude=("pandas.core*",) blocks `import
-        # pandas.core.frame`), bare patterns against the terminal
-        # segment (the default "_*" blocks `import numpy._core`) —
-        # matching what attribute traversal already enforces.
-        for reg_name, reg in self.modules.items():
-            if reg.recursive and module_name.startswith(reg_name + "."):
+        # Check if it's a submodule of a recursive registration —
+        # nearest registered parent decides (most-specific-first, so
+        # nested registrations resolve deterministically; a
+        # non-recursive parent denies). The parent's excludes apply:
+        # dotted patterns against the full path
+        # (exclude=("pandas.core*",) blocks `import pandas.core.frame`),
+        # bare patterns against the terminal segment (the default "_*"
+        # blocks `import numpy._core`) — matching what attribute
+        # traversal already enforces.
+        parts = module_name.split(".")
+        for i in range(len(parts) - 1, 0, -1):
+            reg = self.modules.get(".".join(parts[:i]))
+            if reg is not None:
+                if not reg.recursive:
+                    return False
                 if reg._exclude_qual_pred(module_name):
                     return False
                 if reg._exclude_pred(module_name.rsplit(".", 1)[-1]):
