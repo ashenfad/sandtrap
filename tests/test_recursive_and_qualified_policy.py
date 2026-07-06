@@ -91,6 +91,52 @@ def test_dotted_exclude_targets_one_member_by_full_path():
     assert result.namespace["x"] == "a b"
 
 
+# -- nested registrations: most-specific parent wins ----------------------------
+
+
+def test_nested_recursive_registration_nearest_parent_wins():
+    import xml
+    import xml.etree
+
+    # grandparent excludes fromstring; the nearer recursive parent
+    # does not — the nearest registration governs xml.etree.ElementTree
+    policy = Policy()
+    policy.module(xml, recursive=True, exclude=("_*", "*._*", "fromstring"))
+    policy.module(xml.etree, recursive=True)
+    sb = Sandbox(policy)
+    result = sb.exec(
+        "import xml.etree.ElementTree\n"
+        "tag = xml.etree.ElementTree.fromstring('<a/>').tag\n"
+    )
+    assert result.error is None
+    assert result.namespace["tag"] == "a"
+
+    # without the nearer registration, the grandparent's exclude applies
+    policy2 = Policy()
+    policy2.module(xml, recursive=True, exclude=("_*", "*._*", "fromstring"))
+    sb2 = Sandbox(policy2)
+    result = sb2.exec(
+        "import xml.etree.ElementTree\nxml.etree.ElementTree.fromstring('<a/>')\n"
+    )
+    assert result.error is not None
+
+
+def test_nested_non_recursive_parent_blocks_descendants():
+    import xml
+    import xml.etree
+
+    policy = Policy()
+    policy.module(xml, recursive=True)
+    policy.module(xml.etree)  # non-recursive: its submodules are NOT exposed
+    sb = Sandbox(policy)
+
+    result = sb.exec("import xml.etree")  # the registered module itself: fine
+    assert result.error is None
+    # ...but its submodules don't fall back to the recursive grandparent
+    result = sb.exec("import xml.etree.ElementTree")
+    assert result.error is not None
+
+
 # -- dotted patterns: class-qualified members ----------------------------------
 
 
