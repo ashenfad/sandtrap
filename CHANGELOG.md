@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Recursive registrations now police attribute traversal into
+  submodules.** Submodule objects reached through a ``recursive=True``
+  parent carried no registration in ``is_attr_allowed``, so
+  ``numpy.random.seed(0)`` sailed past an exclude that
+  ``from numpy.random import seed`` already enforced. Submodules now
+  inherit the parent registration (filters included), and submodule
+  *imports* honour the parent's excludes too — dotted patterns against
+  the full path, bare patterns against the terminal segment (the
+  default ``"_*"`` now blocks ``import numpy._core``).
+
+  Behavior note: a narrow ``include=`` on a recursive registration now
+  constrains submodule attribute access as well (previously it only
+  constrained from-imports).
+
+### Added
+- **Dotted (owner-qualified) patterns.** ``include``/``exclude``
+  patterns containing a dot match qualified names:
+  ``"DataFrame.eval"`` (class-qualified, checked through the MRO) and
+  ``"numpy.random.seed"`` / ``"pandas.core*"``
+  (module-path-qualified). Previously such patterns never matched
+  anything — predicates only ever saw bare member names. Bare patterns
+  keep their existing meaning; callables receive bare names only.
+
 ## [0.2.1] - 2026-04-29
 
 ### Added

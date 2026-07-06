@@ -121,6 +121,24 @@ policy.module(my_service, name="service")
 
 Defaults: `include="*"` (everything), `exclude="_*"` (private attributes hidden).
 
+Patterns **without** a dot match the bare member name. Patterns
+**with** a dot match owner-qualified names:
+
+- `"DataFrame.eval"` — class-qualified; checked against every class in
+  the object's MRO, so a pattern naming a base class covers subclasses.
+- `"numpy.random.seed"`, `"pandas.core*"` — module-path-qualified;
+  also applied to `import pandas.core.frame` under a recursive
+  registration.
+
+Callable predicates receive bare member names only.
+
+Filters on a `recursive=True` registration apply to its submodules
+too — `policy.module(numpy, recursive=True, exclude=("_*", "*._*",
+"numpy.random.seed"))` blocks `numpy.random.seed` by attribute access
+and by `from numpy.random import seed` alike. Bare excludes gate the
+terminal segment of submodule imports as well (the default `"_*"`
+blocks `import numpy._core`).
+
 ## Per-member overrides
 
 Use `MemberSpec` in the `configure` dict for fine-grained control:
