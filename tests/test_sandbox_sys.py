@@ -9,7 +9,7 @@ import io
 
 import pytest
 
-from sandtrap import Policy, Sandbox
+from sandtrap import Policy, Sandbox, VirtualFS
 
 
 def _sb() -> Sandbox:
@@ -44,6 +44,22 @@ def test_bare_sys_without_import():
     assert r.stdout == "abc\n"
 
 
+def test_from_sys_import():
+    r = _sb().exec(
+        "from sys import stdin, argv\nprint(argv[0], stdin.read())",
+        stdin="data",
+        argv=["prog"],
+    )
+    assert r.error is None
+    assert r.stdout == "prog data\n"
+
+
+def test_from_sys_import_unknown_name():
+    r = _sb().exec("from sys import modules", stdin="")
+    assert r.error is not None
+    assert isinstance(r.error, ImportError)
+
+
 # -- argv ----------------------------------------------------------------
 
 
@@ -74,6 +90,16 @@ def test_stderr_write_is_captured():
     assert "err" in r.stdout  # captured alongside stdout in-sandbox
 
 
+def test_stdout_has_file_like_attrs():
+    # libraries (logging, rich) inspect these on sys.stdout
+    r = _sb().exec(
+        "import sys\nprint(sys.stdout.encoding, sys.stdout.isatty(), sys.stdout.closed)",
+        stdin="",
+    )
+    assert r.error is None
+    assert r.stdout == "utf-8 False False\n"
+
+
 # -- input() -------------------------------------------------------------
 
 
@@ -87,6 +113,21 @@ def test_input_eof_raises():
     r = _sb().exec("input()", stdin="")
     assert r.error is not None
     assert isinstance(r.error, EOFError)
+
+
+def test_input_strips_crlf():
+    r = _sb().exec("print(repr(input()))", stdin="line\r\nrest")
+    assert r.error is None
+    assert r.stdout == "'line'\n"  # no trailing \r
+
+
+def test_input_available_in_vfs_helper():
+    fs = VirtualFS({})
+    fs.write("/helpers.py", b"def prompt():\n    return input()\n")
+    sb = Sandbox(Policy(timeout=10, tick_limit=1_000_000), filesystem=fs)
+    r = sb.exec("from helpers import prompt\nprint(prompt())", stdin="from-helper\n")
+    assert r.error is None
+    assert r.stdout == "from-helper\n"
 
 
 # -- backward compatibility ----------------------------------------------

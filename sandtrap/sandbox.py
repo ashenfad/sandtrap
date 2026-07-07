@@ -293,6 +293,8 @@ class Sandbox:
             ns["input"] = input_fn
             injected["input"] = input_fn
             ns["__builtins__"]["input"] = input_fn
+            if vfs is not None:
+                vfs._input_fn = input_fn
 
         # Provide the real __import__ so C extensions (e.g. numpy, pandas)
         # can import their transitive dependencies.  User-code imports are
