@@ -237,6 +237,7 @@ def make_gates(
     _memory_limit_bytes: int | None = None,
     _start_rss: int | None = None,
     _filesystem: Any = None,
+    _sandbox_sys: Any = None,
 ) -> dict[str, Any]:
     """Create the set of gate functions for a given policy.
 
@@ -335,6 +336,12 @@ def make_gates(
         delattr(obj, attr)
 
     def __st_import__(module_name: str, *, alias: str | None = None) -> Any:
+        # Synthetic safe `sys` (stdin/stdout/stderr/argv) when provided —
+        # takes precedence over the policy so `import sys` returns it
+        # rather than being blocked. Safe by construction (see SandboxSys).
+        if _sandbox_sys is not None and module_name == "sys":
+            return _sandbox_sys
+
         # Try policy-registered modules first
         if policy.is_import_allowed(module_name):
             if alias is not None:

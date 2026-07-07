@@ -19,9 +19,11 @@ from .builtins import (
     _FrozenBuiltins,
     _make_gated_type,
     install_print,
+    make_input,
     make_print,
     make_safe_builtins,
     make_safe_help,
+    make_sandbox_sys,
     redirect_print,
 )
 from .errors import StTimeout, StValidationError, strip_internal_frames
@@ -194,6 +196,7 @@ class Sandbox:
         gates: dict[str, Any],
         stdout_buf: TailBuffer,
         prints_list: list[tuple[Any, ...]] | None,
+        sandbox_sys: Any = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Build the execution namespace with builtins, gates, and registered items.
 
@@ -279,6 +282,18 @@ class Sandbox:
             vfs._print_fn = print_fn
             vfs._help_fn = help_fn
 
+        # Synthetic safe `sys` (stdin/stdout/stderr/argv) + a stdin-backed
+        # input(), when the caller provided stdin/argv. Exposed as a bare
+        # name AND importable (via the __st_import__ gate); input() is
+        # unavailable otherwise, so this is purely additive.
+        if sandbox_sys is not None:
+            ns["sys"] = sandbox_sys
+            injected["sys"] = sandbox_sys
+            input_fn = make_input(sandbox_sys)
+            ns["input"] = input_fn
+            injected["input"] = input_fn
+            ns["__builtins__"]["input"] = input_fn
+
         # Provide the real __import__ so C extensions (e.g. numpy, pandas)
         # can import their transitive dependencies.  User-code imports are
         # gated at the AST level — the rewriter validates every import
@@ -353,6 +368,8 @@ class Sandbox:
         rewriter: Rewriter,
         source: str,
         namespace: Mapping[str, Any] | None,
+        stdin: Any = None,
+        argv: "list[str] | None" = None,
     ) -> tuple[
         Any,
         str,
@@ -384,6 +401,14 @@ class Sandbox:
         wrapped_mode = self.mode == "wrapped"
         self._cancel_flag.clear()
         mem_limit_bytes, start_rss = self._memory_params()
+        # stdout_buf first: the synthetic sys's stdout/stderr route to it,
+        # and the import gate needs the synthetic sys.
+        stdout_buf = self._make_stdout_buf()
+        sandbox_sys = (
+            make_sandbox_sys(stdin, argv, stdout_buf)
+            if (stdin is not None or argv is not None)
+            else None
+        )
         gates = make_gates(
             self.policy,
             _start_time=time.monotonic(),
@@ -394,10 +419,12 @@ class Sandbox:
             _memory_limit_bytes=mem_limit_bytes,
             _start_rss=start_rss,
             _filesystem=self.filesystem,
+            _sandbox_sys=sandbox_sys,
         )
-        stdout_buf = self._make_stdout_buf()
         prints_list = [] if self.snapshot_prints else None
-        ns, injected = self._build_namespace(namespace, gates, stdout_buf, prints_list)
+        ns, injected = self._build_namespace(
+            namespace, gates, stdout_buf, prints_list, sandbox_sys
+        )
         self._auto_activate(ns, gates)
 
         return code, filename, gates, ns, injected, stdout_buf, prints_list
@@ -451,15 +478,23 @@ class Sandbox:
         source: str,
         *,
         namespace: Mapping[str, Any] | None = None,
+        stdin: "str | Any | None" = None,
+        argv: "list[str] | None" = None,
     ) -> ExecResult:
-        """Execute source code synchronously in the sandbox."""
+        """Execute source code synchronously in the sandbox.
+
+        ``stdin``/``argv`` (either given) expose a minimal, safe ``sys``
+        to the code — ``sys.stdin`` (str or text stream), ``sys.stdout``/
+        ``sys.stderr`` (captured), ``sys.argv`` — plus a stdin-backed
+        ``input()``. Nothing else of ``sys`` is reachable.
+        """
         prepared = self._parse_and_rewrite(source)
         if isinstance(prepared, ExecResult):
             return prepared
         tree, rewriter = prepared
 
         code, filename, gates, ns, injected, stdout_buf, prints_list = (
-            self._compile_and_setup(tree, rewriter, source, namespace)
+            self._compile_and_setup(tree, rewriter, source, namespace, stdin, argv)
         )
 
         error = None
@@ -503,8 +538,11 @@ class Sandbox:
         source: str,
         *,
         namespace: Mapping[str, Any] | None = None,
+        stdin: "str | Any | None" = None,
+        argv: "list[str] | None" = None,
     ) -> ExecResult:
-        """Execute source code asynchronously in the sandbox."""
+        """Execute source code asynchronously in the sandbox. See
+        :meth:`exec` for ``stdin``/``argv``."""
         prepared = self._parse_and_rewrite(source)
         if isinstance(prepared, ExecResult):
             return prepared
@@ -578,7 +616,7 @@ class Sandbox:
         tree.body = [wrapper]
 
         code, filename, gates, ns, injected, stdout_buf, prints_list = (
-            self._compile_and_setup(tree, rewriter, source, namespace)
+            self._compile_and_setup(tree, rewriter, source, namespace, stdin, argv)
         )
         ns["__st_locals__"] = _builtins.locals
         ns["__st_local_capture__"] = {}
