@@ -335,7 +335,12 @@ class _SandboxWriter:
     """Write-only stream backing ``sys.stdout`` / ``sys.stderr`` — routes
     to the sandbox's captured output buffer (the same one ``print``
     writes to), so ``sys.stdout.write(...)`` is captured and interleaves
-    with prints."""
+    with prints. Carries the file-like attributes libraries inspect
+    (``encoding``/``errors``/``closed``/``isatty``)."""
+
+    encoding = "utf-8"
+    errors = "strict"
+    closed = False
 
     def __init__(self, buffer: "StringIO | TailBuffer") -> None:
         self._buffer = buffer
@@ -350,6 +355,9 @@ class _SandboxWriter:
 
     def flush(self) -> None:
         pass
+
+    def isatty(self) -> bool:
+        return False
 
 
 class SandboxSys:
@@ -398,7 +406,7 @@ def make_input(sandbox_sys: SandboxSys) -> Any:
         line = sandbox_sys.stdin.readline()
         if line == "":
             raise EOFError("EOF when reading a line")
-        return line[:-1] if line.endswith("\n") else line
+        return line.rstrip("\r\n")
 
     return _input
 

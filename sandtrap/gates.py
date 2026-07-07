@@ -81,6 +81,7 @@ class _VFSLoader:
         self._cache: dict[str, Any] = {}
         self._print_fn: Any = None
         self._help_fn: Any = None
+        self._input_fn: Any = None
 
     def _compile_and_exec(self, mod: Any, source: str, module_name: str) -> None:
         """Parse, rewrite, compile, and execute VFS source into a module."""
@@ -103,6 +104,8 @@ class _VFSLoader:
             ns["__builtins__"]["print"] = self._print_fn
         if self._help_fn is not None:
             ns["__builtins__"]["help"] = self._help_fn
+        if self._input_fn is not None:
+            ns["__builtins__"]["input"] = self._input_fn
         if self._filesystem is not None:
             ns["__builtins__"]["open"] = _builtins.open
         ns["__builtins__"] = _FrozenBuiltins(ns["__builtins__"])
@@ -373,6 +376,13 @@ def make_gates(
         raise ImportError(f"Import of '{module_name}' is not allowed{loc}")
 
     def __st_importfrom__(module_name: str, name: str, *, _level: int = 0) -> Any:
+        # `from sys import stdin, argv, ...` — mirror the __st_import__
+        # synthetic-sys branch (sys is otherwise blocked by policy).
+        if _sandbox_sys is not None and module_name == "sys":
+            if hasattr(_sandbox_sys, name):
+                return getattr(_sandbox_sys, name)
+            raise ImportError(f"cannot import name '{name}' from 'sys'")
+
         if _level > 0:
             # Relative import — resolve against caller's __file__
             caller_file = sys._getframe(1).f_globals.get("__file__", "")
