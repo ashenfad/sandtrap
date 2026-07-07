@@ -331,6 +331,78 @@ def make_print(buffer: StringIO | TailBuffer) -> Any:
     return _print
 
 
+class _SandboxWriter:
+    """Write-only stream backing ``sys.stdout`` / ``sys.stderr`` — routes
+    to the sandbox's captured output buffer (the same one ``print``
+    writes to), so ``sys.stdout.write(...)`` is captured and interleaves
+    with prints."""
+
+    def __init__(self, buffer: "StringIO | TailBuffer") -> None:
+        self._buffer = buffer
+
+    def write(self, s: str) -> int:
+        self._buffer.write(s)
+        return len(s)
+
+    def writelines(self, lines: Any) -> None:
+        for line in lines:
+            self._buffer.write(line)
+
+    def flush(self) -> None:
+        pass
+
+
+class SandboxSys:
+    """A minimal, safe ``sys`` for sandboxed code: only ``stdin``,
+    ``stdout``, ``stderr``, ``argv``. It never references the real ``sys``
+    module, so no interpreter internals (``modules``, ``settrace``,
+    ``_getframe``, ``exit``, ``path``, ...) leak. Attribute access is
+    permitted by sandtrap's default policy precisely because these are
+    plain public attributes and nothing else exists on the object."""
+
+    def __init__(self, *, stdin: Any, stdout: Any, stderr: Any, argv: list) -> None:
+        self.stdin = stdin
+        self.stdout = stdout
+        self.stderr = stderr
+        self.argv = argv
+
+
+def make_sandbox_sys(
+    stdin: Any, argv: "list[str] | None", stdout_buf: "StringIO | TailBuffer"
+) -> SandboxSys:
+    """Build the synthetic ``sys`` for one execution. ``stdin`` may be a
+    ``str`` (wrapped in a StringIO), a text stream, or ``None`` (empty).
+    ``stdout``/``stderr`` route to the sandbox's captured buffer."""
+    if stdin is None:
+        stdin_stream: Any = StringIO()
+    elif isinstance(stdin, str):
+        stdin_stream = StringIO(stdin)
+    else:
+        stdin_stream = stdin
+    writer = _SandboxWriter(stdout_buf)
+    return SandboxSys(
+        stdin=stdin_stream,
+        stdout=writer,
+        stderr=writer,
+        argv=list(argv) if argv is not None else [""],
+    )
+
+
+def make_input(sandbox_sys: SandboxSys) -> Any:
+    """An ``input()`` that reads a line from the sandbox stdin (writing the
+    prompt to stdout), matching the real builtin's contract."""
+
+    def _input(prompt: Any = "") -> str:
+        if prompt != "":
+            sandbox_sys.stdout.write(str(prompt))
+        line = sandbox_sys.stdin.readline()
+        if line == "":
+            raise EOFError("EOF when reading a line")
+        return line[:-1] if line.endswith("\n") else line
+
+    return _input
+
+
 _sandbox_print: contextvars.ContextVar[Any] = contextvars.ContextVar("sandtrap_print")
 
 _original_print = _builtins.print
