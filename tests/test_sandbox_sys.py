@@ -87,7 +87,8 @@ def test_stdout_write_is_captured():
 def test_stderr_write_is_captured():
     r = _sb().exec("import sys\nsys.stderr.write('err\\n')", stdin="")
     assert r.error is None
-    assert "err" in r.stdout  # captured alongside stdout in-sandbox
+    assert "err" in r.stderr  # dedicated stderr capture, not stdout
+    assert "err" not in r.stdout
 
 
 def test_stdout_has_file_like_attrs():

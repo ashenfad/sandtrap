@@ -64,11 +64,18 @@ Both `exec()` and `aexec()` return an `ExecResult`:
 |-------|------|-------------|
 | `namespace` | `dict[str, Any]` | Variables defined by the sandboxed code |
 | `stdout` | `str` | Captured print output (formatted text) |
+| `stderr` | `str` | Captured `sys.stderr` output (see below) |
 | `error` | `BaseException \| None` | Runtime error, or `None` on success |
 | `ticks` | `int` | Number of checkpoint ticks consumed |
 | `prints` | `list[tuple[Any, ...]]` | Raw `print()` args, deep-copied at call time (empty unless `snapshot_prints=True`) |
 
 The namespace excludes sandbox internals (`__builtins__`, `__st_*` gates, registered functions/classes, `print`). If user code reassigns a registered name (e.g., `print = 42`), the new value is included.
+
+### stderr capture
+
+`result.stderr` collects everything written to `sys.stderr` during the execution: the synthetic sandbox `sys.stderr` (when `stdin`/`argv` are given) *and* host-side writes made by registered library code — `warnings.warn` output, a library's own diagnostics. Host-side capture works by installing a router over the process's `sys.stderr` (once, idempotent) that delegates to the active execution's buffer via a `ContextVar` and falls through to the real stream otherwise — the same pattern as the global `print` patch. Because routing is per-context rather than a global swap, concurrent executions in one process each get their own stream, and writes outside any execution reach the real stderr untouched.
+
+Caveat: code that stored a reference to `sys.stderr` *before* the router installed (e.g. a `logging.StreamHandler()` constructed at import time) bypasses capture, same as the `print` patch.
 
 ## Capturing print objects
 

@@ -320,6 +320,7 @@ class ProcessSandbox:
                 result = ExecResult(
                     namespace=msg.namespace,
                     stdout=msg.stdout,
+                    stderr=msg.stderr,
                     error=msg.error,
                     ticks=msg.ticks,
                     prints=msg.prints,
