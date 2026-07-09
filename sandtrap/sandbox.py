@@ -19,12 +19,14 @@ from .builtins import (
     _FrozenBuiltins,
     _make_gated_type,
     install_print,
+    install_stderr,
     make_input,
     make_print,
     make_safe_builtins,
     make_safe_help,
     make_sandbox_sys,
     redirect_print,
+    redirect_stderr,
 )
 from .errors import StTimeout, StValidationError, strip_internal_frames
 from .fs import FileSystem, patch
@@ -46,6 +48,12 @@ class ExecResult:
 
     namespace: dict[str, Any] = field(default_factory=dict)
     stdout: str = ""
+    stderr: str = ""
+    """``sys.stderr`` output produced during the execution: the synthetic
+    sandbox ``sys.stderr`` plus host-side writes to the real ``sys.stderr``
+    on the executing context (registered library code, ``warnings``).
+    Captured per-execution via a ContextVar-routing proxy, so concurrent
+    executions in one process don't cross-contaminate."""
     error: BaseException | None = None
     ticks: int = 0
     prints: list[tuple[Any, ...]] = field(default_factory=list)
@@ -321,9 +329,14 @@ class Sandbox:
         """Create a stdout buffer, respecting max_stdout policy."""
         return TailBuffer(max_chars=self.policy.max_stdout)
 
-    def _enter_sandbox_context(self, stack: ExitStack, print_fn: Any = None) -> None:
+    def _enter_sandbox_context(
+        self,
+        stack: ExitStack,
+        print_fn: Any = None,
+        stderr_buf: "TailBuffer | None" = None,
+    ) -> None:
         """Set up memory limits, network denial, filesystem interception,
-        and print redirection."""
+        and print/stderr redirection."""
         if self.policy.memory_limit is not None:
             stack.enter_context(memory_limit_context(self.policy.memory_limit))
 
@@ -337,6 +350,10 @@ class Sandbox:
         if print_fn is not None:
             install_print()
             stack.enter_context(redirect_print(print_fn))
+
+        if stderr_buf is not None:
+            install_stderr()
+            stack.enter_context(redirect_stderr(stderr_buf))
 
     # ------------------------------------------------------------------
     # Shared pipeline helpers
@@ -379,11 +396,13 @@ class Sandbox:
         dict[str, Any],
         dict[str, Any],
         TailBuffer,
+        TailBuffer,
         list[tuple[Any, ...]] | None,
     ]:
         """Fix locations, register linecache, compile, and build namespace.
 
-        Returns ``(code, filename, gates, ns, injected, stdout_buf, prints_list)``.
+        Returns ``(code, filename, gates, ns, injected, stdout_buf,
+        stderr_buf, prints_list)``.
         """
         ast.fix_missing_locations(tree)
 
@@ -403,11 +422,12 @@ class Sandbox:
         wrapped_mode = self.mode == "wrapped"
         self._cancel_flag.clear()
         mem_limit_bytes, start_rss = self._memory_params()
-        # stdout_buf first: the synthetic sys's stdout/stderr route to it,
+        # Buffers first: the synthetic sys's stdout/stderr route to them,
         # and the import gate needs the synthetic sys.
         stdout_buf = self._make_stdout_buf()
+        stderr_buf = TailBuffer(max_chars=self.policy.max_stdout)
         sandbox_sys = (
-            make_sandbox_sys(stdin, argv, stdout_buf)
+            make_sandbox_sys(stdin, argv, stdout_buf, stderr_buf)
             if (stdin is not None or argv is not None)
             else None
         )
@@ -429,7 +449,7 @@ class Sandbox:
         )
         self._auto_activate(ns, gates)
 
-        return code, filename, gates, ns, injected, stdout_buf, prints_list
+        return code, filename, gates, ns, injected, stdout_buf, stderr_buf, prints_list
 
     def _build_result(
         self,
@@ -437,6 +457,7 @@ class Sandbox:
         injected: dict[str, Any],
         gates: dict[str, Any],
         stdout_buf: TailBuffer,
+        stderr_buf: TailBuffer,
         prints_list: list[tuple[Any, ...]] | None,
         filename: str,
         error: BaseException | None,
@@ -466,6 +487,7 @@ class Sandbox:
         return ExecResult(
             namespace=result_ns,
             stdout=stdout_buf.getvalue(),
+            stderr=stderr_buf.getvalue(),
             error=error,
             ticks=ticks,
             prints=prints_list or [],
@@ -487,21 +509,28 @@ class Sandbox:
 
         ``stdin``/``argv`` (either given) expose a minimal, safe ``sys``
         to the code — ``sys.stdin`` (str or text stream), ``sys.stdout``/
-        ``sys.stderr`` (captured), ``sys.argv`` — plus a stdin-backed
-        ``input()``. Nothing else of ``sys`` is reachable.
+        ``sys.stderr`` (captured; stderr lands in ``result.stderr``),
+        ``sys.argv`` — plus a stdin-backed ``input()``. Nothing else of
+        ``sys`` is reachable.
+
+        ``result.stderr`` also carries host-side ``sys.stderr`` writes
+        made during the execution (registered library code, warnings) —
+        routed per-execution, so concurrent sandboxes don't mix streams.
         """
         prepared = self._parse_and_rewrite(source)
         if isinstance(prepared, ExecResult):
             return prepared
         tree, rewriter = prepared
 
-        code, filename, gates, ns, injected, stdout_buf, prints_list = (
+        code, filename, gates, ns, injected, stdout_buf, stderr_buf, prints_list = (
             self._compile_and_setup(tree, rewriter, source, namespace, stdin, argv)
         )
 
         error = None
         with ExitStack() as stack:
-            self._enter_sandbox_context(stack, print_fn=ns["print"])
+            self._enter_sandbox_context(
+                stack, print_fn=ns["print"], stderr_buf=stderr_buf
+            )
             try:
                 exec(code, ns)  # noqa: S102
             except BaseException as e:
@@ -512,7 +541,7 @@ class Sandbox:
         gates["__st_in_exec__"][0] = False
 
         return self._build_result(
-            ns, injected, gates, stdout_buf, prints_list, filename, error
+            ns, injected, gates, stdout_buf, stderr_buf, prints_list, filename, error
         )
 
     def activate(
@@ -617,7 +646,7 @@ class Sandbox:
         wrapper = ast.AsyncFunctionDef(**wrapper_kwargs)
         tree.body = [wrapper]
 
-        code, filename, gates, ns, injected, stdout_buf, prints_list = (
+        code, filename, gates, ns, injected, stdout_buf, stderr_buf, prints_list = (
             self._compile_and_setup(tree, rewriter, source, namespace, stdin, argv)
         )
         ns["__st_locals__"] = _builtins.locals
@@ -652,7 +681,9 @@ class Sandbox:
         error = None
         result_locals: dict[str, Any] = {}
         with ExitStack() as stack:
-            self._enter_sandbox_context(stack, print_fn=ns["print"])
+            self._enter_sandbox_context(
+                stack, print_fn=ns["print"], stderr_buf=stderr_buf
+            )
             try:
                 exec(code, ns)  # noqa: S102
                 coro = ns["__st_aexec__"]()
@@ -676,6 +707,7 @@ class Sandbox:
             injected,
             gates,
             stdout_buf,
+            stderr_buf,
             prints_list,
             filename,
             error,

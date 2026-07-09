@@ -231,6 +231,7 @@ def worker_main(
                         error=result.error,
                         ticks=result.ticks,
                         prints=filter_prints(result.prints),
+                        stderr=result.stderr,
                     )
                 )
             except BaseException:

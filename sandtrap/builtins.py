@@ -376,11 +376,15 @@ class SandboxSys:
 
 
 def make_sandbox_sys(
-    stdin: Any, argv: "list[str] | None", stdout_buf: "StringIO | TailBuffer"
+    stdin: Any,
+    argv: "list[str] | None",
+    stdout_buf: "StringIO | TailBuffer",
+    stderr_buf: "StringIO | TailBuffer | None" = None,
 ) -> SandboxSys:
     """Build the synthetic ``sys`` for one execution. ``stdin`` may be a
     ``str`` (wrapped in a StringIO), a text stream, or ``None`` (empty).
-    ``stdout``/``stderr`` route to the sandbox's captured buffer."""
+    ``stdout`` routes to the sandbox's captured stdout; ``stderr`` to the
+    dedicated stderr capture (falling back to stdout when not given)."""
     if stdin is None:
         stdin_stream: Any = StringIO()
     elif isinstance(stdin, str):
@@ -391,7 +395,7 @@ def make_sandbox_sys(
     return SandboxSys(
         stdin=stdin_stream,
         stdout=writer,
-        stderr=writer,
+        stderr=_SandboxWriter(stderr_buf) if stderr_buf is not None else writer,
         argv=list(argv) if argv is not None else [""],
     )
 
@@ -448,6 +452,79 @@ def redirect_print(print_fn: Any) -> Iterator[None]:
         yield
     finally:
         _sandbox_print.reset(token)
+
+
+_sandbox_stderr: contextvars.ContextVar[Any] = contextvars.ContextVar("sandtrap_stderr")
+
+
+class _StderrRouter:
+    """``sys.stderr`` replacement that routes writes to the active
+    sandbox capture buffer (ContextVar) or falls through to the wrapped
+    original stream — the stderr counterpart of the ``print`` patch.
+
+    Host-library writes during an exec (``warnings.warn``, a registered
+    module's ``sys.stderr.write``) hit this router on the executing
+    context; writes from anywhere else pass through untouched. Unlike a
+    ``contextlib.redirect_stderr`` swap, this is safe under concurrent
+    executions in one process: each context routes to its own buffer.
+
+    Caveat: code that grabbed a reference to ``sys.stderr`` before the
+    router installed (e.g. a ``logging.StreamHandler()`` built at import
+    time) bypasses routing — same property as the ``print`` patch.
+    """
+
+    def __init__(self, original: Any) -> None:
+        self._original = original
+
+    def write(self, s: str) -> int:
+        target = _sandbox_stderr.get(None)
+        if target is None:
+            target = self._original
+        target.write(s)
+        return len(s)
+
+    def writelines(self, lines: Any) -> None:
+        for line in lines:
+            self.write(line)
+
+    def flush(self) -> None:
+        target = _sandbox_stderr.get(None)
+        if target is None:
+            target = self._original
+        flush = getattr(target, "flush", None)
+        if flush is not None:
+            flush()
+
+    def __getattr__(self, name: str) -> Any:
+        # encoding/errors/isatty/fileno/... — delegate to the original
+        # stream so libraries inspecting sys.stderr keep working.
+        return getattr(self._original, name)
+
+
+def install_stderr() -> None:
+    """Monkeypatch ``sys.stderr`` with a router that delegates to the
+    active sandbox capture buffer (via :func:`redirect_stderr`) and
+    falls through to the original stream otherwise.
+
+    Outside sandbox execution, ``sys.stderr`` behaves normally.
+    Idempotent — safe to call multiple times. Checked against the live
+    ``sys.stderr`` (not a module flag) so environments that reassign
+    it between executions — pytest's capture does, per test — get
+    re-wrapped instead of silently losing routing.
+    """
+    if isinstance(sys.stderr, _StderrRouter):
+        return
+    sys.stderr = _StderrRouter(sys.stderr)
+
+
+@contextmanager
+def redirect_stderr(buffer: Any) -> Iterator[None]:
+    """Route ``sys.stderr`` writes on this context to *buffer*."""
+    token = _sandbox_stderr.set(buffer)
+    try:
+        yield
+    finally:
+        _sandbox_stderr.reset(token)
 
 
 def make_safe_builtins(

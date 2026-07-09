@@ -100,6 +100,7 @@ class ResultMsg:
     error: BaseException | None
     ticks: int
     prints: list[tuple[Any, ...]]
+    stderr: str = ""
 
 
 @dataclass

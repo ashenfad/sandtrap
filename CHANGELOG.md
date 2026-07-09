@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Per-execution stderr capture: ``ExecResult.stderr``.** Everything
+  written to ``sys.stderr`` during an execution is captured on the
+  result: the synthetic sandbox ``sys.stderr`` (when ``stdin``/``argv``
+  are given) and host-side writes from registered library code
+  (``warnings.warn``, library diagnostics). Capture uses a router
+  installed over the process's ``sys.stderr`` that delegates to the
+  active execution's buffer via a ``ContextVar`` and falls through to
+  the real stream otherwise — the stderr counterpart of the global
+  ``print`` patch. Unlike a ``contextlib.redirect_stderr`` swap, this
+  is safe under concurrent executions in one process: streams never
+  cross-contaminate and the real stderr is never left pointing at a
+  dead buffer. Under process/kernel isolation, stderr is captured in
+  the worker and returned with the result. Embedders that redirected
+  stderr around ``exec()`` themselves can drop that and read
+  ``result.stderr``.
+
+### Changed
+- **Synthetic ``sys.stderr`` no longer merges into ``stdout``.** With
+  ``stdin``/``argv`` given, ``sys.stderr.write(...)`` from sandboxed
+  code now lands in ``result.stderr`` instead of ``result.stdout``.
+
 ## [0.2.3] - 2026-07-06
 
 ### Added
