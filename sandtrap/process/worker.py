@@ -232,7 +232,12 @@ def worker_main(
                     if msg.namespace is not None
                     else None
                 )
-                result = sandbox.exec(msg.source, namespace=ns)
+                result = sandbox.exec(
+                    msg.source,
+                    namespace=ns,
+                    stdin=msg.stdin,
+                    argv=msg.argv,
+                )
                 safe_ns = filter_namespace(result.namespace) or {}
                 conn.send(
                     ResultMsg(

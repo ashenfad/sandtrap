@@ -78,6 +78,8 @@ class ExecMsg:
 
     source: str
     namespace: Mapping[str, Any] | None
+    stdin: Any | None = None
+    argv: list[str] | None = None
 
 
 @dataclass

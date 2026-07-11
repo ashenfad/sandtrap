@@ -273,6 +273,8 @@ class ProcessSandbox:
         source: str,
         *,
         namespace: Mapping[str, Any] | None = None,
+        stdin: str | Any | None = None,
+        argv: list[str] | None = None,
     ) -> ExecResult:
         """Execute source code in the sandboxed subprocess.
 
@@ -297,7 +299,9 @@ class ProcessSandbox:
                         RuntimeWarning,
                         stacklevel=2,
                     )
-        self._conn.send(ExecMsg(source=source, namespace=safe_ns))
+        self._conn.send(
+            ExecMsg(source=source, namespace=safe_ns, stdin=stdin, argv=argv)
+        )
         return self._await_result()
 
     def _await_result(self) -> ExecResult:
@@ -435,11 +439,14 @@ class ProcessSandbox:
         source: str,
         *,
         namespace: Mapping[str, Any] | None = None,
+        stdin: str | Any | None = None,
+        argv: list[str] | None = None,
     ) -> ExecResult:
         """Execute source code asynchronously in the sandboxed subprocess."""
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
-            None, lambda: self.exec(source, namespace=namespace)
+            None,
+            lambda: self.exec(source, namespace=namespace, stdin=stdin, argv=argv),
         )
 
     def cancel(self) -> None:
