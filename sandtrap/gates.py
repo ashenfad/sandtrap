@@ -314,8 +314,14 @@ def make_gates(
         common miss, and 'not allowed' misreads as a policy ban (agents
         give up instead of qualifying the import). When the file exists
         elsewhere on the VFS, say where and show the fix."""
-        top = module_name.split(".")[0]
-        hit = vfs.find_module_file(top)
+        # bare `import mod`: search for mod.py. Dotted with a WRONG
+        # root (`import api._helpers` for /app/api/_helpers.py): the
+        # top segment is a directory, so search for the LEAF file and
+        # derive the right root from where it lives.
+        parts = module_name.split(".")
+        hit = vfs.find_module_file(parts[0])
+        if hit is None and len(parts) > 1:
+            hit = vfs.find_module_file(parts[-1])
         if hit is not None:
             dotted = hit[1:-3].replace("/", ".")
             parent, _, leaf = dotted.rpartition(".")
