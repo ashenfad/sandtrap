@@ -101,7 +101,7 @@ with sandbox(Policy(timeout=10.0), isolation="kernel", filesystem=IsolatedFS("/t
 
 Files written by sandboxed code appear in the root directory on the host. With `isolation="kernel"`, kernel-level filesystem restriction locks access to the `IsolatedFS` root.
 
-### VirtualFS (in-memory)
+### VirtualFS (in-memory) — bridged over RPC
 
 Pass a `VirtualFS` or any other `FileSystem` implementation:
 
@@ -112,9 +112,13 @@ fs = VirtualFS({})
 fs.write("/data.txt", b"hello from vfs")
 
 with sandbox(Policy(timeout=10.0), isolation="process", filesystem=fs) as sb:
-    result = sb.exec("content = open('/data.txt').read()")
-    print(result.namespace["content"])  # "hello from vfs"
+    result = sb.exec("open('/reply.txt', 'w').write('hello from the worker')")
+    print(fs.read("/reply.txt"))  # b"hello from the worker" — the PARENT's fs
 ```
+
+Non-`IsolatedFS` filesystems are **bridged over the RPC channel**: the parent keeps the real instance and registers an internal handler; the worker sees a `RemoteFS` stub whose every operation is a synchronous RPC. The parent's filesystem stays the single source of truth — worker writes land in it, `chdir` moves its cwd, and a worker crash loses nothing already written. (Fork-inheriting an in-memory fs would hand the worker a divergent copy whose writes silently vanish.)
+
+File handles are whole-blob buffered, matching monkeyfs semantics: read modes fetch content once at `open`; writable modes buffer locally and push on `flush`/`close`. Seeks, iteration, and partial reads are local and cost no round-trips.
 
 When using a non-`IsolatedFS` filesystem, no kernel-level filesystem restriction is applied (there's no host path to restrict). Seccomp and network isolation still apply.
 

@@ -166,6 +166,16 @@ def worker_main(
         # interceptor is already in place.
         install_fs()
 
+        # A RemoteFSMarker means the parent kept the real filesystem
+        # and registered an RPC handler for it — build the worker-side
+        # stub. Every fs operation is a synchronous RPC to the parent,
+        # so writes land in the parent's instance (fork inheritance
+        # would give this worker a divergent copy).
+        from ..fs.remote import FS_RPC_TARGET, RemoteFS, RemoteFSMarker
+
+        if isinstance(filesystem, RemoteFSMarker):
+            filesystem = RemoteFS(RpcProxy(conn, FS_RPC_TARGET))
+
         # Extract root path from IsolatedFS for kernel-level restrictions.
         root: str | None = None
         try:

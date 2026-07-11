@@ -58,7 +58,11 @@ def filter_namespace(ns: Mapping[str, Any] | None) -> dict[str, Any] | None:
         try:
             pickle.dumps(v)
             filtered[k] = v
-        except (pickle.PicklingError, TypeError, AttributeError):
+        except Exception:
+            # Anything: pickling arbitrary objects raises arbitrary
+            # exceptions (a closed StringIO raises ValueError;
+            # __reduce__ hooks raise whatever they like). Unpicklable
+            # means dropped, never fatal.
             pass
     return filtered
 

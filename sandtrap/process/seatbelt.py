@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.util
+import os
 import sys
 import warnings
 
@@ -25,10 +26,20 @@ _HEADER = """\
 # Filesystem: restricted to sandbox root + system read-only paths.
 _FS_RESTRICTED = """\
 (define sandbox-root (param "SANDBOX_ROOT"))
+(define python-base (param "PYTHON_BASE"))
+(define python-venv (param "PYTHON_VENV"))
 
 ; Full file access within the sandbox directory
 (allow file-read* file-write*
   (subpath sandbox-root))
+
+; Read-only access to the Python installation itself — lazy stdlib /
+; site-packages imports after lockdown must keep working wherever the
+; interpreter lives (uv / pyenv / homebrew installs are NOT under
+; /usr or /Library)
+(allow file-read*
+  (subpath python-base)
+  (subpath python-venv))
 
 ; Read-only access to system paths the Python runtime needs
 (allow file-read*
@@ -115,6 +126,8 @@ def apply(
     params = {}
     if restrict_fs:
         params["SANDBOX_ROOT"] = root
+        params["PYTHON_BASE"] = os.path.realpath(sys.base_prefix)
+        params["PYTHON_VENV"] = os.path.realpath(sys.prefix)
     n = len(params)
     arr = (ctypes.c_char_p * (n * 2 + 1))()
     for i, (k, v) in enumerate(params.items()):
