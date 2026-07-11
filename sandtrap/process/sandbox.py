@@ -34,6 +34,14 @@ RpcHandler = Callable[[str, tuple, dict], Any]
 _READY_TIMEOUT = 30.0
 
 
+def _is_isolated_fs(filesystem: Any) -> bool:
+    try:
+        from monkeyfs import IsolatedFS
+    except ImportError:
+        return False
+    return isinstance(filesystem, IsolatedFS)
+
+
 class ProcessSandbox:
     """Subprocess-backed Python sandbox.
 
@@ -43,18 +51,15 @@ class ProcessSandbox:
     Landlock, Seatbelt).
 
     The worker process is forked when entering the context manager.  If the
-    worker dies (crash, OOM, etc.), subsequent ``exec()`` calls raise
-    ``RuntimeError`` rather than silently re-forking.  To recover, exit and
-    re-enter the context manager::
+    worker dies (crash, OOM, seccomp kill), the crashing ``exec()`` returns
+    an ``ExecResult`` carrying the error and the next ``exec()`` spawns a
+    fresh worker transparently — a crash costs the crashing execution (and
+    its accumulated worker state), not the sandbox::
 
         with ProcessSandbox(policy) as sb:
-            result = sb.exec("1 + 1")  # OK
-            # ... worker crashes ...
-            result = sb.exec("2 + 2")  # RuntimeError: Worker process is not running.
-
-        # Re-enter to get a fresh worker
-        with ProcessSandbox(policy) as sb:
-            result = sb.exec("2 + 2")  # OK
+            result = sb.exec("1 + 1")   # OK
+            result = sb.exec(crashy)    # result.error: worker died
+            result = sb.exec("2 + 2")   # OK again — fresh worker
 
     **Threading:** The worker is forked via ``multiprocessing.get_context("fork")``.
     Enter the context manager before starting threads or async tasks to avoid
@@ -69,7 +74,11 @@ class ProcessSandbox:
         A ``monkeyfs.FileSystem`` implementation (e.g., ``IsolatedFS``,
         ``VirtualFS``).  When an ``IsolatedFS`` is provided, kernel-level
         filesystem restriction locks access to its root directory.
-        Optional — when ``None``, sandboxed code has no file I/O.
+        Any other filesystem is bridged over the RPC channel (the
+        worker sees a ``RemoteFS``), so worker writes land in THIS
+        process's instance — an in-memory fs stays the single source
+        of truth. Optional — when ``None``, sandboxed code has no
+        file I/O.
     mode:
         ``"wrapped"`` (default) or ``"raw"``.  Same as :class:`Sandbox`.
     isolation:
@@ -94,8 +103,22 @@ class ProcessSandbox:
         self._snapshot_prints = snapshot_prints
         self._rpc_handlers: dict[str, RpcHandler] = dict(rpc_handlers or {})
 
+        # Bridge non-IsolatedFS filesystems over RPC. Fork inheritance
+        # would hand the worker a divergent COPY of an in-memory fs
+        # (writes silently lost); RPC keeps the parent's instance the
+        # single source of truth. IsolatedFS stays fork-inherited —
+        # parent and worker converge on the real directory, and kernel
+        # lockdown needs the host root.
+        self._worker_fs = filesystem
+        if filesystem is not None and not _is_isolated_fs(filesystem):
+            from ..fs.remote import FS_RPC_TARGET, RemoteFSMarker, fs_rpc_handler
+
+            self._rpc_handlers.setdefault(FS_RPC_TARGET, fs_rpc_handler(filesystem))
+            self._worker_fs = RemoteFSMarker()
+
         self._process: multiprocessing.Process | None = None
         self._conn: multiprocessing.connection.Connection | None = None
+        self._started = False
 
     # ------------------------------------------------------------------
     # Context manager
@@ -103,6 +126,7 @@ class ProcessSandbox:
 
     def __enter__(self) -> ProcessSandbox:
         self._ensure_worker()
+        self._started = True
         return self
 
     def __exit__(self, *exc: Any) -> None:
@@ -132,7 +156,7 @@ class ProcessSandbox:
             args=(
                 child_conn,
                 self._policy,
-                self._filesystem,
+                self._worker_fs,
                 self._mode,
                 self._isolation,
                 self._snapshot_prints,
@@ -181,6 +205,7 @@ class ProcessSandbox:
 
     def shutdown(self) -> None:
         """Shut down the worker process cleanly."""
+        self._started = False  # exec() raises again until re-entered
         if self._conn is not None:
             try:
                 self._conn.send(ShutdownMsg())
@@ -249,12 +274,17 @@ class ProcessSandbox:
         *,
         namespace: Mapping[str, Any] | None = None,
     ) -> ExecResult:
-        """Execute source code in the sandboxed subprocess."""
-        if self._process is None or not self._process.is_alive():
+        """Execute source code in the sandboxed subprocess.
+
+        If a previous execution killed the worker (segfault, OOM,
+        seccomp violation), a fresh worker is spawned transparently —
+        a crash costs the crashing turn, not the sandbox."""
+        if not self._started:
             raise RuntimeError(
                 "Worker process is not running. "
                 "Use ProcessSandbox as a context manager to start it."
             )
+        self._ensure_worker()  # respawns after a crash
         if self._conn is None:
             raise RuntimeError("No connection to worker process")
 
