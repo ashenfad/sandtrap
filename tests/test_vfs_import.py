@@ -590,3 +590,58 @@ result = pkg.PKG_LOADED
 """)
     assert result.error is None
     assert result.namespace["result"] is True
+
+
+# -- did-you-mean on unresolved imports ---------------------------------------
+# VFS imports resolve from '/', and "Import of 'X' is not allowed" reads
+# as a policy ban when the real problem is an unqualified path. When the
+# file exists elsewhere on the VFS, the error says where and shows the fix.
+
+
+def test_bare_import_of_nested_module_suggests_qualified_form():
+    sandbox, fs = _make_sandbox()
+    fs.makedirs("/helpers", exist_ok=True)
+    fs.write("/helpers/evdata.py", b"VALUE = 41")
+
+    result = sandbox.exec("import evdata")
+    assert isinstance(result.error, ImportError)
+    msg = str(result.error)
+    assert "Found /helpers/evdata.py" in msg
+    assert "from helpers import evdata" in msg
+    assert "not allowed" not in msg
+
+
+def test_from_import_of_nested_module_suggests_qualified_form():
+    sandbox, fs = _make_sandbox()
+    fs.makedirs("/lib/util", exist_ok=True)
+    fs.write("/lib/util/evdata.py", b"VALUE = 41")
+
+    result = sandbox.exec("from evdata import VALUE")
+    assert isinstance(result.error, ImportError)
+    msg = str(result.error)
+    assert "Found /lib/util/evdata.py" in msg
+    assert "from lib.util import evdata" in msg
+
+
+def test_truly_missing_module_keeps_the_policy_message():
+    sandbox, fs = _make_sandbox()
+    fs.write("/other.py", b"x = 1")
+
+    result = sandbox.exec("import nowhere")
+    assert isinstance(result.error, ImportError)
+    assert "Import of 'nowhere' is not allowed" in str(result.error)
+
+
+def test_suggestion_search_is_bounded():
+    """A wide tree doesn't stall the error path (bounded BFS)."""
+    sandbox, fs = _make_sandbox()
+    for i in range(300):
+        fs.makedirs(f"/d{i:03d}", exist_ok=True)
+        fs.write(f"/d{i:03d}/x.py", b"pass")
+    fs.makedirs("/zzz", exist_ok=True)
+    fs.write("/zzz/deep.py", b"pass")
+
+    result = sandbox.exec("import deep")
+    assert isinstance(
+        result.error, ImportError
+    )  # may or may not find it; must not hang
