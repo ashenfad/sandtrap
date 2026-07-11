@@ -524,16 +524,18 @@ def install_stdout() -> None:
     Idempotent — safe to call multiple times. Checked against the live
     ``sys.stdout`` (not a module flag) so environments that reassign
     it between executions — pytest's capture does, per test — get
-    re-wrapped instead of silently losing routing.
+    re-wrapped instead of silently losing routing. A ``None`` stream
+    (pythonw.exe, daemons) stays ``None`` — wrapping it would defeat
+    the ``if sys.stdout is not None`` checks such environments rely on.
     """
-    if isinstance(sys.stdout, _StdoutRouter):
+    if sys.stdout is None or isinstance(sys.stdout, _StdoutRouter):
         return
     sys.stdout = _StdoutRouter(sys.stdout)
 
 
 def install_stderr() -> None:
     """``sys.stderr`` counterpart of :func:`install_stdout`."""
-    if isinstance(sys.stderr, _StderrRouter):
+    if sys.stderr is None or isinstance(sys.stderr, _StderrRouter):
         return
     sys.stderr = _StderrRouter(sys.stderr)
 
