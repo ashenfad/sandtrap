@@ -5,6 +5,54 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`RemoteFS`: in-memory filesystems bridged over RPC in process/kernel
+  mode.** Passing a non-`IsolatedFS` filesystem (e.g. `VirtualFS`) to a
+  process sandbox used to fork-inherit a divergent COPY into the worker —
+  sandboxed writes silently never reached the parent's instance. The
+  parent now keeps the real filesystem behind an internal `__fs__` RPC
+  handler and the worker sees a `RemoteFS` stub: every operation is a
+  synchronous RPC, so the parent's instance stays the single source of
+  truth (worker writes land in it, `chdir` moves its cwd, a worker crash
+  loses nothing already written). File handles are whole-blob buffered,
+  matching monkeyfs semantics — read modes fetch content once at `open`,
+  writable modes buffer locally and push on `flush`/`close`; seeks,
+  iteration, and partial reads are local. `IsolatedFS` keeps fork
+  inheritance (parent and worker converge on the real directory, and
+  kernel-level lockdown needs the host root). Wired automatically by
+  `ProcessSandbox`; embedders change nothing.
+- **`stdin` / `argv` cross the process boundary.** `ProcessSandbox.exec`
+  / `aexec` accept the parameters the in-process sandbox gained in 0.2.3
+  (they previously raised `TypeError`). `ExecMsg` carries both with
+  defaults, so the wire format stays backward compatible.
+
+### Changed
+- **Worker crashes no longer disable the sandbox — `exec()` respawns.**
+  A worker death (segfault, OOM, seccomp kill) returns an `ExecResult`
+  carrying the error, and the next `exec()` forks a fresh worker
+  transparently: a crash costs the crashing execution (and accumulated
+  worker state), not the sandbox. This is what `docs/process.md` always
+  said; the code raised "Worker process is not running" until re-entry.
+  Clean `shutdown()` still requires re-entering the context manager.
+
+### Fixed
+- **Seatbelt (macOS kernel isolation) allows reading the Python
+  installation itself.** The profile's read-only allowlist covered
+  `/usr`, `/System/Library`, and `/Library` — but not interpreters
+  living elsewhere (uv, pyenv, homebrew), so any *lazily* imported
+  stdlib or site-packages module after lockdown died with
+  `PermissionError`. The profile now grants read access to
+  `sys.base_prefix` and `sys.prefix` (realpath'd), passed as profile
+  parameters.
+- **`filter_namespace` survives any pickling failure.** It caught only
+  `PicklingError`/`TypeError`/`AttributeError`, but pickling arbitrary
+  objects raises arbitrary exceptions (a closed `StringIO` raises
+  `ValueError`), which escaped and killed the whole result. Any
+  exception now means "dropped", never fatal. Remote file handles are
+  explicitly unpicklable via `__reduce__` (the `RpcProxy` convention).
+
 ## [0.2.4] - 2026-07-09
 
 ### Added
