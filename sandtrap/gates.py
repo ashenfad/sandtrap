@@ -146,6 +146,34 @@ class _VFSLoader:
             if k != "__builtins__" and not k.startswith("__st_"):
                 setattr(mod, k, v)
 
+    def find_module_file(self, top: str, max_dirs: int = 200) -> str | None:
+        """Bounded BFS for ``<top>.py`` anywhere on the VFS — powers the
+        did-you-mean in import errors. Skips the root itself (a root hit
+        would have resolved normally) and returns the shallowest match."""
+        fs = self._filesystem
+        if fs is None:
+            return None
+        target = f"{top}.py"
+        queue = ["/"]
+        visited = 0
+        while queue and visited < max_dirs:
+            d = queue.pop(0)
+            visited += 1
+            try:
+                entries = sorted(fs.list(d))
+            except Exception:
+                continue
+            for entry in entries:
+                full = d.rstrip("/") + "/" + entry
+                try:
+                    if fs.isdir(full):
+                        queue.append(full)
+                    elif entry == target and d != "/":
+                        return full
+                except Exception:
+                    continue
+        return None
+
     def resolve_module(self, module_name: str) -> Any:
         """Try to resolve a module from the VFS.  Returns None if not found."""
         if self._filesystem is None:
@@ -269,6 +297,25 @@ def make_gates(
         except (ValueError, AttributeError):
             return None
 
+    def _import_error_message(module_name: str) -> str:
+        """Distinguish 'not granted' from 'exists, but not where imports
+        resolve'. Filesystem-module imports resolve from '/' — a bare
+        ``import mod`` for a file at /some/dir/mod.py is the single most
+        common miss, and 'not allowed' misreads as a policy ban (agents
+        give up instead of qualifying the import). When the file exists
+        elsewhere on the VFS, say where and show the fix."""
+        top = module_name.split(".")[0]
+        hit = vfs.find_module_file(top)
+        if hit is not None:
+            dotted = hit[1:-3].replace("/", ".")
+            parent, _, leaf = dotted.rpartition(".")
+            return (
+                f"No module named '{module_name}' at the filesystem root "
+                f"(imports of filesystem modules resolve from '/'). Found "
+                f"{hit} — try: from {parent} import {leaf}"
+            )
+        return f"Import of '{module_name}' is not allowed"
+
     def _maybe_wrap_privileged(value: Any, reg: Any, member_name: str) -> Any:
         """Wrap *value* if its registration requires network or host-fs access."""
         if not callable(value) or reg is None:
@@ -373,7 +420,7 @@ def make_gates(
 
         lineno = _caller_lineno()
         loc = f" (line {lineno})" if lineno else ""
-        raise ImportError(f"Import of '{module_name}' is not allowed{loc}")
+        raise ImportError(_import_error_message(module_name) + loc)
 
     def __st_importfrom__(module_name: str, name: str, *, _level: int = 0) -> Any:
         # `from sys import stdin, argv, ...` — mirror the __st_import__
@@ -456,7 +503,7 @@ def make_gates(
 
         lineno = _caller_lineno()
         loc = f" (line {lineno})" if lineno else ""
-        raise ImportError(f"Import of '{module_name}' is not allowed{loc}")
+        raise ImportError(_import_error_message(module_name) + loc)
 
     def __st_defun__(name: str, compiled_fn: Any, ast_ref: int | str) -> Any:
         if not _wrapped_mode:

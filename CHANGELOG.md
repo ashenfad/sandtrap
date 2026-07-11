@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **Import errors now say WHERE the module actually is.** VFS imports
+  resolve from `/`, and a bare `import mod` for a file living at
+  `/some/dir/mod.py` failed with "Import of 'mod' is not allowed" —
+  which reads as a policy ban, so agents give up on sharing code
+  instead of qualifying the import. The unresolved-import error now
+  distinguishes the cases: when a matching `<name>.py` exists elsewhere
+  on the VFS (bounded BFS), the message reports the path and the
+  working form ("Found /helpers/evdata.py — try: from helpers import
+  evdata"). Truly unknown modules keep the policy message.
+
 ## [0.2.6] - 2026-07-11
 
 ### Added
