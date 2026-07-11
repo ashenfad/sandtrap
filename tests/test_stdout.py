@@ -139,6 +139,19 @@ def test_install_is_idempotent():
     assert isinstance(sys.stdout, _StdoutRouter)
 
 
+def test_install_leaves_none_stream_alone():
+    """pythonw.exe / daemon environments run with sys.stdout = None and
+    libraries guard writes with `if sys.stdout is not None` — wrapping
+    None in a router would defeat the guard and crash the write."""
+    saved = sys.stdout
+    sys.stdout = None
+    try:
+        install_stdout()
+        assert sys.stdout is None
+    finally:
+        sys.stdout = saved
+
+
 def test_no_routing_leaks_after_exec():
     from sandtrap.builtins import _sandbox_stdout
 
