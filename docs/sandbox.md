@@ -63,7 +63,7 @@ Both `exec()` and `aexec()` return an `ExecResult`:
 | Field | Type | Description |
 |-------|------|-------------|
 | `namespace` | `dict[str, Any]` | Variables defined by the sandboxed code |
-| `stdout` | `str` | Captured print output (formatted text) |
+| `stdout` | `str` | Captured `print` + `sys.stdout` output (see below) |
 | `stderr` | `str` | Captured `sys.stderr` output (see below) |
 | `error` | `BaseException \| None` | Runtime error, or `None` on success |
 | `ticks` | `int` | Number of checkpoint ticks consumed |
@@ -71,11 +71,20 @@ Both `exec()` and `aexec()` return an `ExecResult`:
 
 The namespace excludes sandbox internals (`__builtins__`, `__st_*` gates, registered functions/classes, `print`). If user code reassigns a registered name (e.g., `print = 42`), the new value is included.
 
-### stderr capture
+### stdout / stderr capture
 
-`result.stderr` collects everything written to `sys.stderr` during the execution: the synthetic sandbox `sys.stderr` (when `stdin`/`argv` are given) *and* host-side writes made by registered library code — `warnings.warn` output, a library's own diagnostics. Host-side capture works by installing a router over the process's `sys.stderr` (once, idempotent) that delegates to the active execution's buffer via a `ContextVar` and falls through to the real stream otherwise — the same pattern as the global `print` patch. Because routing is per-context rather than a global swap, concurrent executions in one process each get their own stream, and writes outside any execution reach the real stderr untouched.
+`result.stdout` collects everything written to stdout during the execution: sandboxed `print` calls *and* host-side writes to the real `sys.stdout` made by registered library code — `df.info()` is the canonical case (it grabs `sys.stdout` internally, so the injected `print` never sees it). Both routes feed one buffer, so interleaving between `print` and library output is preserved. `result.stderr` is the same story for `sys.stderr`: the synthetic sandbox `sys.stderr` (when `stdin`/`argv` are given) plus host-side writes — `warnings.warn` output, a library's own diagnostics.
 
-Caveat: code that stored a reference to `sys.stderr` *before* the router installed (e.g. a `logging.StreamHandler()` constructed at import time) bypasses capture, same as the `print` patch.
+Host-side capture works by installing a router over the process's `sys.stdout`/`sys.stderr` (once, idempotent) that delegates to the active execution's buffer via a `ContextVar` and falls through to the real stream otherwise — the same pattern as the global `print` patch. Because routing is per-context rather than a global swap, concurrent executions in one process each get their own stream, and writes outside any execution reach the real streams untouched. The contextvar-propagating threading patches install alongside, so capture follows host libraries into threads they spawn.
+
+Host callbacks invoked from inside an execution inherit its routing — their console output lands in the result. A callback that wants the operator's real console instead (progress logging, sub-agent streaming) opts out per-write:
+
+```python
+with sandtrap.passthrough_stdio():
+    print("visible on the real console, not in result.stdout")
+```
+
+Caveats: code that stored a reference to the real stream *before* the router installed (e.g. a `logging.StreamHandler()` constructed at import time) bypasses capture, same as the `print` patch — and C-level writes straight to the file descriptor never see the router.
 
 ## Capturing print objects
 

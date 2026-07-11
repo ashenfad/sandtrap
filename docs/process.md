@@ -63,7 +63,7 @@ result = await sb.aexec("x = 42")
 
 ## ExecResult
 
-Same as `isolation="none"` -- all isolation levels return an `ExecResult` with `namespace`, `stdout`, `stderr`, `error`, and `ticks` fields. `stderr` is captured inside the worker (where registered library code actually runs) and shipped back with the result.
+Same as `isolation="none"` -- all isolation levels return an `ExecResult` with `namespace`, `stdout`, `stderr`, `error`, and `ticks` fields. `stdout`/`stderr` are captured inside the worker (where registered library code actually runs) and shipped back with the result -- including host-library writes to the real streams, like `df.info()`.
 
 ## Cancellation
 

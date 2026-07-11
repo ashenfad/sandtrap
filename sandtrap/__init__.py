@@ -1,3 +1,4 @@
+from .builtins import passthrough_stdio
 from .errors import StCancelled, StError, StTickLimit, StTimeout, StValidationError
 from .factory import sandbox
 from .fs import FileSystem, IsolatedFS, VirtualFS
@@ -19,5 +20,6 @@ __all__ = [
     "StTimeout",
     "StValidationError",
     "VirtualFS",
+    "passthrough_stdio",
     "sandbox",
 ]

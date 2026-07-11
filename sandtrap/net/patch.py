@@ -80,9 +80,24 @@ def _p_executor_submit(self: Any, fn: Any, /, *args: Any, **kwargs: Any) -> Any:
     return _original_executor_submit(self, ctx.run, fn, *args, **kwargs)
 
 
+def install_threading() -> None:
+    """Install the contextvar-propagating threading patches (idempotent,
+    permanent). Separately callable: stdio capture routing needs
+    propagation into spawned threads even when network gating is off."""
+    global _original_thread_start, _original_executor_submit
+    with _lock:
+        if _original_thread_start is None:
+            _original_thread_start = threading.Thread.start
+            threading.Thread.start = _p_thread_start  # type: ignore[assignment]
+        if _original_executor_submit is None:
+            _original_executor_submit = concurrent.futures.ThreadPoolExecutor.submit
+            concurrent.futures.ThreadPoolExecutor.submit = _p_executor_submit  # type: ignore[assignment]
+
+
 def install() -> None:
     """Install network and threading patches (idempotent, permanent)."""
-    global _installed, _original_thread_start, _original_executor_submit
+    global _installed
+    install_threading()
     with _lock:
         if _installed:
             return
@@ -95,13 +110,5 @@ def install() -> None:
         if _gated._original_getaddrinfo is None:
             _gated._original_getaddrinfo = socket.getaddrinfo
             socket.getaddrinfo = _gated._p_getaddrinfo
-
-        # Store originals and install patches — threading
-        if _original_thread_start is None:
-            _original_thread_start = threading.Thread.start
-            threading.Thread.start = _p_thread_start  # type: ignore[assignment]
-        if _original_executor_submit is None:
-            _original_executor_submit = concurrent.futures.ThreadPoolExecutor.submit
-            concurrent.futures.ThreadPoolExecutor.submit = _p_executor_submit  # type: ignore[assignment]
 
         _installed = True

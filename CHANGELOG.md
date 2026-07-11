@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Host-side `sys.stdout` writes are captured into `result.stdout`.**
+  Registered library code that grabs the real `sys.stdout` internally —
+  `df.info()` is the canonical case — used to print to the host
+  process's terminal, invisible to the caller. A ContextVar-routing
+  router over `sys.stdout` (the stderr router's twin, same pattern as
+  the global `print` patch) now folds those writes into the executing
+  context's buffer — the SAME buffer the injected `print` uses, so
+  interleaving is preserved. Per-context routing means concurrent
+  executions in one process don't cross-contaminate, and writes outside
+  any execution fall through to the real stream untouched. Works in all
+  isolation modes (the worker captures where the code runs).
+- **`sandtrap.passthrough_stdio()`**: opt-out for host callbacks
+  invoked from inside an execution that want the operator's real
+  console (progress logging, sub-agent streaming) instead of the
+  sandboxed result.
+
+### Changed
+- The contextvar-propagating threading patches (`Thread.start`,
+  `ThreadPoolExecutor.submit`) now install with stdio capture as well,
+  not only with network gating — capture routing follows host libraries
+  into threads they spawn.
+
 ## [0.2.5] - 2026-07-11
 
 ### Added

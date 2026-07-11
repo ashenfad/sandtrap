@@ -20,6 +20,7 @@ from .builtins import (
     _make_gated_type,
     install_print,
     install_stderr,
+    install_stdout,
     make_input,
     make_print,
     make_safe_builtins,
@@ -27,6 +28,7 @@ from .builtins import (
     make_sandbox_sys,
     redirect_print,
     redirect_stderr,
+    redirect_stdout,
 )
 from .errors import StTimeout, StValidationError, strip_internal_frames
 from .fs import FileSystem, patch
@@ -48,6 +50,13 @@ class ExecResult:
 
     namespace: dict[str, Any] = field(default_factory=dict)
     stdout: str = ""
+    """``sys.stdout`` output produced during the execution: sandboxed
+    ``print`` calls plus host-side writes to the real ``sys.stdout`` on
+    the executing context (registered library code — ``df.info()`` is
+    the canonical case). Both route into ONE buffer, so interleaving is
+    preserved. Captured per-execution via a ContextVar-routing proxy,
+    so concurrent executions in one process don't cross-contaminate;
+    host callbacks can opt out with :func:`sandtrap.passthrough_stdio`."""
     stderr: str = ""
     """``sys.stderr`` output produced during the execution: the synthetic
     sandbox ``sys.stderr`` plus host-side writes to the real ``sys.stderr``
@@ -277,8 +286,9 @@ class Sandbox:
         # Also inject into builtins so imported modules can see print/help.
         ns["__builtins__"]["print"] = print_fn
 
-        # help() writes directly to stdout_buf/prints_list instead of
-        # sys.stdout, so sub-agent callbacks are not intercepted.
+        # help() writes directly to stdout_buf/prints_list (it predates
+        # the sys.stdout router; direct writes also skip the router's
+        # indirection for the common case).
         help_fn = make_safe_help(stdout_buf, prints_list)
         ns["help"] = help_fn
         injected["help"] = help_fn
@@ -334,9 +344,10 @@ class Sandbox:
         stack: ExitStack,
         print_fn: Any = None,
         stderr_buf: "TailBuffer | None" = None,
+        stdout_buf: "TailBuffer | None" = None,
     ) -> None:
         """Set up memory limits, network denial, filesystem interception,
-        and print/stderr redirection."""
+        and print/stdout/stderr redirection."""
         if self.policy.memory_limit is not None:
             stack.enter_context(memory_limit_context(self.policy.memory_limit))
 
@@ -347,9 +358,21 @@ class Sandbox:
         if self.filesystem is not None:
             stack.enter_context(patch(self.filesystem))
 
+        if print_fn is not None or stdout_buf is not None or stderr_buf is not None:
+            # capture routing must follow host libraries into threads
+            # they spawn, even when network gating (which also installs
+            # these) is off
+            from .net.patch import install_threading
+
+            install_threading()
+
         if print_fn is not None:
             install_print()
             stack.enter_context(redirect_print(print_fn))
+
+        if stdout_buf is not None:
+            install_stdout()
+            stack.enter_context(redirect_stdout(stdout_buf))
 
         if stderr_buf is not None:
             install_stderr()
@@ -513,9 +536,12 @@ class Sandbox:
         ``sys.argv`` — plus a stdin-backed ``input()``. Nothing else of
         ``sys`` is reachable.
 
-        ``result.stderr`` also carries host-side ``sys.stderr`` writes
-        made during the execution (registered library code, warnings) —
-        routed per-execution, so concurrent sandboxes don't mix streams.
+        ``result.stdout``/``result.stderr`` also carry host-side writes
+        to the real ``sys.stdout``/``sys.stderr`` made during the
+        execution (registered library code like ``df.info()``,
+        ``warnings``) — routed per-execution, so concurrent sandboxes
+        don't mix streams. Host callbacks that want the real console
+        instead can wrap output in :func:`sandtrap.passthrough_stdio`.
         """
         prepared = self._parse_and_rewrite(source)
         if isinstance(prepared, ExecResult):
@@ -529,7 +555,10 @@ class Sandbox:
         error = None
         with ExitStack() as stack:
             self._enter_sandbox_context(
-                stack, print_fn=ns["print"], stderr_buf=stderr_buf
+                stack,
+                print_fn=ns["print"],
+                stderr_buf=stderr_buf,
+                stdout_buf=stdout_buf,
             )
             try:
                 exec(code, ns)  # noqa: S102
@@ -682,7 +711,10 @@ class Sandbox:
         result_locals: dict[str, Any] = {}
         with ExitStack() as stack:
             self._enter_sandbox_context(
-                stack, print_fn=ns["print"], stderr_buf=stderr_buf
+                stack,
+                print_fn=ns["print"],
+                stderr_buf=stderr_buf,
+                stdout_buf=stdout_buf,
             )
             try:
                 exec(code, ns)  # noqa: S102
