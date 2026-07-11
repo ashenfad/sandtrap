@@ -149,7 +149,13 @@ class _VFSLoader:
     def find_module_file(self, top: str, max_dirs: int = 200) -> str | None:
         """Bounded BFS for ``<top>.py`` anywhere on the VFS — powers the
         did-you-mean in import errors. Skips the root itself (a root hit
-        would have resolved normally) and returns the shallowest match."""
+        would have resolved normally) and returns the shallowest match.
+
+        Only descends into directories that could legally appear in a
+        dotted import path (valid identifiers, non-dunder): a hit inside
+        ``.git/``, ``__pycache__/``, or ``my-stuff/`` would be a
+        non-actionable suggestion — and every skipped entry saves a
+        round-trip when the filesystem is RPC-bridged (RemoteFS)."""
         fs = self._filesystem
         if fs is None:
             return None
@@ -164,12 +170,16 @@ class _VFSLoader:
             except Exception:
                 continue
             for entry in entries:
+                if entry == target and d != "/":
+                    return d.rstrip("/") + "/" + entry
+                if not entry.isidentifier() or (
+                    entry.startswith("__") and entry.endswith("__")
+                ):
+                    continue  # can't ride a dotted import; skip the isdir
                 full = d.rstrip("/") + "/" + entry
                 try:
                     if fs.isdir(full):
                         queue.append(full)
-                    elif entry == target and d != "/":
-                        return full
                 except Exception:
                     continue
         return None

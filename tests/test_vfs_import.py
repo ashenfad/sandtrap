@@ -645,3 +645,25 @@ def test_suggestion_search_is_bounded():
     assert isinstance(
         result.error, ImportError
     )  # may or may not find it; must not hang
+
+
+def test_suggestion_skips_unimportable_directories():
+    """A hit inside a hidden / dunder / non-identifier directory can't
+    ride a dotted import — no suggestion beats a non-actionable one
+    (and skipping saves per-entry RPCs under RemoteFS)."""
+    sandbox, fs = _make_sandbox()
+    for d in ("/.hidden", "/__pycache__", "/my-stuff"):
+        fs.makedirs(d, exist_ok=True)
+        fs.write(f"{d}/evdata.py", b"VALUE = 1")
+
+    result = sandbox.exec("import evdata")
+    assert isinstance(result.error, ImportError)
+    msg = str(result.error)
+    assert "Found" not in msg
+    assert "Import of 'evdata' is not allowed" in msg
+
+    # ...but a legitimate location still wins
+    fs.makedirs("/helpers", exist_ok=True)
+    fs.write("/helpers/evdata.py", b"VALUE = 41")
+    result = sandbox.exec("import evdata")
+    assert "from helpers import evdata" in str(result.error)
