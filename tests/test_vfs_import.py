@@ -667,3 +667,21 @@ def test_suggestion_skips_unimportable_directories():
     fs.write("/helpers/evdata.py", b"VALUE = 41")
     result = sandbox.exec("import evdata")
     assert "from helpers import evdata" in str(result.error)
+
+
+def test_dotted_import_with_wrong_root_suggests_qualified_form():
+    """The gemma case: `import api._helpers` for /app/api/_helpers.py —
+    the top segment is a DIRECTORY, so the file search must fall back
+    to the leaf name to find the fix."""
+    sandbox, fs = _make_sandbox()
+    fs.makedirs("/app/api", exist_ok=True)
+    fs.write("/app/api/_helpers.py", b"VALUE = 41")
+
+    result = sandbox.exec("import api._helpers")
+    assert isinstance(result.error, ImportError)
+    msg = str(result.error)
+    assert "Found /app/api/_helpers.py" in msg
+    assert "from app.api import _helpers" in msg
+
+    result = sandbox.exec("from api._helpers import VALUE")
+    assert "from app.api import _helpers" in str(result.error)
