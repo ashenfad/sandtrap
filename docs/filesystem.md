@@ -21,6 +21,27 @@ f.close()
 
 When a filesystem is provided, all calls to `open()`, `os.stat()`, `os.listdir()`, `os.path.exists()`, `os.mkdir()`, `os.remove()`, `os.rename()`, `os.getcwd()`, `os.chdir()`, `os.path.isfile()`, `os.path.isdir()`, `os.path.realpath()`, `os.path.expanduser()`, `pathlib.Path.touch()`, and more route through the VFS. Interception is powered by [monkeyfs](https://github.com/ashenfad/monkeyfs), which sandtrap uses as a dependency.
 
+### Library data files
+
+Granted libraries can still read their own bundled data while a VFS is
+active (matplotlib's fonts, tzdata, package templates): monkeyfs allows
+read-only passthrough for paths under the running interpreter's
+`sys.prefix` / site-packages, discovered at import time.
+
+That discovery assumes granted libraries are installed *into the
+environment that runs the sandbox*. Two layouts break the assumption:
+
+- **Layered/overlay environments** (`uv run --with ...`, `uvx`): the
+  overlay becomes `sys.prefix`, so packages in the base environment
+  fall outside the passthrough roots.
+- **Editable installs** (`pip install -e`): the package lives in its
+  source checkout, on `sys.path` but under no interpreter prefix.
+
+In either case a library reading its own data files fails with a
+`FileNotFoundError` for a file that plainly exists on disk. The fix is
+to install granted libraries into the sandbox's own environment (a
+regular, non-editable install).
+
 ### FileSystem protocol
 
 `FileSystem` is a `typing.Protocol` from monkeyfs -- any object with the right methods works, no subclassing required. See the [monkeyfs README](https://github.com/ashenfad/monkeyfs) for the full protocol. The most commonly needed methods:
