@@ -44,6 +44,26 @@ _FS_METHODS = frozenset(
         "rename",
         "getcwd",
         "chdir",
+        # the rest of the monkeyfs surface its patch layer can demand
+        # (_require(fs, name)): missing entries surface as
+        # NotImplementedError from ordinary library code — matplotlib's
+        # savefig calls os.path.realpath, which monkeyfs routes here
+        "realpath",
+        "resolve_path",
+        "getsize",
+        "samefile",
+        "lexists",
+        "islink",
+        "readlink",
+        "link",
+        "symlink",
+        "rmdir",
+        "replace",
+        "access",
+        "truncate",
+        "utime",
+        "chmod",
+        "chown",
     }
 )
 
@@ -173,6 +193,58 @@ class RemoteFS:
 
     def chdir(self, path: str) -> None:
         self._proxy._call("chdir", path)
+
+    # -- the rest of the monkeyfs surface (straight RPC): anything the
+    # -- patch layer can _require() must cross the boundary, or plain
+    # -- library code breaks (matplotlib savefig -> os.path.realpath)
+
+    def realpath(self, path: str) -> str:
+        return self._proxy._call("realpath", path)
+
+    def resolve_path(self, path: str) -> str:
+        return self._proxy._call("resolve_path", path)
+
+    def getsize(self, path: str) -> int:
+        return self._proxy._call("getsize", path)
+
+    def samefile(self, path1: str, path2: str) -> bool:
+        return self._proxy._call("samefile", path1, path2)
+
+    def lexists(self, path: str) -> bool:
+        return self._proxy._call("lexists", path)
+
+    def islink(self, path: str) -> bool:
+        return self._proxy._call("islink", path)
+
+    def readlink(self, path: str) -> str:
+        return self._proxy._call("readlink", path)
+
+    def link(self, src: str, dst: str) -> None:
+        self._proxy._call("link", src, dst)
+
+    def symlink(self, src: str, dst: str) -> None:
+        self._proxy._call("symlink", src, dst)
+
+    def rmdir(self, path: str) -> None:
+        self._proxy._call("rmdir", path)
+
+    def replace(self, src: str, dst: str) -> None:
+        self._proxy._call("replace", src, dst)
+
+    def access(self, path: str, mode: int) -> bool:
+        return self._proxy._call("access", path, mode)
+
+    def truncate(self, path: str, length: int) -> None:
+        self._proxy._call("truncate", path, length)
+
+    def utime(self, path: str, times: Any = None) -> None:
+        self._proxy._call("utime", path, times)
+
+    def chmod(self, path: str, mode: int) -> None:
+        self._proxy._call("chmod", path, mode)
+
+    def chown(self, path: str, uid: int, gid: int) -> None:
+        self._proxy._call("chown", path, uid, gid)
 
     def __repr__(self) -> str:
         return "RemoteFS()"
