@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **`RemoteFS` implements the full monkeyfs surface.** The RPC bridge
+  covered core content/metadata ops but not the rest of what the
+  monkeyfs patch layer can demand (`_require`): `realpath`,
+  `resolve_path`, `getsize`, `samefile`, `rmdir`, `replace`, `access`,
+  `lexists`, `islink`, `readlink`, `link`, `symlink`, `truncate`,
+  `utime`, `chmod`, `chown`. The visible casualty: matplotlib's
+  ``savefig`` calls ``os.path.realpath``, which monkeyfs routes to the
+  filesystem — so ALL matplotlib chart saving raised
+  "NotImplementedError: RemoteFS does not implement realpath()" under
+  process/kernel isolation.
+
+### Changed
+- The import did-you-mean covers dotted imports with a wrong root
+  (`import api._helpers` for /app/api/_helpers.py suggests
+  `from app.api import _helpers`), and its search skips directories
+  that can't appear in a dotted import path (hidden, dunder,
+  non-identifier names).
+
 ## [0.2.7] - 2026-07-11
 
 ### Changed

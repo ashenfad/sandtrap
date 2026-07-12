@@ -136,3 +136,32 @@ def test_writes_survive_worker_crash_respawn(fs):
         assert r.error is None
         assert r.namespace["content"] == "before crash"
     assert fs.read("/kept.txt") == b"before crash"
+
+
+def test_pathlike_metadata_crosses_the_boundary(fs, sb):
+    """The rest of the monkeyfs surface: os.path.realpath (matplotlib's
+    savefig calls it), getsize, samefile — all previously raised
+    'RemoteFS does not implement ...' and broke plain library code
+    under process isolation."""
+    fs.write("/plot.png", b"\x89PNG fake")
+    r = sb.exec(
+        "import os\n"
+        "rp = os.path.realpath('/plot.png')\n"
+        "size = os.path.getsize('/plot.png')\n"
+        "same = os.path.samefile('/plot.png', '/plot.png')\n"
+        "os.makedirs('/tmp2', exist_ok=True)\n"
+        "os.rmdir('/tmp2')\n"
+        "gone = not os.path.exists('/tmp2')"
+    )
+    assert r.error is None, r.error
+    assert r.namespace["rp"] == "/plot.png"
+    assert r.namespace["size"] == len(b"\x89PNG fake")
+    assert r.namespace["same"] is True
+    assert r.namespace["gone"] is True
+
+
+def test_replace_crosses_the_boundary(fs, sb):
+    fs.write("/old.txt", b"content")
+    r = sb.exec("import os\nos.replace('/old.txt', '/new.txt')")
+    assert r.error is None, r.error
+    assert fs.exists("/new.txt") and not fs.exists("/old.txt")
