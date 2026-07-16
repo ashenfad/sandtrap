@@ -17,6 +17,7 @@ def sandbox(
     filesystem: Any | None = None,
     snapshot_prints: bool = False,
     rpc_handlers: Mapping[str, Callable[[str, tuple, dict], Any]] | None = None,
+    allow_degraded: bool = False,
 ) -> Sandbox:
     """Create a sandbox with the specified isolation level.
 
@@ -50,6 +51,15 @@ def sandbox(
         value or raises an exception that propagates to the agent.
         Ignored under in-process isolation (in-process consumers can
         place real objects directly in the namespace).
+    allow_degraded:
+        Only meaningful for ``isolation="kernel"``.  When the platform
+        can't apply the requested kernel mechanisms (missing package,
+        kernel too old, unsupported OS), ``False`` (default) raises
+        :class:`~sandtrap.IsolationUnavailable` rather than silently
+        running user code with reduced isolation.  Set ``True`` to
+        proceed anyway with a :class:`RuntimeWarning`; the shortfall is
+        reported on ``ExecResult.isolation``.  Ignored for ``"none"``
+        and ``"process"`` (neither requests kernel restrictions).
     """
     if isolation == "none":
         return Sandbox(
@@ -71,4 +81,5 @@ def sandbox(
         isolation=kernel_isolation,
         snapshot_prints=snapshot_prints,
         rpc_handlers=rpc_handlers,
+        allow_degraded=allow_degraded,
     )

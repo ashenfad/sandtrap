@@ -8,7 +8,7 @@ by sandtrap's Python-level policy.
 import multiprocessing
 import os
 import sys
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import pytest
 
@@ -86,8 +86,9 @@ def _landlock_try_read_inside(root):
 def _landlock_skipped_when_host_fs(root):
     """Apply via platform with allow_host_fs=True — Landlock should not apply."""
     from sandtrap.process.platform import _apply_linux
+    from sandtrap.sandbox import IsolationStatus
 
-    _apply_linux(root, allow_host_fs=True)
+    _apply_linux(IsolationStatus(requested=True), root, allow_host_fs=True)
 
     # If Landlock was skipped, we can read outside root
     try:
@@ -457,7 +458,7 @@ class TestApplyIsolation:
         with patch("sandtrap.process.platform._apply_linux") as mock:
             apply_isolation("auto", str(tmp_path))
             mock.assert_called_once_with(
-                str(tmp_path), allow_network=False, allow_host_fs=False
+                ANY, str(tmp_path), allow_network=False, allow_host_fs=False
             )
 
     @pytest.mark.skipif(sys.platform != "darwin", reason="macOS-only")
@@ -468,7 +469,7 @@ class TestApplyIsolation:
         with patch("sandtrap.process.platform._apply_darwin") as mock:
             apply_isolation("auto", str(tmp_path))
             mock.assert_called_once_with(
-                str(tmp_path), allow_network=False, allow_host_fs=False
+                ANY, str(tmp_path), allow_network=False, allow_host_fs=False
             )
 
     @pytest.mark.skipif(sys.platform != "darwin", reason="macOS-only")
@@ -479,7 +480,7 @@ class TestApplyIsolation:
         with patch("sandtrap.process.platform._apply_darwin") as mock:
             apply_isolation("auto", str(tmp_path), allow_network=True)
             mock.assert_called_once_with(
-                str(tmp_path), allow_network=True, allow_host_fs=False
+                ANY, str(tmp_path), allow_network=True, allow_host_fs=False
             )
 
     @pytest.mark.skipif(sys.platform != "linux", reason="Linux-only")
@@ -490,7 +491,7 @@ class TestApplyIsolation:
         with patch("sandtrap.process.platform._apply_linux") as mock:
             apply_isolation("auto", str(tmp_path), allow_network=True)
             mock.assert_called_once_with(
-                str(tmp_path), allow_network=True, allow_host_fs=False
+                ANY, str(tmp_path), allow_network=True, allow_host_fs=False
             )
 
     @pytest.mark.skipif(sys.platform != "darwin", reason="macOS-only")
@@ -501,7 +502,7 @@ class TestApplyIsolation:
         with patch("sandtrap.process.platform._apply_darwin") as mock:
             apply_isolation("auto", str(tmp_path), allow_host_fs=True)
             mock.assert_called_once_with(
-                str(tmp_path), allow_network=False, allow_host_fs=True
+                ANY, str(tmp_path), allow_network=False, allow_host_fs=True
             )
 
     @pytest.mark.skipif(sys.platform != "linux", reason="Linux-only")
@@ -512,7 +513,7 @@ class TestApplyIsolation:
         with patch("sandtrap.process.platform._apply_linux") as mock:
             apply_isolation("auto", str(tmp_path), allow_host_fs=True)
             mock.assert_called_once_with(
-                str(tmp_path), allow_network=False, allow_host_fs=True
+                ANY, str(tmp_path), allow_network=False, allow_host_fs=True
             )
 
     @pytest.mark.skipif(sys.platform != "darwin", reason="macOS-only")
@@ -525,7 +526,7 @@ class TestApplyIsolation:
                 "auto", str(tmp_path), allow_network=True, allow_host_fs=True
             )
             mock.assert_called_once_with(
-                str(tmp_path), allow_network=True, allow_host_fs=True
+                ANY, str(tmp_path), allow_network=True, allow_host_fs=True
             )
 
     @pytest.mark.skipif(sys.platform != "linux", reason="Linux-only")
@@ -538,7 +539,7 @@ class TestApplyIsolation:
                 "auto", str(tmp_path), allow_network=True, allow_host_fs=True
             )
             mock.assert_called_once_with(
-                str(tmp_path), allow_network=True, allow_host_fs=True
+                ANY, str(tmp_path), allow_network=True, allow_host_fs=True
             )
 
     def test_root_none_forwarded(self):
@@ -552,7 +553,113 @@ class TestApplyIsolation:
         )
         with patch(platform_fn) as mock:
             apply_isolation("auto", None, allow_network=True)
-            mock.assert_called_once_with(None, allow_network=True, allow_host_fs=False)
+            mock.assert_called_once_with(
+                ANY, None, allow_network=True, allow_host_fs=False
+            )
+
+
+# =====================================================================
+# IsolationStatus / fail-closed behaviour
+# =====================================================================
+
+
+class TestIsolationStatus:
+    def test_not_requested_never_degraded(self):
+        from sandtrap.sandbox import IsolationStatus
+
+        # process mode: no kernel restrictions requested, so no shortfall.
+        assert IsolationStatus(requested=False).degraded is False
+
+    def test_all_applied_not_degraded(self):
+        from sandtrap.sandbox import IsolationStatus
+
+        s = IsolationStatus(
+            requested=True, platform="linux", seccomp=True, landlock=True
+        )
+        assert s.degraded is False
+
+    def test_requested_but_mechanism_unavailable_is_degraded(self):
+        from sandtrap.sandbox import IsolationStatus
+
+        s = IsolationStatus(
+            requested=True, platform="linux", seccomp=True, landlock=False
+        )
+        assert s.degraded is True
+
+    def test_requested_but_platform_offers_nothing_is_degraded(self):
+        from sandtrap.sandbox import IsolationStatus
+
+        # e.g. an unsupported platform: every flag stays None.
+        assert IsolationStatus(requested=True, platform="win32").degraded is True
+
+    def test_skipped_mechanism_none_does_not_count(self):
+        from sandtrap.sandbox import IsolationStatus
+
+        # Landlock intentionally skipped (no confined root) but seccomp applied.
+        s = IsolationStatus(
+            requested=True, platform="linux", seccomp=True, landlock=None
+        )
+        assert s.degraded is False
+
+
+def _force_kernel_unavailable(monkeypatch):
+    """Make every kernel mechanism report unavailable, so kernel mode
+    degrades on any platform.  Patched before the worker forks, so the
+    child inherits the patched module functions via fork."""
+    import sandtrap.process.landlock as landlock
+    import sandtrap.process.seatbelt as seatbelt
+    import sandtrap.process.seccomp as seccomp
+
+    monkeypatch.setattr(landlock, "apply", lambda *a, **k: False)
+    monkeypatch.setattr(seccomp, "apply", lambda *a, **k: False)
+    monkeypatch.setattr(seatbelt, "apply", lambda *a, **k: False)
+
+
+class TestFailClosed:
+    def test_kernel_raises_when_isolation_unavailable(self, monkeypatch):
+        """Default (allow_degraded=False): degraded kernel isolation is a
+        loud failure at worker startup, not a silent downgrade."""
+        from sandtrap import IsolationUnavailable, Policy, sandbox
+
+        _force_kernel_unavailable(monkeypatch)
+        policy = Policy(timeout=5.0, tick_limit=100_000)
+        with pytest.raises(IsolationUnavailable):
+            with sandbox(policy, isolation="kernel") as sb:
+                sb.exec("x = 1")
+
+    def test_allow_degraded_warns_and_proceeds(self, monkeypatch):
+        """allow_degraded=True downgrades the failure to a warning and
+        reports the shortfall on ExecResult.isolation."""
+        import warnings
+
+        from sandtrap import Policy, sandbox
+
+        _force_kernel_unavailable(monkeypatch)
+        policy = Policy(timeout=5.0, tick_limit=100_000)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            with sandbox(policy, isolation="kernel", allow_degraded=True) as sb:
+                result = sb.exec("x = 2")
+        assert result.namespace.get("x") == 2
+        assert result.isolation is not None
+        assert result.isolation.degraded is True
+        assert any(
+            issubclass(x.category, RuntimeWarning)
+            and "reduced isolation" in str(x.message)
+            for x in w
+        )
+
+    def test_process_mode_reports_status_not_degraded(self):
+        """isolation='process' requests no kernel restrictions, so it is
+        never degraded and never raises."""
+        from sandtrap import Policy, sandbox
+
+        policy = Policy(timeout=5.0, tick_limit=100_000)
+        with sandbox(policy, isolation="process") as sb:
+            result = sb.exec("x = 3")
+        assert result.isolation is not None
+        assert result.isolation.requested is False
+        assert result.isolation.degraded is False
 
 
 # =====================================================================

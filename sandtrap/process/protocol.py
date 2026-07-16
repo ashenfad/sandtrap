@@ -25,6 +25,8 @@ import pickle
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
+from ..sandbox import IsolationStatus
+
 
 def filter_prints(
     prints: list[tuple[Any, ...]],
@@ -94,7 +96,14 @@ class ShutdownMsg:
 
 @dataclass
 class ReadyMsg:
-    """Worker is initialised and ready for exec requests."""
+    """Worker is initialised and ready for exec requests.
+
+    Carries the :class:`~sandtrap.IsolationStatus` recorded when the
+    worker applied kernel isolation after fork, so the parent can decide
+    whether a degraded result is acceptable before running user code.
+    """
+
+    isolation: IsolationStatus | None = None
 
 
 @dataclass

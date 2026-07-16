@@ -148,9 +148,46 @@ pip install sandtrap[process]
 
 No extra packages needed on macOS.
 
-### Graceful degradation
+### Fail-closed when isolation is unavailable
 
-All kernel isolation is best-effort. If the kernel features or packages aren't available, the sandbox still works -- the Python-level policy enforcement in `Sandbox` remains active. Warnings are emitted when kernel restrictions can't be applied.
+Kernel isolation is best-effort in the sense that the *mechanisms* may not exist on a given platform (missing `sandtrap[process]` packages, Landlock-less kernel, unsupported OS). But `isolation="kernel"` does **not** silently downgrade when they're missing — that would run user code with none of the protection the caller asked for.
+
+Instead, the worker records exactly what took effect and the parent **fails closed**: if kernel isolation was requested but couldn't be fully applied, entering the sandbox raises `IsolationUnavailable` before any user code runs.
+
+```python
+from sandtrap import IsolationUnavailable, Policy, sandbox
+
+try:
+    with sandbox(Policy(), isolation="kernel", filesystem=IsolatedFS("/tmp/box")) as sb:
+        sb.exec("...")
+except IsolationUnavailable as e:
+    # e.g. running in a container without Landlock, or sandtrap[process] not installed
+    ...
+```
+
+To proceed anyway with whatever isolation *is* available (e.g. seccomp without Landlock), pass `allow_degraded=True`. This downgrades the failure to a `RuntimeWarning` and records the shortfall:
+
+```python
+with sandbox(Policy(), isolation="kernel", allow_degraded=True) as sb:
+    result = sb.exec("...")
+    print(result.isolation)            # IsolationStatus(...)
+    print(result.isolation.degraded)   # True if something couldn't be applied
+```
+
+Either way, the Python-level policy enforcement in `Sandbox` is always active regardless of kernel availability. The fail-closed default only governs whether a *missing kernel layer* is treated as an error.
+
+#### Inspecting what was applied
+
+Every `ExecResult` from a process/kernel sandbox carries an `isolation: IsolationStatus`:
+
+| Field | Meaning |
+|-------|---------|
+| `requested` | `True` for `isolation="kernel"`, `False` for `"process"` |
+| `platform` | `sys.platform` in the worker |
+| `landlock` / `seccomp` / `seatbelt` | `True` applied, `False` requested-but-unavailable, `None` not applicable |
+| `.degraded` | `True` if requested isolation wasn't fully applied |
+
+This lets a host *verify* the isolation level rather than assume the requested one was achievable — useful when the same code runs across dev laptops, CI, and containers with different kernel support.
 
 ## Kernel enforcement is conditional
 
