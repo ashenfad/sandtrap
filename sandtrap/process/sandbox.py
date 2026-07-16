@@ -202,22 +202,35 @@ class ProcessSandbox:
         # user code has run yet — the worker is idle at ReadyMsg — so
         # killing here is safe and keeps a degraded worker from ever
         # executing.
+        #
+        # When kernel isolation was requested (``self._isolation ==
+        # "auto"``) a missing status is treated the same as a degraded
+        # one: we can't *confirm* the restrictions applied, and
+        # fail-closed means unconfirmed is a failure, not a pass. In
+        # practice the worker always reports a status; this guards
+        # against version skew (an older worker) or a future refactor
+        # that drops the field.
         self._isolation_status = msg.isolation
         status = msg.isolation
-        if status is not None and status.degraded:
+        if self._isolation == "auto" and (status is None or status.degraded):
+            summary = (
+                status.summary()
+                if status is not None
+                else "kernel isolation status missing from worker"
+            )
             if not self._allow_degraded:
                 self._kill()
                 raise IsolationUnavailable(
-                    f"{status.summary()}. Kernel isolation was requested but "
-                    "could not be fully applied on this platform. Pass "
-                    "allow_degraded=True to proceed with reduced isolation, "
-                    "or run on a platform with the required support."
+                    f"{summary}. Kernel isolation was requested but "
+                    "could not be fully applied (or confirmed) on this "
+                    "platform. Pass allow_degraded=True to proceed with "
+                    "reduced isolation, or run on a platform with the "
+                    "required support."
                 )
             warnings.warn(
-                f"{status.summary()}. Proceeding with reduced isolation "
-                "(allow_degraded=True).",
+                f"{summary}. Proceeding with reduced isolation (allow_degraded=True).",
                 RuntimeWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
 
     def _kill(self) -> None:
