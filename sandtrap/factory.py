@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from .policy import Policy
 from .sandbox import Sandbox
+
+if TYPE_CHECKING:
+    from .process.sandbox import ProcessSandbox
 
 
 def sandbox(
@@ -18,7 +21,7 @@ def sandbox(
     snapshot_prints: bool = False,
     rpc_handlers: Mapping[str, Callable[[str, tuple, dict], Any]] | None = None,
     allow_degraded: bool = False,
-) -> Sandbox:
+) -> Sandbox | ProcessSandbox:
     """Create a sandbox with the specified isolation level.
 
     Parameters

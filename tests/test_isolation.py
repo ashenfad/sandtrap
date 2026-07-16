@@ -661,6 +661,34 @@ class TestFailClosed:
         assert result.isolation.requested is False
         assert result.isolation.degraded is False
 
+    def test_kernel_raises_when_status_missing(self, monkeypatch):
+        """Fail-closed on an unconfirmable status: if kernel isolation was
+        requested but the worker reports no IsolationStatus (version skew /
+        a dropped field), 'unconfirmed' is treated as failure, not a pass."""
+        import sandtrap.process.platform as platform
+        from sandtrap import IsolationUnavailable, Policy, sandbox
+
+        # Simulate a worker that hands back a bare ReadyMsg (isolation=None).
+        # The local ``from .platform import apply_isolation`` in the worker
+        # picks up this patched attribute, inherited via fork.
+        monkeypatch.setattr(platform, "apply_isolation", lambda *a, **k: None)
+        policy = Policy(timeout=5.0, tick_limit=100_000)
+        with pytest.raises(IsolationUnavailable, match="status missing"):
+            with sandbox(policy, isolation="kernel") as sb:
+                sb.exec("x = 1")
+
+    def test_missing_status_ignored_for_process_mode(self, monkeypatch):
+        """A missing status is only a failure when kernel isolation was
+        requested — process mode asks for none, so it must not raise."""
+        import sandtrap.process.platform as platform
+        from sandtrap import Policy, sandbox
+
+        monkeypatch.setattr(platform, "apply_isolation", lambda *a, **k: None)
+        policy = Policy(timeout=5.0, tick_limit=100_000)
+        with sandbox(policy, isolation="process") as sb:
+            result = sb.exec("x = 4")
+        assert result.namespace.get("x") == 4
+
 
 # =====================================================================
 # available() functions

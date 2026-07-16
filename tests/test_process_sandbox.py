@@ -2,6 +2,7 @@
 
 import os
 import signal
+import sys
 import threading
 import time
 from unittest.mock import patch
@@ -531,6 +532,17 @@ def _recording_apply_isolation(marker_path):
                 },
                 f,
             )
+        # Return a non-degraded status so the parent's fail-closed check
+        # passes — these tests only care that apply_isolation is called
+        # with the right args, not about the isolation outcome.
+        from sandtrap.sandbox import IsolationStatus
+
+        return IsolationStatus(
+            requested=(mode == "auto"),
+            platform=sys.platform,
+            seccomp=True,
+            seatbelt=True,
+        )
 
     return _record
 
