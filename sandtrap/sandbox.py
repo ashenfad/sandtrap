@@ -162,11 +162,17 @@ class Sandbox:
         mode: Literal["wrapped", "raw"] = "wrapped",
         filesystem: FileSystem | None = None,
         snapshot_prints: bool = False,
+        echo: Literal["none", "last", "all"] = "none",
     ) -> None:
         self.policy = policy
         self.mode = mode
         self.filesystem = filesystem
         self.snapshot_prints = snapshot_prints
+        # REPL-style auto-display of top-level expression statements.
+        # Fixed at construction: the setting changes the compiled AST,
+        # so making it mutable would require invalidating any cached
+        # compilations (e.g. StClass._compiled_cls in raw mode).
+        self.echo = echo
         self._cancel_flag = threading.Event()
 
         # Install FS-aware patches once (idempotent, permanent) so that
@@ -366,6 +372,31 @@ class Sandbox:
         # Also inject into builtins so imported modules can see print/help.
         ns["__builtins__"]["print"] = print_fn
 
+        # Auto-display gate for top-level expression statements (REPL
+        # echo). Mirrors print_fn so displays and prints share the same
+        # two ordered channels: raw objects into prints_list (rendered
+        # downstream by the consumer), repr text into stdout_buf.
+        if self.echo != "none":
+
+            def display_fn(value: Any) -> None:
+                # sys.displayhook semantics: suppress None. print(x) is
+                # itself a top-level expression whose value is None, so
+                # this is what keeps `print(x)` from double-echoing
+                # while a bare `x` echoes once.
+                if value is None:
+                    return
+                checkpoint()
+                if prints_list is not None:
+                    try:
+                        snapped = copy.deepcopy((value,))
+                    except Exception:
+                        snapped = (value,)
+                    prints_list.append(snapped)
+                stdout_handler(repr(value))
+
+            ns["__st_display__"] = display_fn
+            injected["__st_display__"] = display_fn
+
         # help() writes directly to stdout_buf/prints_list (it predates
         # the sys.stdout router; direct writes also skip the router's
         # indirection for the common case).
@@ -476,7 +507,7 @@ class Sandbox:
             return ExecResult(error=e)
 
         wrapped_mode = self.mode == "wrapped"
-        rewriter = Rewriter(wrapped_mode=wrapped_mode)
+        rewriter = Rewriter(wrapped_mode=wrapped_mode, echo=self.echo)
         try:
             tree = rewriter.visit(tree)
         except StValidationError as e:

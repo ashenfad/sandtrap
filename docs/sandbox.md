@@ -18,6 +18,7 @@ sb = sandbox(policy)
 - `mode` -- `"wrapped"` (default) wraps user-defined functions/classes for pickling. `"raw"` returns plain objects. See [serialization.md](serialization.md).
 - `filesystem` -- a `FileSystem` implementation for VFS interception (see [filesystem.md](filesystem.md)).
 - `snapshot_prints` -- when `True`, deep-copies `print()` arguments at call time and populates `result.prints`. Default `False`. Works with all isolation levels.
+- `echo` -- `"none"` (default), `"last"`, or `"all"`. REPL/notebook-style auto-display of bare top-level expressions. See [Expression echo](#expression-echo-repl-style).
 
 ## Context manager
 
@@ -106,6 +107,45 @@ Objects are deep-copied at print time, so mutations after `print()` don't affect
 `snapshot_prints` works with all isolation levels. With process isolation (`isolation="process"` or `"kernel"`), prints are pickled back with the result -- any entries that can't be pickled are silently dropped.
 
 If code errors mid-execution, `result.prints` still contains all prints that occurred before the error.
+
+## Expression echo (REPL-style)
+
+Agents (and people) coming from notebooks often write a bare expression -- `x` -- expecting to see its value, as at a REPL. By default sandtrap runs it silently, like a script. The `echo` option enables notebook semantics:
+
+```python
+with sandbox(Policy(timeout=5.0), echo="all") as sb:
+    result = sb.exec("""
+x = 41 + 1
+x
+print("mid", x)
+'done'
+""")
+
+result.stdout    # "42\nmid 42\n'done'\n"
+```
+
+- `"none"` (default) -- script semantics, no echo.
+- `"all"` -- every bare top-level expression echoes its value.
+- `"last"` -- only a *final* expression statement echoes (Jupyter's `last_expr`).
+
+Echo follows `sys.displayhook` conventions:
+
+- **repr, not str** -- `'done'` echoes with quotes; `print` output stays raw.
+- **`None` is suppressed** -- `print(x)` is itself a top-level expression whose value is `None`, so it never double-echoes; a call returning a value echoes that value.
+- **Top level only** -- expressions inside functions, loops, or `if` blocks never echo.
+- A leading string followed by other statements is a module docstring and is not echoed; a program that is *just* a string literal echoes like a notebook cell.
+
+An echoed value lands in **both** output channels at its execution position, exactly as if it had been passed to a single-argument `print`: its `repr` goes to `result.stdout`, and with `snapshot_prints=True` the raw object is appended to `result.prints` as a `(value,)` tuple. Interleaving with real prints is preserved in both channels, and consumers that render `result.prints` downstream (e.g. with a budgeted renderer) handle displays and prints identically:
+
+```python
+with sandbox(Policy(timeout=5.0), echo="all", snapshot_prints=True) as sb:
+    result = sb.exec("1\nprint('two')\n3")
+
+result.stdout    # '1\ntwo\n3\n'
+result.prints    # [(1,), ('two',), (3,)]
+```
+
+`echo` works with all isolation levels, and `result.stdout` remains capped by `Policy.max_stdout` -- a huge echoed repr is tail-truncated like any other output. Displayed expressions pass through the same attribute/policy gates as all other code, and each display fires a checkpoint like a `print` call.
 
 ## Error handling
 
