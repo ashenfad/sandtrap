@@ -12,7 +12,7 @@ from collections.abc import Callable, Mapping
 from typing import Any, Literal
 
 from ..policy import Policy
-from ..sandbox import ExecResult
+from ..sandbox import ExecResult, IsolationStatus, IsolationUnavailable
 from .protocol import (
     ExecMsg,
     ReadyMsg,
@@ -84,6 +84,14 @@ class ProcessSandbox:
     isolation:
         ``"auto"`` applies platform-appropriate kernel sandboxing;
         ``"none"`` skips it.
+    allow_degraded:
+        When ``isolation="auto"`` and the platform can't apply the
+        requested kernel mechanisms, ``False`` (default) raises
+        :class:`~sandtrap.IsolationUnavailable` when the worker starts;
+        ``True`` proceeds with a :class:`RuntimeWarning` and reports the
+        shortfall on ``ExecResult.isolation``.  Ignored for
+        ``isolation="none"`` (a bare process boundary requests no kernel
+        restrictions, so there's nothing to fall short of).
     """
 
     def __init__(
@@ -95,11 +103,14 @@ class ProcessSandbox:
         isolation: Literal["auto", "none"] = "auto",
         snapshot_prints: bool = False,
         rpc_handlers: Mapping[str, RpcHandler] | None = None,
+        allow_degraded: bool = False,
     ) -> None:
         self._policy = policy
         self._filesystem = filesystem
         self._mode = mode
         self._isolation = isolation
+        self._allow_degraded = allow_degraded
+        self._isolation_status: IsolationStatus | None = None
         self._snapshot_prints = snapshot_prints
         self._rpc_handlers: dict[str, RpcHandler] = dict(rpc_handlers or {})
 
@@ -185,6 +196,29 @@ class ProcessSandbox:
         if not isinstance(msg, ReadyMsg):
             self._kill()
             raise RuntimeError(f"Unexpected message from worker: {msg!r}")
+
+        # Record what kernel isolation actually took effect, and fail
+        # closed if the worker couldn't apply what was asked for. No
+        # user code has run yet — the worker is idle at ReadyMsg — so
+        # killing here is safe and keeps a degraded worker from ever
+        # executing.
+        self._isolation_status = msg.isolation
+        status = msg.isolation
+        if status is not None and status.degraded:
+            if not self._allow_degraded:
+                self._kill()
+                raise IsolationUnavailable(
+                    f"{status.summary()}. Kernel isolation was requested but "
+                    "could not be fully applied on this platform. Pass "
+                    "allow_degraded=True to proceed with reduced isolation, "
+                    "or run on a platform with the required support."
+                )
+            warnings.warn(
+                f"{status.summary()}. Proceeding with reduced isolation "
+                "(allow_degraded=True).",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
     def _kill(self) -> None:
         """Force-kill the worker process."""
@@ -358,6 +392,7 @@ class ProcessSandbox:
                     error=msg.error,
                     ticks=msg.ticks,
                     prints=msg.prints,
+                    isolation=self._isolation_status,
                 )
                 return self._reactivate_namespace(result)
             if isinstance(msg, WorkerErrorMsg):

@@ -44,6 +44,81 @@ _exec_counter = itertools.count(1)
 _INTERNAL_KEYS = {"__builtins__", "__name__"}
 
 
+class IsolationUnavailable(RuntimeError):
+    """Raised when ``isolation="kernel"`` is requested but the platform
+    can't apply the kernel-level mechanisms it depends on, and the caller
+    hasn't opted into degradation with ``allow_degraded=True``.
+
+    Fails loud instead of silently running user code with no kernel
+    restrictions.  Surfaces when the worker is spawned (entering the
+    context manager / first ``exec``), before any user code runs.
+    """
+
+
+@dataclass
+class IsolationStatus:
+    """What kernel-level isolation actually got applied in the worker.
+
+    Attached to every :class:`ExecResult` from a process/kernel sandbox
+    (``None`` for in-process ``isolation="none"``).  Lets the host
+    *verify* — not merely assume — that the restrictions it asked for
+    are in force.
+
+    Each mechanism flag is:
+
+    - ``True``  — requested and applied,
+    - ``False`` — requested but the platform couldn't provide it
+      (missing package, kernel too old, unsupported OS),
+    - ``None``  — not applicable / not requested (e.g. Landlock when no
+      filesystem root is confined, or the mechanism for another OS).
+    """
+
+    requested: bool
+    """Whether kernel isolation was asked for (``isolation="kernel"``).
+    ``False`` for ``isolation="process"`` — a bare process boundary with
+    no kernel restrictions."""
+    platform: str = ""
+    landlock: bool | None = None
+    seccomp: bool | None = None
+    seatbelt: bool | None = None
+
+    @property
+    def degraded(self) -> bool:
+        """True if kernel isolation was requested but not fully applied.
+
+        A requested mechanism reporting ``False`` counts as degraded; a
+        platform that offers none of the mechanisms (all ``None`` while
+        ``requested``) is fully degraded.  ``None`` flags for
+        deliberately-skipped mechanisms (no confined root, other OS) do
+        not count.
+        """
+        if not self.requested:
+            return False
+        applicable = [
+            m for m in (self.landlock, self.seccomp, self.seatbelt) if m is not None
+        ]
+        if not applicable:
+            return True
+        return not all(applicable)
+
+    def summary(self) -> str:
+        """One-line human-readable description of applied isolation."""
+        if not self.requested:
+            return "process isolation only (no kernel restrictions requested)"
+        parts = []
+        for name, flag in (
+            ("landlock", self.landlock),
+            ("seccomp", self.seccomp),
+            ("seatbelt", self.seatbelt),
+        ):
+            if flag is True:
+                parts.append(f"{name}=applied")
+            elif flag is False:
+                parts.append(f"{name}=UNAVAILABLE")
+        applied = ", ".join(parts) if parts else "nothing available"
+        return f"kernel isolation on {self.platform or 'unknown'}: {applied}"
+
+
 @dataclass
 class ExecResult:
     """Result of a sandbox execution."""
@@ -66,6 +141,11 @@ class ExecResult:
     error: BaseException | None = None
     ticks: int = 0
     prints: list[tuple[Any, ...]] = field(default_factory=list)
+    isolation: IsolationStatus | None = None
+    """The kernel-level isolation actually applied in the worker, for
+    process/kernel sandboxes; ``None`` for in-process execution.  Lets
+    the host confirm what restrictions are in force rather than trusting
+    the requested level was achievable — see :class:`IsolationStatus`."""
 
 
 class Sandbox:

@@ -84,17 +84,37 @@ The default mode runs in-process and shares the host's memory space. It is **not
 
 ### Subprocess (`isolation="process"` / `isolation="kernel"`)
 
-`isolation="kernel"` adds a process boundary with kernel-level restrictions:
+`isolation="process"` runs sandboxed code in a forked child process. Its value is a **process boundary**: crashes, OOM, and segfaults in the child don't take down the host, namespaces are serialized across the boundary (so in-place mutations don't propagate back), and the child can be killed on timeout. It applies no kernel restrictions.
+
+`isolation="kernel"` is `"process"` **plus** a best-effort kernel layer:
 
 - **Filesystem** -- Landlock (Linux) or Seatbelt (macOS) restricts access to the `IsolatedFS` root directory
 - **Syscalls** -- seccomp (Linux) or Seatbelt (macOS) blocks process spawning, and blocks network when the policy doesn't need it
-- **Process isolation** -- crashes, OOM, or segfaults in the child don't affect the host
 
-Kernel restrictions are applied once at worker startup and **cannot be loosened afterward** (seccomp/Landlock are strictly monotonic; Seatbelt is one-shot). If any part of the policy grants `network_access=True` or `host_fs_access=True` to any registration, the corresponding kernel restriction is **completely off for the entire worker process.** In that case, only the Python-level `ContextVar` gating enforces per-callable access control. See [process.md](process.md) for details.
+#### What kernel mode is, and is not
 
-`isolation="process"` provides crash protection without kernel restrictions.
+Kernel mode is **defense-in-depth against accidental or casual escape** -- a buggy (not malicious) agent that makes an unintended network call, or a tool that tries to walk outside its root, is stopped at the kernel. That is its job, and it does it well when the mechanisms are available.
 
-Both are a meaningful security improvement over `isolation="none"`, but kernel isolation is best-effort -- it degrades gracefully when platform features are unavailable (warnings are emitted).
+Kernel mode is **not, today, a boundary against code that is actively trying to escape.** Two things stand between it and that guarantee:
+
+1. **The inner layer is the Python AST sandbox, which is explicitly not adversarial-safe** (see In-process, above). Kernel restrictions only engage *after* code has broken out of the Python layer, and the whole point of the "walled garden" framing is that the Python layer is for cooperative code.
+2. **The worker→host IPC channel uses `pickle`.** The parent process unpickles the worker's results and RPC arguments. seccomp permits the IPC syscalls (a worker must be able to return results), so code that escapes the Python layer inside the worker can write a crafted pickle to that channel and achieve code execution **in the host process on unpickle** -- bypassing seccomp/Landlock/Seatbelt entirely. `filter_namespace` runs worker-side and is self-sanitizing; it does not protect the host. Hardening this channel (a restricted unpickler / typed return contract for kernel mode) is on the [roadmap](roadmap.md); until it lands, do not rely on kernel mode to contain code you assume is hostile.
+
+In short: use kernel mode to reduce the blast radius of mistakes and to add a real second layer under cooperative code. Do not use it as the sole containment for genuinely adversarial input.
+
+#### Fail-closed by default
+
+Kernel restrictions are applied once at worker startup and **cannot be loosened afterward** (seccomp/Landlock are strictly monotonic; Seatbelt is one-shot). If the platform can't apply what was requested -- missing package (`pip install sandtrap[process]`), kernel too old (Landlock needs 5.13+, often off in containers), or an unsupported OS -- `isolation="kernel"` **raises `IsolationUnavailable` at worker startup** rather than silently running user code with no kernel restrictions. Pass `allow_degraded=True` to proceed anyway; that emits a `RuntimeWarning` and records the shortfall.
+
+Every `ExecResult` from a process/kernel sandbox carries an `isolation: IsolationStatus` describing exactly what took effect (`requested`, `platform`, and per-mechanism `landlock`/`seccomp`/`seatbelt` flags, plus a `.degraded` property). Inspect it to *verify* -- not assume -- that the restrictions you asked for are in force:
+
+```python
+with sandbox(policy, isolation="kernel", filesystem=IsolatedFS("/tmp/box")) as sb:
+    result = sb.exec("...")
+    assert not result.isolation.degraded   # or handle the shortfall
+```
+
+**Note on `network_access` / `host_fs_access`:** if any registration grants either, the corresponding kernel restriction is **completely off for the entire worker process** -- the kernel can't scope it to one callable, so only the Python-level `ContextVar` gating enforces it. This is a deliberate grant, not degradation, so it does not trigger the fail-closed path. See [process.md](process.md) for details.
 
 ### What's defended
 
@@ -116,6 +136,7 @@ These vectors are **not** defended against by the Python-level policy. `isolatio
 - **`gc.get_objects()`** -- if the `gc` module is registered, sandboxed code can enumerate all live Python objects. Don't register `gc`.
 - **Signal handlers** -- `signal` module access would allow overriding the host's signal handling. With process isolation, this only affects the child process.
 - **Shared mutable state** -- objects passed into the sandbox namespace are not copied. Sandboxed code can mutate them in place. With process isolation (`isolation="process"` or `"kernel"`), namespaces are serialized across the process boundary, so mutations don't propagate back to the host.
+- **Worker→host deserialization** -- under `isolation="process"`/`"kernel"`, the host unpickles the worker's results and RPC arguments. Code that has already escaped the Python layer inside the worker can forge a malicious pickle and execute in the host on unpickle, bypassing kernel restrictions. This is why kernel mode is defense-in-depth, not an adversarial boundary (see the threat model above). Hardening it is on the [roadmap](roadmap.md).
 - **Side channels** -- timing attacks, cache probing, and other side channels are not mitigated.
 - **CPython internals** -- bytecode manipulation, `sys._getframe()`, `ctypes.pythonapi`, and other CPython-specific escape hatches are blocked by the attribute gate and builtins whitelist, but novel CPython exploits may bypass AST-level controls.
 

@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **Kernel isolation fails closed.** `isolation="kernel"` now raises
+  `IsolationUnavailable` at worker startup when the platform can't apply
+  the requested kernel mechanisms (missing `sandtrap[process]` packages,
+  Landlock-less kernel, unsupported OS), instead of silently running user
+  code with no kernel restrictions. Pass `allow_degraded=True` to proceed
+  with reduced isolation (emits a `RuntimeWarning`). This is a behavior
+  change: environments that previously ran kernel mode degraded-and-silent
+  (e.g. containers without Landlock) will now raise unless they opt into
+  `allow_degraded=True`.
+- **Docs: kernel mode positioned honestly.** The threat model now states
+  plainly that kernel mode is defense-in-depth (contains accidental/casual
+  escape under cooperative code), not a boundary against actively-adversarial
+  code — the inner Python layer isn't adversarial-safe and the worker→host
+  IPC uses `pickle`. See `docs/roadmap.md` for the planned hardening
+  (restricted deserialization / typed return contract).
+
+### Added
+- **`IsolationStatus` on `ExecResult`.** Every result from a process/kernel
+  sandbox carries `result.isolation` describing exactly what took effect
+  (`requested`, `platform`, per-mechanism `landlock`/`seccomp`/`seatbelt`
+  flags, and a `.degraded` property) so hosts can verify — not assume — the
+  isolation level in force. New exports: `IsolationStatus`,
+  `IsolationUnavailable`.
+
 ## [0.2.8] - 2026-07-12
 
 ### Fixed

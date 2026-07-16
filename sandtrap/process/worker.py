@@ -189,7 +189,7 @@ def worker_main(
         # Apply kernel-level isolation before running any user code.
         from .platform import apply_isolation
 
-        apply_isolation(
+        isolation_status = apply_isolation(
             isolation,
             root,
             allow_network=policy.needs_network(),
@@ -210,7 +210,7 @@ def worker_main(
         conn.send(WorkerErrorMsg(message=traceback.format_exc()))
         return
 
-    conn.send(ReadyMsg())
+    conn.send(ReadyMsg(isolation=isolation_status))
 
     while True:
         try:
