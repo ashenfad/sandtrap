@@ -147,6 +147,26 @@ class TestEchoModes:
         assert result.stdout == "2\n"
 
 
+class TestEchoValidation:
+    def test_invalid_value_raises(self, policy):
+        with pytest.raises(ValueError, match="Invalid echo option"):
+            sandbox(policy, echo="lastt")
+
+    def test_none_raises_instead_of_enabling_echo(self, policy):
+        """echo=None reads as 'off' but the rewriter's dispatch would
+        treat it as 'all' — it must raise, never silently activate."""
+        with pytest.raises(ValueError, match="Invalid echo option"):
+            sandbox(policy, echo=None)
+
+    def test_process_sandbox_raises_at_construction(self, policy):
+        """ProcessSandbox validates in the host constructor — not as a
+        wrapped worker-init failure at first exec."""
+        from sandtrap.process.sandbox import ProcessSandbox
+
+        with pytest.raises(ValueError, match="Invalid echo option"):
+            ProcessSandbox(policy, isolation="none", echo="everything")
+
+
 class TestEchoProcessIsolation:
     def test_echo_crosses_process_boundary(self, policy):
         with sandbox(
