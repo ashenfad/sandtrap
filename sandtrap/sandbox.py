@@ -43,6 +43,21 @@ from .wrappers import ModuleRef, StClass, StFunction, StInstance, activate_value
 _exec_counter = itertools.count(1)
 _INTERNAL_KEYS = {"__builtins__", "__name__"}
 
+_ECHO_OPTIONS = ("none", "last", "all")
+
+
+def _validate_echo(echo: Any) -> None:
+    """Reject invalid ``echo`` values at construction.
+
+    The rewriter dispatches "not none, not last → all", so without this
+    check a bad value silently *enables* echo — including ``echo=None``,
+    the most natural misspelling of "off". Fail loud instead.
+    """
+    if echo not in _ECHO_OPTIONS:
+        raise ValueError(
+            f"Invalid echo option: {echo!r}. Expected one of {_ECHO_OPTIONS}."
+        )
+
 
 class IsolationUnavailable(RuntimeError):
     """Raised when ``isolation="kernel"`` is requested but the platform
@@ -172,6 +187,7 @@ class Sandbox:
         # Fixed at construction: the setting changes the compiled AST,
         # so making it mutable would require invalidating any cached
         # compilations (e.g. StClass._compiled_cls in raw mode).
+        _validate_echo(echo)
         self.echo = echo
         self._cancel_flag = threading.Event()
 

@@ -12,7 +12,12 @@ from collections.abc import Callable, Mapping
 from typing import Any, Literal
 
 from ..policy import Policy
-from ..sandbox import ExecResult, IsolationStatus, IsolationUnavailable
+from ..sandbox import (
+    ExecResult,
+    IsolationStatus,
+    IsolationUnavailable,
+    _validate_echo,
+)
 from .protocol import (
     ExecMsg,
     ReadyMsg,
@@ -113,6 +118,11 @@ class ProcessSandbox:
         self._allow_degraded = allow_degraded
         self._isolation_status: IsolationStatus | None = None
         self._snapshot_prints = snapshot_prints
+        # Validate here too — an invalid value would otherwise surface
+        # inside the forked worker as a wrapped "Worker failed to
+        # initialise" RuntimeError at first exec, instead of a clean
+        # ValueError at construction in the host.
+        _validate_echo(echo)
         self._echo = echo
         self._rpc_handlers: dict[str, RpcHandler] = dict(rpc_handlers or {})
 
