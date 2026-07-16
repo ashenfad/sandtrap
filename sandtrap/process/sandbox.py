@@ -104,6 +104,7 @@ class ProcessSandbox:
         snapshot_prints: bool = False,
         rpc_handlers: Mapping[str, RpcHandler] | None = None,
         allow_degraded: bool = False,
+        echo: Literal["none", "last", "all"] = "none",
     ) -> None:
         self._policy = policy
         self._filesystem = filesystem
@@ -112,6 +113,7 @@ class ProcessSandbox:
         self._allow_degraded = allow_degraded
         self._isolation_status: IsolationStatus | None = None
         self._snapshot_prints = snapshot_prints
+        self._echo = echo
         self._rpc_handlers: dict[str, RpcHandler] = dict(rpc_handlers or {})
 
         # Bridge non-IsolatedFS filesystems over RPC. Fork inheritance
@@ -171,6 +173,7 @@ class ProcessSandbox:
                 self._mode,
                 self._isolation,
                 self._snapshot_prints,
+                self._echo,
             ),
             daemon=True,
         )
@@ -517,8 +520,9 @@ def _worker_entry(
     mode: Literal["wrapped", "raw"],
     isolation: Literal["auto", "none"],
     snapshot_prints: bool = False,
+    echo: Literal["none", "last", "all"] = "none",
 ) -> None:
     """Entry point for the worker process (target of multiprocessing.Process)."""
     from .worker import worker_main
 
-    worker_main(conn, policy, filesystem, mode, isolation, snapshot_prints)
+    worker_main(conn, policy, filesystem, mode, isolation, snapshot_prints, echo)

@@ -39,10 +39,11 @@ class Rewriter(ast.NodeTransformer):
     in generic_visit.
     """
 
-    def __init__(self, *, wrapped_mode: bool = False) -> None:
+    def __init__(self, *, wrapped_mode: bool = False, echo: str = "none") -> None:
         super().__init__()
         self._tmp_counter = 0
         self._wrapped_mode = wrapped_mode
+        self._echo = echo
         self._func_asts: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
         self._class_asts: list[ast.ClassDef] = []
         self._class_depth = 0
@@ -189,8 +190,56 @@ class Rewriter(ast.NodeTransformer):
     # Statements
     # ------------------------------------------------------------------
 
-    visit_Module = _recurse
     visit_Expr = _recurse
+
+    def visit_Module(self, node: ast.Module) -> ast.AST:
+        # Recurse first so inner expressions are already gated
+        # (obj.attr → __st_getattr__(...)) before display wrapping.
+        node = cast(ast.Module, self._recurse(node))
+        if self._echo != "none":
+            self._inject_display(node)
+        return node
+
+    def _inject_display(self, node: ast.Module) -> None:
+        """Wrap top-level expression statements in ``__st_display__(...)``.
+
+        REPL/notebook echo semantics: only direct children of the module
+        body are wrapped — a bare expression inside a function, loop, or
+        ``if`` block never echoes. ``echo="last"`` matches Jupyter's
+        ``last_expr``: it wraps only the module's *final* statement, and
+        only when that statement is an expression. A leading string is
+        treated as a module docstring (not echoed) only when other
+        statements follow it — a program that is *just* a string literal
+        is a value query and echoes, as in a notebook cell.
+        """
+
+        def is_docstring(i: int, stmt: ast.stmt) -> bool:
+            return (
+                i == 0
+                and len(node.body) > 1
+                and isinstance(stmt, ast.Expr)
+                and isinstance(stmt.value, ast.Constant)
+                and isinstance(stmt.value.value, str)
+            )
+
+        idxs = [
+            i
+            for i, s in enumerate(node.body)
+            if isinstance(s, ast.Expr) and not is_docstring(i, s)
+        ]
+        if self._echo == "last":
+            # Only when the final statement is an expression.
+            idxs = [i for i in idxs if i == len(node.body) - 1]
+        for i in idxs:
+            stmt = cast(ast.Expr, node.body[i])
+            stmt.value = ast.copy_location(
+                ast.Call(
+                    func=ast.Name(id="__st_display__", ctx=ast.Load()),
+                    args=[stmt.value],
+                    keywords=[],
+                ),
+                stmt,
+            )
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> ast.AST | list[ast.stmt]:
         if isinstance(node.target, ast.Attribute) and node.value is not None:

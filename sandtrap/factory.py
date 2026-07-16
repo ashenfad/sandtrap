@@ -21,6 +21,7 @@ def sandbox(
     snapshot_prints: bool = False,
     rpc_handlers: Mapping[str, Callable[[str, tuple, dict], Any]] | None = None,
     allow_degraded: bool = False,
+    echo: Literal["none", "last", "all"] = "none",
 ) -> Sandbox | ProcessSandbox:
     """Create a sandbox with the specified isolation level.
 
@@ -63,6 +64,16 @@ def sandbox(
         proceed anyway with a :class:`RuntimeWarning`; the shortfall is
         reported on ``ExecResult.isolation``.  Ignored for ``"none"``
         and ``"process"`` (neither requests kernel restrictions).
+    echo:
+        REPL/notebook-style auto-display of top-level expression
+        statements (``"none"`` default, off).  ``"all"`` echoes every
+        bare top-level expression; ``"last"`` echoes only a final
+        expression statement (Jupyter's ``last_expr``).  An echoed
+        value lands in both output channels at its execution position:
+        its ``repr`` in ``result.stdout`` and, with
+        ``snapshot_prints=True``, the raw object in ``result.prints``
+        as a single-arg entry (an implicit ``print``).  ``None`` values
+        are suppressed, so ``print(x)`` never double-echoes.
     """
     if isolation == "none":
         return Sandbox(
@@ -70,6 +81,7 @@ def sandbox(
             mode=mode,
             filesystem=filesystem,
             snapshot_prints=snapshot_prints,
+            echo=echo,
         )
 
     # Deferred import — avoid loading multiprocessing for in-process use.
@@ -85,4 +97,5 @@ def sandbox(
         snapshot_prints=snapshot_prints,
         rpc_handlers=rpc_handlers,
         allow_degraded=allow_degraded,
+        echo=echo,
     )

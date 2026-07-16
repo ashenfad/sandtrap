@@ -75,7 +75,7 @@ sandtrap powers sandboxed code execution in [agex](https://github.com/ashenfad/a
 ## Documentation
 
 - [Policy & Registration](docs/policy.md) -- configuring what sandboxed code can access
-- [Sandbox Execution](docs/sandbox.md) -- running code, results, error handling
+- [Sandbox Execution](docs/sandbox.md) -- running code, results, error handling, REPL-style expression echo
 - [Process Sandbox](docs/process.md) -- subprocess isolation with kernel-level restrictions
 - [Filesystem & Network](docs/filesystem.md) -- VFS interception, network denial, VFS imports
 - [Serialization](docs/serialization.md) -- pickling functions, classes, and state across turns

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **REPL-style expression echo (`echo=`).** Agents writing sandboxed code
+  often expect notebook semantics — a bare top-level `x` displaying its
+  value. New `echo` option on `sandbox()`/`Sandbox` (`"none"` default,
+  `"last"` = Jupyter's last_expr, `"all"` = every bare top-level
+  expression). Follows `sys.displayhook` conventions: repr rendering,
+  `None` suppressed (so `print(x)` never double-echoes), top-level
+  statements only. Echoed values land in both output channels at their
+  execution position as an implicit single-arg print: repr text in
+  `result.stdout` (still capped by `Policy.max_stdout`) and, with
+  `snapshot_prints=True`, the raw object in `result.prints` — so
+  downstream renderers treat displays and prints identically. Works
+  across all isolation levels.
+- **`IsolationStatus` on `ExecResult`.** Every result from a process/kernel
+  sandbox carries `result.isolation` describing exactly what took effect
+  (`requested`, `platform`, per-mechanism `landlock`/`seccomp`/`seatbelt`
+  flags, and a `.degraded` property) so hosts can verify — not assume — the
+  isolation level in force. New exports: `IsolationStatus`,
+  `IsolationUnavailable`.
+
 ### Changed
 - **Kernel isolation fails closed.** `isolation="kernel"` now raises
   `IsolationUnavailable` at worker startup when the platform can't apply
@@ -25,14 +45,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   code — the inner Python layer isn't adversarial-safe and the worker→host
   IPC uses `pickle`. See `docs/roadmap.md` for the planned hardening
   (restricted deserialization / typed return contract).
-
-### Added
-- **`IsolationStatus` on `ExecResult`.** Every result from a process/kernel
-  sandbox carries `result.isolation` describing exactly what took effect
-  (`requested`, `platform`, per-mechanism `landlock`/`seccomp`/`seatbelt`
-  flags, and a `.degraded` property) so hosts can verify — not assume — the
-  isolation level in force. New exports: `IsolationStatus`,
-  `IsolationUnavailable`.
 
 ### Fixed
 - **`sandbox()` return type annotation.** Corrected to

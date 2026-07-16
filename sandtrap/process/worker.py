@@ -141,6 +141,7 @@ def worker_main(
     mode: Literal["wrapped", "raw"],
     isolation: Literal["auto", "none"],
     snapshot_prints: bool = False,
+    echo: Literal["none", "last", "all"] = "none",
 ) -> None:
     """Main loop for the worker subprocess.
 
@@ -197,7 +198,11 @@ def worker_main(
         )
 
         sandbox = Sandbox(
-            policy, mode=mode, filesystem=filesystem, snapshot_prints=snapshot_prints
+            policy,
+            mode=mode,
+            filesystem=filesystem,
+            snapshot_prints=snapshot_prints,
+            echo=echo,
         )
 
         # Install SIGUSR1 handler for cancel — single reader on the pipe,
