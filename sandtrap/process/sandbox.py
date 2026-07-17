@@ -335,12 +335,18 @@ class ProcessSandbox:
         namespace: Mapping[str, Any] | None = None,
         stdin: str | Any | None = None,
         argv: list[str] | None = None,
+        echo: Literal["none", "last", "all"] | None = None,
     ) -> ExecResult:
         """Execute source code in the sandboxed subprocess.
+
+        ``echo`` overrides the worker sandbox's echo mode for this
+        call only (``None`` keeps the construction-time default).
 
         If a previous execution killed the worker (segfault, OOM,
         seccomp violation), a fresh worker is spawned transparently —
         a crash costs the crashing turn, not the sandbox."""
+        if echo is not None:
+            _validate_echo(echo)  # fail here, not as worker-error noise
         if not self._started:
             raise RuntimeError(
                 "Worker process is not running. "
@@ -360,7 +366,7 @@ class ProcessSandbox:
                         stacklevel=2,
                     )
         self._conn.send(
-            ExecMsg(source=source, namespace=safe_ns, stdin=stdin, argv=argv)
+            ExecMsg(source=source, namespace=safe_ns, stdin=stdin, argv=argv, echo=echo)
         )
         return self._await_result()
 
@@ -502,12 +508,15 @@ class ProcessSandbox:
         namespace: Mapping[str, Any] | None = None,
         stdin: str | Any | None = None,
         argv: list[str] | None = None,
+        echo: Literal["none", "last", "all"] | None = None,
     ) -> ExecResult:
         """Execute source code asynchronously in the sandboxed subprocess."""
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             None,
-            lambda: self.exec(source, namespace=namespace, stdin=stdin, argv=argv),
+            lambda: self.exec(
+                source, namespace=namespace, stdin=stdin, argv=argv, echo=echo
+            ),
         )
 
     def cancel(self) -> None:
