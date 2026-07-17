@@ -71,6 +71,33 @@ def test_runtime_error(psandbox):
     assert isinstance(result.error, ZeroDivisionError)
 
 
+def test_runtime_error_carries_rendered_traceback(psandbox):
+    """Traceback objects don't survive the pickle back to the parent,
+    so the worker renders the frames it alone can see and rides the
+    text across on the exception. Line numbers are the payload: an
+    agent fixing 'line 3' needs to know it WAS line 3."""
+    result = psandbox.exec("a = 1\nb = 2\nc = undefined_name\n")
+    text = getattr(result.error, "_st_traceback_text", None)
+    assert isinstance(text, str)
+    assert "Traceback (most recent call last)" in text
+    assert "line 3" in text
+    assert "NameError" in text
+
+
+def test_error_deep_in_a_call_chain_names_every_frame(psandbox):
+    result = psandbox.exec(
+        "def inner():\n"
+        "    raise ValueError('boom')\n"
+        "def outer():\n"
+        "    inner()\n"
+        "outer()\n"
+    )
+    text = getattr(result.error, "_st_traceback_text", None)
+    assert isinstance(text, str)
+    assert "in outer" in text and "in inner" in text
+    assert "line 2" in text  # the raise site survives the pipe
+
+
 # ------------------------------------------------------------------
 # Timeout
 # ------------------------------------------------------------------
