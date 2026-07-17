@@ -219,6 +219,40 @@ If using `VirtualFS` or another non-`IsolatedFS` filesystem, there's no host pat
 - If the worker crashes (OOM, SIGKILL, seccomp violation), the next `exec()` automatically spawns a new one
 - `shutdown()` sends a clean shutdown message; `__exit__` calls `shutdown()` automatically
 
+## Fork safety (read this if your host is long-lived)
+
+Workers are `fork()`ed **from the embedding process**, and fork is only
+safe while that process is fork-friendly: effectively single-threaded,
+with no fork-hostile C-library state. A host that has accumulated
+threads (web server, browser automation, SSE streams) and C extensions
+can produce children that die instantly — the signature is a
+**`"Worker process died during initialisation"` loop**, because the
+automatic respawn re-forks the *current* (now hostile) process on every
+attempt.
+
+Practical rules:
+
+- **Construct process sandboxes early**, before your host grows threads.
+  The eager fork at `__enter__` exists for exactly this reason.
+- **Known offender: pyarrow's default mimalloc pool.** Its per-thread
+  heaps don't survive fork; a forked child segfaults inside `libarrow`
+  (`mi_thread_init`) on its first arrow allocation — macOS crash
+  reports annotate it `*** multi-threaded process forked ***`. And
+  `import pandas` (3.x) imports pyarrow. Fix in the EMBEDDER, before
+  the first pandas/pyarrow import anywhere in the process:
+
+  ```python
+  os.environ.setdefault("ARROW_DEFAULT_MEMORY_POOL", "system")
+  ```
+
+  pyarrow reads the variable at import time; setting it later is a
+  no-op.
+- macOS is the strictest platform (the Objective-C runtime aborts
+  forked children that touch certain frameworks), but allocator
+  thread-state hazards exist on Linux too.
+- CPython agrees fork-with-threads is a hazard: 3.12 deprecates it and
+  3.14 moves the multiprocessing default away from fork on Linux.
+
 ## Namespace serialization
 
 Namespaces are sent to and from the worker via `multiprocessing.Pipe` (pickle). Non-picklable values (lambdas, locks, etc.) are silently dropped from both input and output namespaces. A `RuntimeWarning` is emitted for each dropped input key.
