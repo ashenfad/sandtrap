@@ -147,6 +147,18 @@ result.prints    # [(1,), ('two',), (3,)]
 
 `echo` works with all isolation levels, and `result.stdout` remains capped by `Policy.max_stdout` -- a huge echoed repr is tail-truncated like any other output. Displayed expressions pass through the same attribute/policy gates as all other code, and each display fires a checkpoint like a `print` call.
 
+### Per-exec override
+
+`exec()`/`aexec()` accept their own `echo=` to override the sandbox's construction-time mode for a single call (`None`, the default, keeps it). One sandbox can serve two surfaces -- a notebook-style caller and a script-semantics caller -- without paying for two sandboxes, which under process isolation would mean two worker processes:
+
+```python
+with sandbox(Policy(timeout=5.0)) as sb:      # constructed quiet
+    sb.exec("41 + 1", echo="last").stdout     # "42\n"  — REPL surface
+    sb.exec("41 + 1").stdout                  # ""      — script surface
+```
+
+The override is per-call and crosses the process boundary (the worker applies it for that execution only). Invalid values raise `ValueError` host-side, before any code runs -- on the calling task for `aexec`.
+
 ## Error handling
 
 All errors are captured on `result.error` without crashing the host:

@@ -511,6 +511,8 @@ class ProcessSandbox:
         echo: Literal["none", "last", "all"] | None = None,
     ) -> ExecResult:
         """Execute source code asynchronously in the sandboxed subprocess."""
+        if echo is not None:
+            _validate_echo(echo)  # fail on the calling task, not in the executor
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             None,

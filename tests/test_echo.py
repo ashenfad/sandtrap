@@ -229,3 +229,14 @@ class TestPerExecOverride:
         with sandbox(policy) as sb:
             result = await sb.aexec("1 + 1", echo="last")
         assert result.stdout == "2\n"
+
+    @pytest.mark.asyncio
+    async def test_aexec_invalid_override_fails_on_the_calling_task(self, policy):
+        """Validation happens before the executor hop (PR #32 review):
+        the ValueError raises from the await site in both modes."""
+        with sandbox(policy) as sb:
+            with pytest.raises(ValueError, match="Invalid echo option"):
+                await sb.aexec("1", echo="loud")
+        with sandbox(policy, isolation="process") as sb:
+            with pytest.raises(ValueError, match="Invalid echo option"):
+                await sb.aexec("1", echo="loud")
