@@ -82,6 +82,7 @@ class ExecMsg:
     namespace: Mapping[str, Any] | None
     stdin: Any | None = None
     argv: list[str] | None = None
+    echo: str | None = None  # per-exec override; None = sandbox default
 
 
 @dataclass

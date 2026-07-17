@@ -316,6 +316,7 @@ class Sandbox:
         stdout_buf: TailBuffer,
         prints_list: list[tuple[Any, ...]] | None,
         sandbox_sys: Any = None,
+        echo: str | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Build the execution namespace with builtins, gates, and registered items.
 
@@ -392,7 +393,8 @@ class Sandbox:
         # echo). Mirrors print_fn so displays and prints share the same
         # two ordered channels: raw objects into prints_list (rendered
         # downstream by the consumer), repr text into stdout_buf.
-        if self.echo != "none":
+        effective_echo = self.echo if echo is None else echo
+        if effective_echo != "none":
 
             def display_fn(value: Any) -> None:
                 # sys.displayhook semantics: suppress None. print(x) is
@@ -510,9 +512,14 @@ class Sandbox:
     # ------------------------------------------------------------------
 
     def _parse_and_rewrite(
-        self, source: str
+        self, source: str, *, echo: str | None = None
     ) -> tuple[ast.Module, Rewriter] | ExecResult:
         """Parse source and run the AST rewriter.
+
+        ``echo`` overrides the sandbox default for this execution
+        (``None`` keeps it). The rewriter carries the effective value —
+        the namespace build reads it back so the display transform and
+        the display function always agree.
 
         Returns ``(tree, rewriter)`` on success, or an ``ExecResult``
         with the error already populated on parse/validation failure.
@@ -523,7 +530,8 @@ class Sandbox:
             return ExecResult(error=e)
 
         wrapped_mode = self.mode == "wrapped"
-        rewriter = Rewriter(wrapped_mode=wrapped_mode, echo=self.echo)
+        effective_echo = self.echo if echo is None else echo
+        rewriter = Rewriter(wrapped_mode=wrapped_mode, echo=effective_echo)
         try:
             tree = rewriter.visit(tree)
         except StValidationError as e:
@@ -594,8 +602,10 @@ class Sandbox:
             _sandbox_sys=sandbox_sys,
         )
         prints_list = [] if self.snapshot_prints else None
+        # the rewriter carries this execution's effective echo — using
+        # it here keeps the display transform and display fn in lockstep
         ns, injected = self._build_namespace(
-            namespace, gates, stdout_buf, prints_list, sandbox_sys
+            namespace, gates, stdout_buf, prints_list, sandbox_sys, echo=rewriter._echo
         )
         self._auto_activate(ns, gates)
 
@@ -654,8 +664,13 @@ class Sandbox:
         namespace: Mapping[str, Any] | None = None,
         stdin: "str | Any | None" = None,
         argv: "list[str] | None" = None,
+        echo: 'Literal["none", "last", "all"] | None' = None,
     ) -> ExecResult:
         """Execute source code synchronously in the sandbox.
+
+        ``echo`` overrides the sandbox's construction-time echo mode
+        for this call only (``None`` keeps it) — one sandbox can serve
+        a notebook-style surface and a script-semantics surface.
 
         ``stdin``/``argv`` (either given) expose a minimal, safe ``sys``
         to the code — ``sys.stdin`` (str or text stream), ``sys.stdout``/
@@ -670,7 +685,9 @@ class Sandbox:
         don't mix streams. Host callbacks that want the real console
         instead can wrap output in :func:`sandtrap.passthrough_stdio`.
         """
-        prepared = self._parse_and_rewrite(source)
+        if echo is not None:
+            _validate_echo(echo)
+        prepared = self._parse_and_rewrite(source, echo=echo)
         if isinstance(prepared, ExecResult):
             return prepared
         tree, rewriter = prepared
@@ -727,10 +744,13 @@ class Sandbox:
         namespace: Mapping[str, Any] | None = None,
         stdin: "str | Any | None" = None,
         argv: "list[str] | None" = None,
+        echo: 'Literal["none", "last", "all"] | None' = None,
     ) -> ExecResult:
         """Execute source code asynchronously in the sandbox. See
-        :meth:`exec` for ``stdin``/``argv``."""
-        prepared = self._parse_and_rewrite(source)
+        :meth:`exec` for ``stdin``/``argv``/``echo``."""
+        if echo is not None:
+            _validate_echo(echo)
+        prepared = self._parse_and_rewrite(source, echo=echo)
         if isinstance(prepared, ExecResult):
             return prepared
         tree, rewriter = prepared

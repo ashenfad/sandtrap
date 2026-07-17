@@ -180,3 +180,52 @@ class TestEchoProcessIsolation:
         with sandbox(policy, isolation="process") as sb:
             result = sb.exec("7 * 6")
         assert result.stdout == ""
+
+
+class TestPerExecOverride:
+    """One sandbox, two surfaces: a notebook-style caller passes
+    echo="last" per call while a script-semantics caller passes
+    echo="none" — without paying for two sandboxes (two workers,
+    under process isolation)."""
+
+    def test_exec_can_enable_echo_on_a_quiet_sandbox(self, policy):
+        with sandbox(policy, snapshot_prints=True) as sb:
+            result = sb.exec("x = 41\nx + 1", echo="last")
+            assert result.stdout == "42\n"
+            assert result.prints == [(42,)]
+            # and the override is per-CALL: the default is untouched
+            result = sb.exec("x = 41\nx + 1")
+            assert result.stdout == ""
+
+    def test_exec_can_silence_an_echoing_sandbox(self, policy):
+        with sandbox(policy, echo="last") as sb:
+            result = sb.exec("1 + 1", echo="none")
+            assert result.stdout == ""
+            result = sb.exec("1 + 1")
+            assert result.stdout == "2\n"
+
+    def test_override_crosses_the_process_boundary(self, policy):
+        with sandbox(policy, isolation="process", snapshot_prints=True) as sb:
+            result = sb.exec("7 * 6", echo="last")
+            assert result.stdout == "42\n"
+            assert result.prints == [(42,)]
+            result = sb.exec("7 * 6")
+            assert result.stdout == ""
+
+    def test_invalid_override_raises_before_running(self, policy):
+        with sandbox(policy) as sb:
+            with pytest.raises(ValueError, match="Invalid echo option"):
+                sb.exec("1", echo="loud")
+
+    def test_invalid_override_raises_host_side_in_process_mode(self, policy):
+        """Bad per-exec echo on a ProcessSandbox fails as a plain
+        ValueError in the caller — not as worker-error noise."""
+        with sandbox(policy, isolation="process") as sb:
+            with pytest.raises(ValueError, match="Invalid echo option"):
+                sb.exec("1", echo="loud")
+
+    @pytest.mark.asyncio
+    async def test_aexec_honors_the_override(self, policy):
+        with sandbox(policy) as sb:
+            result = await sb.aexec("1 + 1", echo="last")
+        assert result.stdout == "2\n"

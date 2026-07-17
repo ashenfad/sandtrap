@@ -243,6 +243,7 @@ def worker_main(
                     namespace=ns,
                     stdin=msg.stdin,
                     argv=msg.argv,
+                    echo=msg.echo,
                 )
                 safe_ns = filter_namespace(result.namespace) or {}
                 err = result.error
