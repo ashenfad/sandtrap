@@ -244,11 +244,26 @@ def worker_main(
                     argv=msg.argv,
                 )
                 safe_ns = filter_namespace(result.namespace) or {}
+                err = result.error
+                if err is not None and err.__traceback__ is not None:
+                    # Traceback objects don't survive pickling, so the
+                    # parent would see a bare message. Render the full
+                    # traceback HERE, where the frames still exist, and
+                    # ride it across in the exception's __dict__ (which
+                    # BaseException.__reduce__ preserves).
+                    try:
+                        err._st_traceback_text = "".join(
+                            traceback.format_exception(
+                                type(err), err, err.__traceback__
+                            )
+                        ).rstrip()
+                    except Exception:
+                        pass  # __slots__/frozen exceptions: message-only
                 conn.send(
                     ResultMsg(
                         namespace=safe_ns,
                         stdout=result.stdout,
-                        error=result.error,
+                        error=err,
                         ticks=result.ticks,
                         prints=filter_prints(result.prints),
                         stderr=result.stderr,
