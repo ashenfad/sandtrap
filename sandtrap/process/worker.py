@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import pickle
 import signal
 import traceback
 import uuid
@@ -253,12 +254,28 @@ def worker_main(
                     # BaseException.__reduce__ preserves).
                     try:
                         err._st_traceback_text = "".join(
-                            traceback.format_exception(
-                                type(err), err, err.__traceback__
-                            )
+                            traceback.format_exception(err)
                         ).rstrip()
                     except Exception:
                         pass  # __slots__/frozen exceptions: message-only
+                if err is not None:
+                    # An exception that can't pickle (unpicklable
+                    # attributes riding on it) would kill the send and
+                    # replace the agent's error with worker-crash
+                    # noise. Ship a stand-in that tells the same story
+                    # — same class name, message, and rendered frames.
+                    try:
+                        pickle.dumps(err)
+                    except Exception:
+                        try:
+                            message = f"{type(err).__name__}: {err}"
+                        except Exception:
+                            message = f"unrepresentable {type(err).__name__}"
+                        fallback = RuntimeError(message)
+                        tb_text = getattr(err, "_st_traceback_text", None)
+                        if isinstance(tb_text, str):
+                            fallback._st_traceback_text = tb_text
+                        err = fallback
                 conn.send(
                     ResultMsg(
                         namespace=safe_ns,

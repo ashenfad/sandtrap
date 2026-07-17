@@ -84,6 +84,25 @@ def test_runtime_error_carries_rendered_traceback(psandbox):
     assert "NameError" in text
 
 
+def test_unpicklable_exception_degrades_to_a_stand_in(psandbox):
+    """An exception carrying unpicklable baggage used to kill the send
+    and bury the agent's error under worker-crash noise. The stand-in
+    keeps the story: class name, message, and the rendered frames."""
+    result = psandbox.exec(
+        "e = ValueError('boom with baggage')\n"
+        "e.baggage = open('/f.txt', 'w')\n"
+        "raise e\n"
+    )
+    assert isinstance(result.error, RuntimeError)
+    assert "ValueError: boom with baggage" in str(result.error)
+    text = getattr(result.error, "_st_traceback_text", None)
+    assert isinstance(text, str)
+    assert "line 3" in text and "ValueError" in text
+    # and the worker survived the episode
+    ok = psandbox.exec("x = 40 + 2")
+    assert ok.error is None and ok.namespace["x"] == 42
+
+
 def test_error_deep_in_a_call_chain_names_every_frame(psandbox):
     result = psandbox.exec(
         "def inner():\n"
