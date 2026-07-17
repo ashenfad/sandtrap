@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.2.11] - 07-17-26
+
+### Added
+- **Per-exec `echo` override.** `Sandbox.exec()`/`aexec()` (and their
+  `ProcessSandbox` counterparts) accept `echo=` to override the
+  construction-time mode for a single call (`None` keeps the default).
+  One sandbox can now serve a notebook-style surface (`echo="last"`)
+  and a script-semantics surface (`echo="none"`) without paying for
+  two workers under process isolation. Invalid values raise host-side,
+  before any code runs.
+
 ## [v0.2.10] - 07-17-26
 
 ### Fixed
