@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.2.10] - 07-17-26
+
+### Fixed
+- **Tracebacks now survive process isolation.** Traceback objects can't
+  be pickled, so a runtime error crossing the worker→parent pipe
+  arrived as a bare message — no frames, no line numbers, nothing for
+  an agent's repair loop to aim at. The worker now renders the full
+  traceback where the frames still exist and attaches the text to the
+  exception as `_st_traceback_text` (riding `BaseException.__reduce__`'s
+  `__dict__` preservation). Hosts that want frames read the attribute;
+  everything else is unchanged. Exceptions that refuse the attribute
+  (`__slots__`, frozen) degrade to today's message-only behavior.
+- **Unpicklable exceptions degrade to a stand-in, not worker noise.**
+  An exception carrying unpicklable baggage killed the `ResultMsg`
+  send, burying the agent's actual error under a "Worker error"
+  pickling traceback. The worker now pickle-checks the error and ships
+  a `RuntimeError` stand-in carrying the original class name, message,
+  and rendered traceback text. (Surfaced by PR #31 review.)
+
 ## [v0.2.9] - 07-16-26
 
 ### Added
