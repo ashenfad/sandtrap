@@ -188,6 +188,7 @@ class Policy:
         max_stdout: int | None = None,
         allow_network: bool = False,
         tick_limit: int | None = None,
+        module_root: str = "/",
     ) -> None:
         self.functions: dict[str, _FnRegistration] = {}
         self.classes: dict[str, _ClsRegistration] = {}
@@ -205,6 +206,13 @@ class Policy:
         self.memory_limit = memory_limit  # MB of additional allocation headroom
         self.max_stdout = max_stdout  # max chars of stdout (keeps tail)
         self.tick_limit = tick_limit  # max checkpoint ticks per execution
+
+        # Where VFS module imports resolve from. `import mod` looks for
+        # <module_root>/mod.py — hosts that present the workspace under
+        # a prefix (e.g. /workspace) point this at it so imports match
+        # what the sandboxed code sees on disk. Absolute, no trailing
+        # slash (except "/" itself).
+        self.module_root = module_root
 
     def fn(
         self,

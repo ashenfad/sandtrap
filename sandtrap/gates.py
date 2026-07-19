@@ -74,6 +74,7 @@ class _VFSLoader:
         filesystem: Any,
         wrapped_mode: bool,
         gates: dict[str, Any],
+        root: str = "/",
     ) -> None:
         self._filesystem = filesystem
         self._wrapped_mode = wrapped_mode
@@ -82,6 +83,9 @@ class _VFSLoader:
         self._print_fn: Any = None
         self._help_fn: Any = None
         self._input_fn: Any = None
+        # Import-resolution base (Policy.module_root): "" for the fs
+        # root so f"{self._root}/mod.py" composes to "/mod.py".
+        self._root = "" if root == "/" else root.rstrip("/")
 
     def _compile_and_exec(self, mod: Any, source: str, module_name: str) -> None:
         """Parse, rewrite, compile, and execute VFS source into a module."""
@@ -148,8 +152,9 @@ class _VFSLoader:
 
     def find_module_file(self, top: str, max_dirs: int = 200) -> str | None:
         """Bounded BFS for ``<top>.py`` anywhere on the VFS — powers the
-        did-you-mean in import errors. Skips the root itself (a root hit
-        would have resolved normally) and returns the shallowest match.
+        did-you-mean in import errors. Skips the module root itself (a
+        hit there would have resolved normally) and returns the
+        shallowest match.
 
         Only descends into directories that could legally appear in a
         dotted import path (valid identifiers, non-dunder): a hit inside
@@ -160,6 +165,7 @@ class _VFSLoader:
         if fs is None:
             return None
         target = f"{top}.py"
+        module_root = self._root or "/"
         queue = ["/"]
         visited = 0
         while queue and visited < max_dirs:
@@ -170,7 +176,7 @@ class _VFSLoader:
             except Exception:
                 continue
             for entry in entries:
-                if entry == target and d != "/":
+                if entry == target and d.rstrip("/") != module_root.rstrip("/"):
                     return d.rstrip("/") + "/" + entry
                 if not entry.isidentifier() or (
                     entry.startswith("__") and entry.endswith("__")
@@ -192,8 +198,9 @@ class _VFSLoader:
         if module_name in self._cache:
             return self._cache[module_name]
 
-        # Look for /<module_name>.py in the VFS (dots → path separators)
-        path = "/" + module_name.replace(".", "/") + ".py"
+        # Look for <root>/<module_name>.py in the VFS (dots → path
+        # separators; root is Policy.module_root, default the fs root)
+        path = self._root + "/" + module_name.replace(".", "/") + ".py"
         if not self._filesystem.exists(path):
             return None
 
@@ -236,10 +243,12 @@ class _VFSLoader:
             if pkg_name in self._cache:
                 parent = self._cache[pkg_name]
             else:
-                init_path = "/" + pkg_name.replace(".", "/") + "/__init__.py"
+                init_path = (
+                    self._root + "/" + pkg_name.replace(".", "/") + "/__init__.py"
+                )
                 pkg = types.ModuleType(pkg_name)
                 pkg.__file__ = init_path
-                pkg.__path__ = ["/" + pkg_name.replace(".", "/")]
+                pkg.__path__ = [self._root + "/" + pkg_name.replace(".", "/")]
                 self._cache[pkg_name] = pkg
 
                 if self._filesystem is not None and self._filesystem.exists(init_path):
@@ -289,8 +298,15 @@ def make_gates(
     # VFS module compilation can inject the same gates.
     gates: dict[str, Any] = {}
 
-    # VFS module loader (holds its own cache; reads gates dict by reference)
-    vfs = _VFSLoader(_filesystem, _wrapped_mode, gates)
+    # VFS module loader (holds its own cache; reads gates dict by
+    # reference). getattr: policies pickled by older versions may lack
+    # module_root.
+    vfs = _VFSLoader(
+        _filesystem,
+        _wrapped_mode,
+        gates,
+        root=getattr(policy, "module_root", "/"),
+    )
 
     def _unwrap(obj: Any) -> Any:
         """Unwrap StInstance to access the real underlying instance."""
@@ -309,10 +325,11 @@ def make_gates(
 
     def _import_error_message(module_name: str) -> str:
         """Distinguish 'not granted' from 'exists, but not where imports
-        resolve'. Filesystem-module imports resolve from '/' — a bare
-        ``import mod`` for a file at /some/dir/mod.py is the single most
-        common miss, and 'not allowed' misreads as a policy ban (agents
-        give up instead of qualifying the import). When the file exists
+        resolve'. Filesystem-module imports resolve from the module root
+        (Policy.module_root, default '/') — a bare ``import mod`` for a
+        file at <root>/some/dir/mod.py is the single most common miss,
+        and 'not allowed' misreads as a policy ban (agents give up
+        instead of qualifying the import). When the file exists
         elsewhere on the VFS, say where and show the fix."""
         # bare `import mod`: search for mod.py. Dotted with a WRONG
         # root (`import api._helpers` for /app/api/_helpers.py): the
@@ -322,13 +339,27 @@ def make_gates(
         hit = vfs.find_module_file(parts[0])
         if hit is None and len(parts) > 1:
             hit = vfs.find_module_file(parts[-1])
+        module_root = vfs._root or "/"
         if hit is not None:
-            dotted = hit[1:-3].replace("/", ".")
-            parent, _, leaf = dotted.rpartition(".")
+            rel = (
+                hit[len(vfs._root) :]
+                if vfs._root and hit.startswith(vfs._root + "/")
+                else (hit if not vfs._root else None)
+            )
+            if rel is not None:
+                dotted = rel[1:-3].replace("/", ".")
+                parent, _, leaf = dotted.rpartition(".")
+                return (
+                    f"No module named '{module_name}' at the module root "
+                    f"(imports of filesystem modules resolve from "
+                    f"'{module_root}'). Found {hit} — try: "
+                    f"from {parent} import {leaf}"
+                )
             return (
-                f"No module named '{module_name}' at the filesystem root "
-                f"(imports of filesystem modules resolve from '/'). Found "
-                f"{hit} — try: from {parent} import {leaf}"
+                f"No module named '{module_name}' at the module root "
+                f"(imports of filesystem modules resolve from "
+                f"'{module_root}'). Found {hit}, which is OUTSIDE the "
+                f"module root — move it under {module_root} to import it"
             )
         return f"Import of '{module_name}' is not allowed"
 

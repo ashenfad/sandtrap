@@ -685,3 +685,56 @@ def test_dotted_import_with_wrong_root_suggests_qualified_form():
 
     result = sandbox.exec("from api._helpers import VALUE")
     assert "from app.api import _helpers" in str(result.error)
+
+
+def test_module_root_resolves_imports_from_prefix():
+    """Policy.module_root moves the import base: hosts that present the
+    workspace under a prefix (nontainer's /workspace) need `import mod`
+    to find <root>/mod.py, matching what sandboxed open() sees."""
+    sandbox, fs = _make_sandbox(policy=Policy(module_root="/workspace"))
+    fs.makedirs("/workspace/helpers", exist_ok=True)
+    fs.write("/workspace/util.py", b"def triple(x): return x * 3")
+    fs.write("/workspace/helpers/__init__.py", b"")
+    fs.write("/workspace/helpers/data.py", b"VALUE = 42")
+
+    result = sandbox.exec("""\
+import util
+from helpers import data
+result = util.triple(3)
+value = data.VALUE
+""")
+    assert result.error is None
+    assert result.namespace["result"] == 9
+    assert result.namespace["value"] == 42
+
+
+def test_module_root_error_message_names_the_root():
+    """A miss under a module root explains where imports resolve from,
+    and the did-you-mean derives its dotted path RELATIVE to the root
+    (never `workspace.helpers.data`)."""
+    sandbox, fs = _make_sandbox(policy=Policy(module_root="/workspace"))
+    fs.makedirs("/workspace/helpers", exist_ok=True)
+    fs.write("/workspace/helpers/data.py", b"VALUE = 42")
+
+    result = sandbox.exec("import data")
+    assert isinstance(result.error, ImportError)
+    msg = str(result.error)
+    assert "resolve from '/workspace'" in msg
+    assert "from helpers import data" in msg
+    assert "workspace.helpers" not in msg
+
+
+def test_module_root_hit_outside_root_is_named_not_suggested():
+    """A file that exists only OUTSIDE the module root can't be
+    imported at all — the message must say so instead of suggesting a
+    dotted path that would also fail."""
+    sandbox, fs = _make_sandbox(policy=Policy(module_root="/workspace"))
+    fs.makedirs("/workspace", exist_ok=True)
+    fs.makedirs("/stray", exist_ok=True)
+    fs.write("/stray/data.py", b"VALUE = 42")
+
+    result = sandbox.exec("import data")
+    assert isinstance(result.error, ImportError)
+    msg = str(result.error)
+    assert "Found /stray/data.py" in msg
+    assert "OUTSIDE the module root" in msg
