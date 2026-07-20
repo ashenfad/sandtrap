@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`Policy.module_root` — a configurable base for VFS imports.**
+  Filesystem-module imports hardcoded `/` as their resolution root, so
+  a host presenting the workspace under a prefix had `import mod` miss
+  the `<root>/mod.py` that sandboxed `open()` sees — and local
+  sandboxes diverged from VM guests, where imports already resolve
+  from the guest workspace dir. `module_root` (default `/`) sets that
+  base; imports resolve root-relative, so `<root>/helpers/foo.py` is
+  `helpers.foo` and the root's own name stays out of the import
+  namespace. Fully backward compatible, and it rides the existing
+  policy pickle across process-isolation workers. Import errors name
+  the configured root, derive their did-you-mean relative to it, and
+  call out a hit found outside the root as unreachable rather than
+  suggesting a dotted path that would also fail.
+
+### Documentation
+- **Fork safety in `docs/process.md`.** Workers fork from the embedding
+  process and respawn re-forks the *current* process, which a
+  long-lived host (threads plus fork-hostile C state) can make lethal.
+  Documents the invariant, the failure signature, and the pyarrow
+  mimalloc trap along with the embedder-side fix.
+
 ## [v0.2.11] - 07-17-26
 
 ### Added
