@@ -483,6 +483,11 @@ def make_gates(
             base_dir = posixpath.dirname(caller_file)
             for _ in range(_level - 1):
                 base_dir = posixpath.dirname(base_dir)
+            # base_dir is an absolute VFS path, but dotted module names
+            # are relative to the module root — strip it before dotting
+            # or resolve_module would prepend the root a second time.
+            if vfs._root and base_dir.startswith(vfs._root):
+                base_dir = base_dir[len(vfs._root) :]
 
             if module_name:
                 # from .foo import bar → resolve foo relative to base_dir
