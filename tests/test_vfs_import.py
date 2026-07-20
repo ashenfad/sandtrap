@@ -738,3 +738,59 @@ def test_module_root_hit_outside_root_is_named_not_suggested():
     msg = str(result.error)
     assert "Found /stray/data.py" in msg
     assert "OUTSIDE the module root" in msg
+
+
+def _make_rooted_pkg():
+    """Sandbox with module_root=/workspace and a helpers package."""
+    sandbox, fs = _make_sandbox(policy=Policy(module_root="/workspace"))
+    fs.makedirs("/workspace/helpers", exist_ok=True)
+    fs.write("/workspace/helpers/__init__.py", b"")
+    fs.write("/workspace/helpers/foo.py", b"VALUE = 42")
+    return sandbox, fs
+
+
+def test_module_root_relative_import():
+    """Relative imports resolve root-relative. The caller's __file__ is
+    root-ABSOLUTE (/workspace/helpers/bar.py) because that's the path
+    sandboxed open() sees, but dotted names start at the root — so the
+    root prefix must be stripped before dotting, or resolution would
+    prepend it a second time (/workspace/workspace/helpers/foo.py)."""
+    sandbox, fs = _make_rooted_pkg()
+    fs.write("/workspace/helpers/bar.py", b"from .foo import VALUE\nresult = VALUE * 3")
+
+    result = sandbox.exec("from helpers import bar\nresult = bar.result")
+    assert result.error is None
+    assert result.namespace["result"] == 126
+
+
+def test_module_root_relative_import_bare_dot():
+    """`from . import foo` takes the same root-relative path as
+    `from .foo import X` — both derive a dotted name from __file__."""
+    sandbox, fs = _make_rooted_pkg()
+    fs.write("/workspace/helpers/bar.py", b"from . import foo\nresult = foo.VALUE")
+
+    result = sandbox.exec("from helpers import bar\nresult = bar.result")
+    assert result.error is None
+    assert result.namespace["result"] == 42
+
+
+def test_module_root_segment_is_not_importable():
+    """The root's own name is not a package — imports start AT the
+    root, so `workspace.helpers` must stay unresolvable even though
+    /workspace/helpers exists on the VFS."""
+    sandbox, _ = _make_rooted_pkg()
+
+    result = sandbox.exec("from workspace.helpers import foo")
+    assert isinstance(result.error, ImportError)
+
+
+def test_module_root_relative_import_cannot_escape_root():
+    """Over-dotting clamps at the fs root and then re-roots, so a
+    relative import can never address anything above the module root."""
+    sandbox, fs = _make_rooted_pkg()
+    fs.write("/secret.py", b"KEY = 'pwned'")
+    fs.write("/workspace/helpers/esc.py", b"from ...secret import KEY")
+
+    result = sandbox.exec("from helpers import esc")
+    assert isinstance(result.error, ImportError)
+    assert "pwned" not in str(result.namespace)
