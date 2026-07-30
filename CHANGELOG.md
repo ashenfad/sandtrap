@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Opt-in ambient file-descriptor cleanup for process workers.**
+  Both process and kernel workers used to inherit every descriptor open at
+  fork time, including listening/accepted sockets, database connections, and
+  other sandboxes' control channels. Those duplicates could suppress EOF,
+  keep host resources alive, and become reachable if a policy later granted
+  low-level descriptor access. Pass `close_fds=True` to neutralize ambient
+  descriptors while preserving standard streams and private IPC.
+  The backward-compatible default remains `False`: policy registrations may
+  intentionally use a fork-inherited live resource. Such registrations must
+  bridge the resource explicitly through RPC before enabling cleanup.
+
 ## [v0.2.12] - 07-20-26
 
 ### Added

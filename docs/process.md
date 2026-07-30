@@ -219,6 +219,31 @@ If using `VirtualFS` or another non-`IsolatedFS` filesystem, there's no host pat
 - If the worker crashes (OOM, SIGKILL, seccomp violation), the next `exec()` automatically spawns a new one
 - `shutdown()` sends a clean shutdown message; `__exit__` calls `shutdown()` automatically
 
+### Host file descriptors
+
+Fork copies the embedding process's open file descriptors even when they are
+marked close-on-exec. By default Sandtrap preserves that behavior because a
+policy-registered function or object may intentionally depend on a live
+fork-inherited resource.
+
+Pass `close_fds=True` to neutralize ambient descriptors in the child before
+worker initialization, preserving only standard streams and the worker's
+private multiprocessing plumbing. This applies to both process and kernel
+isolation:
+
+```python
+with sandbox(policy, isolation="process", close_fds=True) as sb:
+    ...
+```
+
+With descriptor cleanup enabled, policy registrations cannot rely on an
+already-open host socket, database connection, pipe, or file handle surviving
+into the worker. Keep the live resource in the parent and expose the required
+operations through an [RPC handler](serialization.md#cross-process-resources-via-rpc-process--kernel-isolation).
+This makes ownership explicit and prevents a worker from keeping unrelated
+host resources alive. Leave `close_fds=False` only when inherited live state
+is an intentional part of the policy contract.
+
 ## Fork safety (read this if your host is long-lived)
 
 Workers are `fork()`ed **from the embedding process**, and fork is only

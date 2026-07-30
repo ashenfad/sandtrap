@@ -47,6 +47,77 @@ def _is_isolated_fs(filesystem: Any) -> bool:
     return isinstance(filesystem, IsolatedFS)
 
 
+def _open_file_descriptors() -> tuple[int, ...]:
+    """Snapshot descriptors that predate the worker's private plumbing.
+
+    ``fork`` copies descriptors even when they are marked close-on-exec.
+    Capture the ambient set *before* creating the worker Pipe/Process so
+    the child can discard host capabilities without touching the control
+    channel or multiprocessing's bootstrap descriptors.
+    """
+    from monkeyfs import suspend
+
+    with suspend():
+        for fd_dir in ("/proc/self/fd", "/dev/fd"):
+            try:
+                names = os.listdir(fd_dir)
+            except OSError:
+                continue
+
+            open_fds: list[int] = []
+            for name in names:
+                try:
+                    fd = int(name)
+                except ValueError:
+                    continue
+                if fd <= 2:
+                    continue
+                try:
+                    os.fstat(fd)
+                except OSError:
+                    # Directory enumeration may briefly expose the descriptor
+                    # used to enumerate the directory itself.
+                    continue
+                open_fds.append(fd)
+            return tuple(open_fds)
+
+    # Supported process-isolation platforms expose one of the descriptor
+    # directories above. Fail closed elsewhere: silently returning an empty
+    # set would recreate the leak on a new platform.
+    raise RuntimeError("Cannot enumerate open file descriptors for forked worker")
+
+
+def _neutralize_inherited_fds(fds: tuple[int, ...]) -> None:
+    """Release inherited host resources without leaving stale fd numbers.
+
+    The fork also copied Python file/socket objects that still remember their
+    descriptor numbers. Merely closing the raw descriptors would let those
+    stale wrappers later close unrelated descriptors after number reuse.
+    Replacing each ambient descriptor with ``/dev/null`` releases the host
+    capability while keeping its number safely occupied for the wrapper's
+    lifetime.
+    """
+    if not fds:
+        return
+
+    from monkeyfs import suspend
+
+    with suspend():
+        devnull = os.open(os.devnull, os.O_RDWR)
+        try:
+            for fd in fds:
+                if fd == devnull:
+                    continue
+                try:
+                    os.dup2(devnull, fd, inheritable=False)
+                except OSError:
+                    # An at-fork hook may already have closed the descriptor.
+                    continue
+        finally:
+            if devnull not in fds:
+                os.close(devnull)
+
+
 class ProcessSandbox:
     """Subprocess-backed Python sandbox.
 
@@ -69,6 +140,12 @@ class ProcessSandbox:
     **Threading:** The worker is forked via ``multiprocessing.get_context("fork")``.
     Enter the context manager before starting threads or async tasks to avoid
     forking a multithreaded process, which can deadlock on macOS.
+
+    **File descriptors:** Fork inheritance is preserved by default for
+    compatibility with policy registrations that use live resources. Pass
+    ``close_fds=True`` to neutralize ambient host descriptors in the child;
+    registrations needing live host resources must then bridge them through
+    RPC instead.
 
     Parameters
     ----------
@@ -110,6 +187,7 @@ class ProcessSandbox:
         rpc_handlers: Mapping[str, RpcHandler] | None = None,
         allow_degraded: bool = False,
         echo: Literal["none", "last", "all"] = "none",
+        close_fds: bool = False,
     ) -> None:
         self._policy = policy
         self._filesystem = filesystem
@@ -124,6 +202,7 @@ class ProcessSandbox:
         # ValueError at construction in the host.
         _validate_echo(echo)
         self._echo = echo
+        self._close_fds = close_fds
         self._rpc_handlers: dict[str, RpcHandler] = dict(rpc_handlers or {})
 
         # Bridge non-IsolatedFS filesystems over RPC. Fork inheritance
@@ -168,6 +247,10 @@ class ProcessSandbox:
         if self._process is not None:
             self._cleanup()
 
+        # Snapshot before creating any worker plumbing. The child neutralizes
+        # exactly this ambient set while preserving the Pipe and
+        # multiprocessing's own fork-bootstrap descriptors.
+        inherited_fds = _open_file_descriptors() if self._close_fds else ()
         parent_conn, child_conn = multiprocessing.Pipe(duplex=True)
 
         # Use fork context — the child inherits the parent's memory
@@ -184,6 +267,7 @@ class ProcessSandbox:
                 self._isolation,
                 self._snapshot_prints,
                 self._echo,
+                inherited_fds,
             ),
             daemon=True,
         )
@@ -542,8 +626,11 @@ def _worker_entry(
     isolation: Literal["auto", "none"],
     snapshot_prints: bool = False,
     echo: Literal["none", "last", "all"] = "none",
+    inherited_fds: tuple[int, ...] = (),
 ) -> None:
     """Entry point for the worker process (target of multiprocessing.Process)."""
+    _neutralize_inherited_fds(inherited_fds)
+
     from .worker import worker_main
 
     worker_main(conn, policy, filesystem, mode, isolation, snapshot_prints, echo)

@@ -2,17 +2,29 @@
 
 import os
 import signal
+import socket
+import stat
 import sys
 import threading
 import time
+import warnings
 from unittest.mock import patch
 
 import pytest
-from monkeyfs import IsolatedFS, VirtualFS
+from monkeyfs import IsolatedFS, VirtualFS, current_fs
 
 from sandtrap import Policy
 from sandtrap.process.protocol import filter_namespace
 from sandtrap.process.sandbox import ProcessSandbox
+
+
+def _fd_signature(fd):
+    """Return enough identity to recognize an inherited open descriptor."""
+    try:
+        info = os.fstat(fd)
+    except OSError:
+        return None
+    return stat.S_IFMT(info.st_mode), info.st_dev, info.st_ino
 
 
 @pytest.fixture
@@ -222,6 +234,117 @@ def test_isolation_none(root):
         result = ps.exec("x = 42")
         assert result.error is None
         assert result.namespace["x"] == 42
+
+
+@pytest.mark.parametrize(
+    "isolation",
+    [
+        pytest.param("none", id="process"),
+        pytest.param("auto", id="kernel"),
+    ],
+)
+def test_worker_does_not_inherit_unrelated_host_socket(isolation):
+    """Forking the worker must not carry ambient host capabilities across.
+
+    ``socketpair()`` is intentionally created before the sandbox. A raw fork
+    duplicates it into the worker at the same descriptor number with the same
+    inode, even though the descriptor is non-inheritable across exec.
+    """
+    host, peer = socket.socketpair()
+    try:
+        fd = host.fileno()
+        host_signature = _fd_signature(fd)
+        policy = Policy(timeout=10.0)
+        policy.fn(_fd_signature, name="fd_signature")
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            with ProcessSandbox(
+                policy,
+                isolation=isolation,
+                allow_degraded=True,
+                close_fds=True,
+            ) as ps:
+                result = ps.exec(
+                    "worker_signature = fd_signature(fd)",
+                    namespace={"fd": fd},
+                )
+
+        assert result.error is None
+        assert result.namespace["worker_signature"] != host_signature
+    finally:
+        host.close()
+        peer.close()
+
+
+@pytest.mark.parametrize(
+    "isolation",
+    [
+        pytest.param("none", id="process"),
+        pytest.param("auto", id="kernel"),
+    ],
+)
+def test_worker_does_not_suppress_eof_on_unrelated_host_socket(isolation):
+    """An inaccessible inherited fd can still change host behavior.
+
+    Once the parent's writer closes, its reader should observe EOF while the
+    sandbox remains alive. A duplicate writer in the worker suppresses EOF
+    even when sandboxed code has no module capable of discovering that fd.
+    """
+    reader, writer = socket.socketpair()
+    try:
+        reader.settimeout(1.0)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            with ProcessSandbox(
+                Policy(timeout=10.0),
+                isolation=isolation,
+                allow_degraded=True,
+                close_fds=True,
+            ):
+                writer.close()
+                assert reader.recv(1) == b""
+    finally:
+        reader.close()
+        writer.close()
+
+
+def test_worker_preserves_inherited_descriptors_by_default():
+    """Legacy policy registrations may intentionally depend on fork state."""
+    host, peer = socket.socketpair()
+    try:
+        fd = host.fileno()
+        host_signature = _fd_signature(fd)
+        policy = Policy(timeout=10.0)
+        policy.fn(_fd_signature, name="fd_signature")
+
+        with ProcessSandbox(policy, isolation="none") as ps:
+            result = ps.exec(
+                "worker_signature = fd_signature(fd)",
+                namespace={"fd": fd},
+            )
+
+        assert result.error is None
+        assert result.namespace["worker_signature"] == host_signature
+    finally:
+        host.close()
+        peer.close()
+
+
+def test_close_fds_bypasses_an_active_virtual_filesystem():
+    """Host-side descriptor enumeration must use the real filesystem."""
+    token = current_fs.set(VirtualFS({}))
+    try:
+        with ProcessSandbox(
+            Policy(timeout=10.0),
+            isolation="none",
+            close_fds=True,
+        ) as ps:
+            result = ps.exec("answer = 6 * 7")
+        assert result.error is None
+        assert result.namespace["answer"] == 42
+    finally:
+        current_fs.reset(token)
 
 
 # ------------------------------------------------------------------
