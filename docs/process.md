@@ -217,6 +217,7 @@ If using `VirtualFS` or another non-`IsolatedFS` filesystem, there's no host pat
 - The worker process is forked eagerly when entering the context manager (`__enter__`)
 - The worker persists across multiple `exec()` calls
 - If the worker crashes (OOM, SIGKILL, seccomp violation), the next `exec()` automatically spawns a new one
+- If the parent process disappears, an idle worker observes control-channel EOF and exits
 - `shutdown()` sends a clean shutdown message; `__exit__` calls `shutdown()` automatically
 
 ### Host file descriptors

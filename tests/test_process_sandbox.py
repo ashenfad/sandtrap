@@ -1,5 +1,6 @@
 """Tests for ProcessSandbox — subprocess-backed execution."""
 
+import multiprocessing
 import os
 import signal
 import socket
@@ -25,6 +26,27 @@ def _fd_signature(fd):
     except OSError:
         return None
     return stat.S_IFMT(info.st_mode), info.st_dev, info.st_ino
+
+
+def _start_worker_then_abandon_parent(report):
+    """Start a worker and exit without running Python cleanup handlers."""
+    sb = ProcessSandbox(
+        Policy(timeout=10.0),
+        isolation="none",
+        close_fds=True,
+    )
+    sb.__enter__()
+    report.send(sb._process.pid)
+    report.close()
+    os._exit(0)
+
+
+def _pid_exists(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
 
 
 @pytest.fixture
@@ -345,6 +367,32 @@ def test_close_fds_bypasses_an_active_virtual_filesystem():
         assert result.namespace["answer"] == 42
     finally:
         current_fs.reset(token)
+
+
+def test_idle_worker_exits_when_parent_process_disappears():
+    """The worker must observe EOF when an abrupt parent closes its pipe."""
+    ctx = multiprocessing.get_context("fork")
+    receive, report = ctx.Pipe(duplex=False)
+    host = ctx.Process(target=_start_worker_then_abandon_parent, args=(report,))
+    host.start()
+    report.close()
+
+    assert receive.poll(5.0), "host did not report the worker pid"
+    worker_pid = receive.recv()
+    receive.close()
+    host.join(timeout=5.0)
+    assert not host.is_alive()
+    host.close()
+
+    deadline = time.monotonic() + 5.0
+    while _pid_exists(worker_pid) and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+    try:
+        assert not _pid_exists(worker_pid)
+    finally:
+        if _pid_exists(worker_pid):
+            os.kill(worker_pid, signal.SIGKILL)
 
 
 # ------------------------------------------------------------------
