@@ -261,6 +261,7 @@ class ProcessSandbox:
             target=_worker_entry,
             args=(
                 child_conn,
+                parent_conn,
                 self._policy,
                 self._worker_fs,
                 self._mode,
@@ -620,6 +621,7 @@ class ProcessSandbox:
 
 def _worker_entry(
     conn: multiprocessing.connection.Connection,
+    parent_conn: multiprocessing.connection.Connection,
     policy: Policy,
     filesystem: Any | None,
     mode: Literal["wrapped", "raw"],
@@ -629,6 +631,11 @@ def _worker_entry(
     inherited_fds: tuple[int, ...] = (),
 ) -> None:
     """Entry point for the worker process (target of multiprocessing.Process)."""
+    # ``multiprocessing.Pipe`` creates both endpoints before the fork, so the
+    # child inherits the parent's endpoint too. Close that copy explicitly:
+    # otherwise ``conn.recv()`` never observes EOF when the real parent dies,
+    # and an idle worker can live forever as an orphan.
+    parent_conn.close()
     _neutralize_inherited_fds(inherited_fds)
 
     from .worker import worker_main
