@@ -22,6 +22,7 @@ def sandbox(
     rpc_handlers: Mapping[str, Callable[[str, tuple, dict], Any]] | None = None,
     allow_degraded: bool = False,
     echo: Literal["none", "last", "all"] = "none",
+    close_fds: bool = False,
 ) -> Sandbox | ProcessSandbox:
     """Create a sandbox with the specified isolation level.
 
@@ -74,6 +75,12 @@ def sandbox(
         ``snapshot_prints=True``, the raw object in ``result.prints``
         as a single-arg entry (an implicit ``print``).  ``None`` values
         are suppressed, so ``print(x)`` never double-echoes.
+    close_fds:
+        Only meaningful for process / kernel isolation. When ``True``,
+        neutralize ambient host file descriptors in the worker while
+        preserving standard streams and private IPC. Defaults to ``False``
+        because policy registrations may intentionally rely on fork-inherited
+        live resources; those registrations must use RPC when this is enabled.
     """
     if isolation == "none":
         return Sandbox(
@@ -98,4 +105,5 @@ def sandbox(
         rpc_handlers=rpc_handlers,
         allow_degraded=allow_degraded,
         echo=echo,
+        close_fds=close_fds,
     )

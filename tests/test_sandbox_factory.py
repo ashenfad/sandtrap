@@ -52,6 +52,12 @@ def test_process_returns_process_sandbox():
     assert isinstance(sb, ProcessSandbox)
 
 
+def test_process_forwards_close_fds():
+    sb = sandbox(Policy(timeout=5.0), isolation="process", close_fds=True)
+    assert isinstance(sb, ProcessSandbox)
+    assert sb._close_fds is True
+
+
 def test_process_basic_exec(root):
     with sandbox(
         Policy(timeout=5.0), isolation="process", filesystem=IsolatedFS(root)
