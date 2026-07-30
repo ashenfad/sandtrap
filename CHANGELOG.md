@@ -20,11 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bridge the resource explicitly through RPC before enabling cleanup.
 
 ### Fixed
-- **Idle workers exit when their parent process disappears.** A worker
-  inherited both ends of its `multiprocessing.Pipe`; its own duplicate of the
-  parent endpoint prevented the child endpoint from ever observing EOF, so an
-  abrupt host exit left the worker orphaned indefinitely. The child now closes
-  that parent-side copy before entering its receive loop.
+- **Idle workers exit when their parent process disappears.** Workers
+  inherited the parent endpoints for their own and earlier sandboxes'
+  `multiprocessing.Pipe` connections. Those duplicates prevented an idle
+  worker from observing control-channel EOF after an abrupt host exit,
+  especially while a later worker remained busy. Each child now closes every
+  active Sandtrap parent endpoint inherited at fork.
 
 ## [v0.2.12] - 07-20-26
 

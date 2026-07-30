@@ -217,7 +217,7 @@ If using `VirtualFS` or another non-`IsolatedFS` filesystem, there's no host pat
 - The worker process is forked eagerly when entering the context manager (`__enter__`)
 - The worker persists across multiple `exec()` calls
 - If the worker crashes (OOM, SIGKILL, seccomp violation), the next `exec()` automatically spawns a new one
-- If the parent process disappears, an idle worker observes control-channel EOF and exits
+- Each child closes inherited copies of all active Sandtrap parent control endpoints, so an idle worker observes EOF and exits if the parent process disappears — even while a later worker remains busy
 - `shutdown()` sends a clean shutdown message; `__exit__` calls `shutdown()` automatically
 
 ### Host file descriptors

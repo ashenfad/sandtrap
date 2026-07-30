@@ -8,6 +8,7 @@ import os
 import signal
 import time
 import warnings
+import weakref
 from collections.abc import Callable, Mapping
 from typing import Any, Literal
 
@@ -37,6 +38,11 @@ RpcHandler = Callable[[str, tuple, dict], Any]
 
 # Timeout (seconds) waiting for worker to become ready
 _READY_TIMEOUT = 30.0
+
+# Parent-side control connections owned by live Sandtrap workers. A later
+# fork inherits these endpoints, so each new child must close its copies or
+# it can suppress EOF for an earlier worker after the embedding process exits.
+_PARENT_CONNECTIONS: weakref.WeakSet[Any] = weakref.WeakSet()
 
 
 def _is_isolated_fs(filesystem: Any) -> bool:
@@ -252,6 +258,8 @@ class ProcessSandbox:
         # multiprocessing's own fork-bootstrap descriptors.
         inherited_fds = _open_file_descriptors() if self._close_fds else ()
         parent_conn, child_conn = multiprocessing.Pipe(duplex=True)
+        _PARENT_CONNECTIONS.add(parent_conn)
+        parent_connections = tuple(_PARENT_CONNECTIONS)
 
         # Use fork context — the child inherits the parent's memory
         # space, so the Policy (with its live module/class references)
@@ -261,7 +269,7 @@ class ProcessSandbox:
             target=_worker_entry,
             args=(
                 child_conn,
-                parent_conn,
+                parent_connections,
                 self._policy,
                 self._worker_fs,
                 self._mode,
@@ -272,7 +280,14 @@ class ProcessSandbox:
             ),
             daemon=True,
         )
-        self._process.start()
+        try:
+            self._process.start()
+        except BaseException:
+            _PARENT_CONNECTIONS.discard(parent_conn)
+            parent_conn.close()
+            child_conn.close()
+            self._process = None
+            raise
         child_conn.close()  # Parent doesn't use the child end
 
         self._conn = parent_conn
@@ -345,6 +360,7 @@ class ProcessSandbox:
                 self._conn.close()
             except OSError:
                 pass
+            _PARENT_CONNECTIONS.discard(self._conn)
             self._conn = None
         self._process = None
 
@@ -621,7 +637,7 @@ class ProcessSandbox:
 
 def _worker_entry(
     conn: multiprocessing.connection.Connection,
-    parent_conn: multiprocessing.connection.Connection,
+    parent_connections: tuple[multiprocessing.connection.Connection, ...],
     policy: Policy,
     filesystem: Any | None,
     mode: Literal["wrapped", "raw"],
@@ -631,11 +647,18 @@ def _worker_entry(
     inherited_fds: tuple[int, ...] = (),
 ) -> None:
     """Entry point for the worker process (target of multiprocessing.Process)."""
-    # ``multiprocessing.Pipe`` creates both endpoints before the fork, so the
-    # child inherits the parent's endpoint too. Close that copy explicitly:
-    # otherwise ``conn.recv()`` never observes EOF when the real parent dies,
-    # and an idle worker can live forever as an orphan.
-    parent_conn.close()
+    # A fork inherits the parent endpoint for this worker and for every
+    # earlier live Sandtrap worker. Close every known copy: otherwise a busy
+    # later worker can suppress control EOF and orphan an earlier idle worker
+    # when the real parent dies.
+    for parent_conn in parent_connections:
+        try:
+            parent_conn.close()
+        except OSError:
+            pass
+    # Drop the child's copied registry after closing its entries. Only the
+    # embedding process owns and tracks parent-side control connections.
+    _PARENT_CONNECTIONS.clear()
     _neutralize_inherited_fds(inherited_fds)
 
     from .worker import worker_main
