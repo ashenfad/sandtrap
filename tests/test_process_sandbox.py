@@ -15,7 +15,7 @@ import pytest
 from monkeyfs import IsolatedFS, VirtualFS, current_fs
 
 from sandtrap import Policy
-from sandtrap.process.protocol import filter_namespace
+from sandtrap.process.protocol import ExecMsg, filter_namespace
 from sandtrap.process.sandbox import ProcessSandbox
 
 
@@ -33,10 +33,43 @@ def _start_worker_then_abandon_parent(report):
     sb = ProcessSandbox(
         Policy(timeout=10.0),
         isolation="none",
-        close_fds=True,
     )
     sb.__enter__()
     report.send(sb._process.pid)
+    report.close()
+    os._exit(0)
+
+
+def _block_after_notifying_parent():
+    """Tell the embedding process execution started, then remain busy."""
+    os.kill(os.getppid(), signal.SIGUSR1)
+    while True:
+        time.sleep(1.0)
+
+
+def _start_two_workers_then_abandon_parent(report):
+    """Leave one worker idle while a later worker remains busy."""
+    second_started = False
+
+    def mark_second_started(_signum, _frame):
+        nonlocal second_started
+        second_started = True
+
+    signal.signal(signal.SIGUSR1, mark_second_started)
+
+    first = ProcessSandbox(Policy(timeout=60.0), isolation="none")
+    second_policy = Policy(timeout=60.0)
+    second_policy.fn(_block_after_notifying_parent, name="block")
+    second = ProcessSandbox(second_policy, isolation="none")
+    first.__enter__()
+    second.__enter__()
+
+    second._conn.send(ExecMsg(source="block()", namespace=None))
+    deadline = time.monotonic() + 5.0
+    while not second_started and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    report.send((first._process.pid, second._process.pid, second_started))
     report.close()
     os._exit(0)
 
@@ -393,6 +426,35 @@ def test_idle_worker_exits_when_parent_process_disappears():
     finally:
         if _pid_exists(worker_pid):
             os.kill(worker_pid, signal.SIGKILL)
+
+
+def test_idle_worker_exits_while_later_worker_remains_busy():
+    """Another worker's inherited endpoint must not suppress control EOF."""
+    ctx = multiprocessing.get_context("fork")
+    receive, report = ctx.Pipe(duplex=False)
+    host = ctx.Process(target=_start_two_workers_then_abandon_parent, args=(report,))
+    host.start()
+    report.close()
+
+    assert receive.poll(10.0), "host did not report the worker pids"
+    first_pid, second_pid, second_started = receive.recv()
+    receive.close()
+    host.join(timeout=5.0)
+    assert not host.is_alive()
+    host.close()
+    assert second_started, "later worker did not begin its blocking execution"
+
+    deadline = time.monotonic() + 5.0
+    while _pid_exists(first_pid) and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+    try:
+        assert not _pid_exists(first_pid)
+        assert _pid_exists(second_pid), "later worker must still be busy"
+    finally:
+        for pid in (first_pid, second_pid):
+            if _pid_exists(pid):
+                os.kill(pid, signal.SIGKILL)
 
 
 # ------------------------------------------------------------------
