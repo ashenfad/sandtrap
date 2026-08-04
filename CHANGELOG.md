@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **Requires monkeyfs >= 0.1.6.** The floor was previously unbounded below, so
+  an old monkeyfs could satisfy the dependency while leaving filesystem
+  interception bypassable. 0.1.6 closes three gaps that matter directly to
+  sandboxed code: `bytes` and `os.PathLike` paths skipped interception
+  entirely and reached the host (`open(b"/etc/passwd").read()` was enough),
+  `dir_fd` arguments resolved against the host filesystem, and the safe-path
+  passthrough handed out real host directory descriptors. It also fixes
+  `os.mkdir()` raising `TypeError` against any filesystem implementing the
+  documented `FileSystem` protocol — which includes sandtrap's own `RemoteFS`,
+  so `os.mkdir()` from sandboxed code under `isolation="process"` was broken
+  for every non-`IsolatedFS` filesystem.
+
 ## [v0.2.13] - 07-30-26
 
 ### Added
