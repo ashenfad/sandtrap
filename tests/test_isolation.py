@@ -8,10 +8,13 @@ by sandtrap's Python-level policy.
 import multiprocessing
 import multiprocessing.connection
 import os
+import signal
 import sys
 from unittest.mock import ANY, patch
 
 import pytest
+
+import sandtrap.process.sandbox
 
 
 def _run_in_child(fn, *args):
@@ -817,13 +820,16 @@ class TestForkUnsafeError:
         from sandtrap import StForkUnsafe
 
         sb = self._sandbox()
-        # EOF on the control connection before ReadyMsg is exactly what a
-        # child that segfaults in C-library setup produces.
+        # EOF before ReadyMsg with a crash signal is what a child that dies
+        # in fork-broken C-library setup produces.
         with patch.object(
             multiprocessing.connection.Connection, "recv", side_effect=EOFError
         ):
-            with pytest.raises(StForkUnsafe) as exc:
-                sb.__enter__()
+            with patch.object(
+                sandtrap.process.sandbox, "_exit_signal", return_value=signal.SIGSEGV
+            ):
+                with pytest.raises(StForkUnsafe) as exc:
+                    sb.__enter__()
         sb.shutdown()
 
         msg = str(exc.value)
@@ -838,8 +844,11 @@ class TestForkUnsafeError:
         with patch.object(
             multiprocessing.connection.Connection, "recv", side_effect=EOFError
         ):
-            with pytest.raises(RuntimeError):
-                sb.__enter__()
+            with patch.object(
+                sandtrap.process.sandbox, "_exit_signal", return_value=signal.SIGSEGV
+            ):
+                with pytest.raises(RuntimeError):
+                    sb.__enter__()
         sb.shutdown()
 
     def test_timeout_is_not_reported_as_fork_unsafe(self):
@@ -886,3 +895,86 @@ class TestForkUnsafeError:
 
         assert not isinstance(exc.value, StForkUnsafe)
         assert "failed to initialise" in str(exc.value)
+
+    def test_setup_failure_is_reported_not_misdiagnosed(self):
+        """A pre-worker_main failure must surface its own traceback.
+
+        _worker_entry does fallible work (descriptor neutralization, the
+        worker import) before worker_main installs reporting. Left
+        unreported it reaches the parent as a bare EOF, indistinguishable
+        from a native crash -- and would earn fork-hostility advice that
+        has nothing to do with the actual cause.
+        """
+        from sandtrap import Policy, StForkUnsafe
+        from sandtrap.process.sandbox import ProcessSandbox
+
+        def boom(fds):
+            raise OSError(24, "Too many open files")
+
+        with patch.object(sandtrap.process.sandbox, "_neutralize_inherited_fds", boom):
+            sb = ProcessSandbox(Policy(timeout=5.0), close_fds=True)
+            with pytest.raises(RuntimeError) as exc:
+                sb.__enter__()
+            sb.shutdown()
+
+        assert not isinstance(exc.value, StForkUnsafe)
+        assert "Too many open files" in str(exc.value)
+
+    def test_crash_signal_is_fork_unsafe(self):
+        """A native crash is the fork-hostility signature."""
+        from sandtrap import Policy, StForkUnsafe
+        from sandtrap.process.sandbox import ProcessSandbox
+
+        def crash(fds):
+            # Runs in the child. Silence the inherited faulthandler so the
+            # deliberate crash doesn't dump a traceback into the test log.
+            import faulthandler
+
+            faulthandler.disable()
+            os.kill(os.getpid(), signal.SIGSEGV)
+
+        with patch.object(sandtrap.process.sandbox, "_neutralize_inherited_fds", crash):
+            sb = ProcessSandbox(Policy(timeout=5.0), close_fds=True)
+            with pytest.raises(StForkUnsafe) as exc:
+                sb.__enter__()
+            sb.shutdown()
+
+        assert "SIGSEGV" in str(exc.value)
+
+    def test_silent_nonzero_exit_is_not_fork_unsafe(self):
+        """A child that exits without reporting isn't necessarily fork-hostile."""
+        from sandtrap import Policy, StForkUnsafe
+        from sandtrap.process.sandbox import ProcessSandbox
+
+        def bail(fds):
+            os._exit(1)
+
+        with patch.object(sandtrap.process.sandbox, "_neutralize_inherited_fds", bail):
+            sb = ProcessSandbox(Policy(timeout=5.0), close_fds=True)
+            with pytest.raises(RuntimeError) as exc:
+                sb.__enter__()
+            sb.shutdown()
+
+        assert not isinstance(exc.value, StForkUnsafe)
+        assert "status 1" in str(exc.value)
+        assert "stderr" in str(exc.value)
+
+    def test_external_kill_is_not_fork_unsafe(self):
+        """SIGKILL points at an OOM killer or supervisor, not fork state."""
+        from sandtrap import Policy, StForkUnsafe
+        from sandtrap.process.sandbox import ProcessSandbox
+
+        def killed(fds):
+            os.kill(os.getpid(), signal.SIGKILL)
+
+        with patch.object(
+            sandtrap.process.sandbox, "_neutralize_inherited_fds", killed
+        ):
+            sb = ProcessSandbox(Policy(timeout=5.0), close_fds=True)
+            with pytest.raises(RuntimeError) as exc:
+                sb.__enter__()
+            sb.shutdown()
+
+        assert not isinstance(exc.value, StForkUnsafe)
+        assert "SIGKILL" in str(exc.value)
+        assert "out-of-memory" in str(exc.value)

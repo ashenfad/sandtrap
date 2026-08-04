@@ -8,6 +8,7 @@ import os
 import signal
 import threading
 import time
+import traceback
 import warnings
 import weakref
 from collections.abc import Callable, Mapping
@@ -47,6 +48,26 @@ _READY_TIMEOUT = 30.0
 _PARENT_CONNECTIONS: weakref.WeakSet[Any] = weakref.WeakSet()
 
 
+# Signals a process raises by crashing inside native code. Fork-hostile
+# C-library state (allocator thread heaps, Objective-C runtime checks)
+# manifests as one of these. A clean nonzero exit means Python-level
+# setup failed instead, and SIGKILL means something outside killed it.
+_CRASH_SIGNALS = frozenset(
+    getattr(signal, name)
+    for name in ("SIGSEGV", "SIGBUS", "SIGABRT", "SIGILL", "SIGFPE", "SIGTRAP")
+    if hasattr(signal, name)
+)
+
+
+def _exit_signal(process: Any) -> int | None:
+    """The signal that killed the worker, or None if it exited normally."""
+    if process is None:
+        return None
+    process.join(timeout=1.0)
+    exitcode = process.exitcode
+    return -exitcode if exitcode is not None and exitcode < 0 else None
+
+
 def _describe_exit(process: Any) -> str:
     """Human-readable cause of death for a worker that never became ready."""
     if process is None:
@@ -65,8 +86,38 @@ def _describe_exit(process: Any) -> str:
     return f"the worker exited with status {exitcode}"
 
 
+def _init_death_error(process: Any) -> BaseException:
+    """Classify a worker that died before signalling ready.
+
+    Only a crash inside native code indicates fork hostility. A clean
+    nonzero exit means Python-level setup raised without reporting, and
+    any other signal means something external killed the worker -- both
+    deserve their own message rather than allocator advice.
+    """
+    sig = _exit_signal(process)
+    if sig is not None and sig in _CRASH_SIGNALS:
+        return _fork_unsafe_error(process)
+
+    detail = ""
+    if sig == getattr(signal, "SIGKILL", None):
+        detail = (
+            " A SIGKILL usually means something outside the process killed it "
+            "-- an out-of-memory killer or a supervisor."
+        )
+    else:
+        detail = (
+            " The worker's own traceback goes to its stderr, which is where "
+            "the cause will be."
+        )
+
+    return RuntimeError(
+        f"Worker process died during initialisation -- "
+        f"{_describe_exit(process)}.{detail}"
+    )
+
+
 def _fork_unsafe_error(process: Any) -> StForkUnsafe:
-    """Build the explanatory error for a worker that died during init.
+    """Build the explanatory error for a worker that crashed during init.
 
     Respawning cannot help: the next worker forks the same host process,
     which is still hostile. Until sandtrap can fall back to a spawned or
@@ -358,7 +409,7 @@ class ProcessSandbox:
             # child never got far enough to report a policy problem, so it
             # died in interpreter/C-library setup. Read the exit status
             # before _kill() resets the process handle.
-            error = _fork_unsafe_error(self._process)
+            error = _init_death_error(self._process)
             self._kill()
             raise error
 
@@ -706,20 +757,36 @@ def _worker_entry(
     inherited_fds: tuple[int, ...] = (),
 ) -> None:
     """Entry point for the worker process (target of multiprocessing.Process)."""
-    # A fork inherits the parent endpoint for this worker and for every
-    # earlier live Sandtrap worker. Close every known copy: otherwise a busy
-    # later worker can suppress control EOF and orphan an earlier idle worker
-    # when the real parent dies.
-    for parent_conn in parent_connections:
-        try:
-            parent_conn.close()
-        except OSError:
-            pass
-    # Drop the child's copied registry after closing its entries. Only the
-    # embedding process owns and tracks parent-side control connections.
-    _PARENT_CONNECTIONS.clear()
-    _neutralize_inherited_fds(inherited_fds)
+    # Everything before worker_main installs its own reporting must report
+    # for itself. Descriptor neutralization and the worker import can both
+    # fail (EMFILE, a broken install), and an unreported failure here reaches
+    # the parent as a bare EOF -- indistinguishable from a child that died in
+    # C-library setup, which would earn it a fork-hostility diagnosis it
+    # doesn't deserve.
+    try:
+        # A fork inherits the parent endpoint for this worker and for every
+        # earlier live Sandtrap worker. Close every known copy: otherwise a
+        # busy later worker can suppress control EOF and orphan an earlier
+        # idle worker when the real parent dies.
+        for parent_conn in parent_connections:
+            try:
+                parent_conn.close()
+            except OSError:
+                pass
+        # Drop the child's copied registry after closing its entries. Only
+        # the embedding process owns and tracks parent-side control
+        # connections.
+        _PARENT_CONNECTIONS.clear()
+        _neutralize_inherited_fds(inherited_fds)
 
-    from .worker import worker_main
+        from .worker import worker_main
+    except BaseException:
+        try:
+            conn.send(WorkerErrorMsg(message=traceback.format_exc()))
+        except BaseException:
+            # The control channel itself is unusable; nothing to report
+            # through. The parent will see EOF and describe the exit.
+            pass
+        return
 
     worker_main(conn, policy, filesystem, mode, isolation, snapshot_prints, echo)

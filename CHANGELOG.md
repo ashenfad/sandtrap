@@ -15,12 +15,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unexplained loop. That signature now raises `StForkUnsafe`, reporting the
   worker's exit signal and the host's live thread count, and listing the
   fixes (construct the sandbox earlier, set `ARROW_DEFAULT_MEMORY_POOL=system`
-  for pyarrow/pandas hosts, or drop to `isolation="none"`). Only death before
-  `ReadyMsg` is treated this way — a ready-timeout and a clean
-  `WorkerErrorMsg` still raise as before, since neither indicates fork
-  hostility. The error subclasses both `StError` and `RuntimeError`, so
+  for pyarrow/pandas hosts, or drop to `isolation="none"`). The classification
+  is narrow: only a worker that dies before `ReadyMsg` *from a native crash
+  signal* (`SIGSEGV`, `SIGBUS`, `SIGABRT`, …) is diagnosed as fork hostility.
+  A ready-timeout, a clean `WorkerErrorMsg`, a nonzero exit, and an external
+  `SIGKILL` each get their own message, since none of them indicates a
+  fork-broken host. The error subclasses both `StError` and `RuntimeError`, so
   existing handlers keep working. Recovering automatically is tracked in
   [#33](https://github.com/ashenfad/sandtrap/issues/33).
+
+### Fixed
+- **Worker setup failures now report their own traceback.** `_worker_entry`
+  performs fallible work — inherited-descriptor neutralization (`close_fds=True`)
+  and importing the worker module — before `worker_main` installs its exception
+  reporting. A failure there reached the parent as a bare EOF, so an ordinary
+  setup error (`EMFILE`, a broken install) was indistinguishable from a worker
+  that died in C-library setup. Those failures are now caught and sent as
+  `WorkerErrorMsg`, surfacing the actual traceback instead of a misleading
+  diagnosis.
 
 ### Changed
 - **Requires monkeyfs >= 0.1.6.** The floor was previously unbounded below, so
