@@ -6,12 +6,14 @@ import asyncio
 import multiprocessing
 import os
 import signal
+import threading
 import time
 import warnings
 import weakref
 from collections.abc import Callable, Mapping
 from typing import Any, Literal
 
+from ..errors import StForkUnsafe
 from ..policy import Policy
 from ..sandbox import (
     ExecResult,
@@ -43,6 +45,58 @@ _READY_TIMEOUT = 30.0
 # fork inherits these endpoints, so each new child must close its copies or
 # it can suppress EOF for an earlier worker after the embedding process exits.
 _PARENT_CONNECTIONS: weakref.WeakSet[Any] = weakref.WeakSet()
+
+
+def _describe_exit(process: Any) -> str:
+    """Human-readable cause of death for a worker that never became ready."""
+    if process is None:
+        return "the worker exited before signalling ready"
+
+    process.join(timeout=1.0)
+    exitcode = process.exitcode
+    if exitcode is None:
+        return "the worker stopped responding before signalling ready"
+    if exitcode < 0:
+        try:
+            name = signal.Signals(-exitcode).name
+        except ValueError:
+            name = f"signal {-exitcode}"
+        return f"the worker was killed by {name}"
+    return f"the worker exited with status {exitcode}"
+
+
+def _fork_unsafe_error(process: Any) -> StForkUnsafe:
+    """Build the explanatory error for a worker that died during init.
+
+    Respawning cannot help: the next worker forks the same host process,
+    which is still hostile. Until sandtrap can fall back to a spawned or
+    forkserver-backed worker (issue #33), the useful thing to do is name
+    the condition and point at the fixes rather than loop.
+    """
+    threads = threading.active_count()
+    thread_note = (
+        f" The host process has {threads} threads running, which is the usual "
+        "cause: forking a multi-threaded process leaves C-library state "
+        "(allocators, thread registries) broken in the child."
+        if threads > 1
+        else " The host process appears single-threaded, so suspect "
+        "fork-hostile C-extension state rather than threads."
+    )
+
+    return StForkUnsafe(
+        f"Worker process died during initialisation -- {_describe_exit(process)}."
+        f"{thread_note}\n"
+        "\n"
+        "Respawning will not clear this: each attempt re-forks the same host "
+        "process. Fixes, in order of preference:\n"
+        "  1. Construct the sandbox earlier, before the host grows threads.\n"
+        "  2. If pyarrow or pandas is loaded, set "
+        'os.environ["ARROW_DEFAULT_MEMORY_POOL"] = "system" before the first '
+        "import -- its default allocator does not survive fork.\n"
+        '  3. Use isolation="none" if a process boundary is not required.\n'
+        "\n"
+        'See docs/process.md ("Fork safety") for the full list.'
+    )
 
 
 def _is_isolated_fs(filesystem: Any) -> bool:
@@ -300,8 +354,13 @@ class ProcessSandbox:
         try:
             msg = self._conn.recv()
         except (EOFError, OSError):
+            # Death before ReadyMsg is the fork-hostility signature: the
+            # child never got far enough to report a policy problem, so it
+            # died in interpreter/C-library setup. Read the exit status
+            # before _kill() resets the process handle.
+            error = _fork_unsafe_error(self._process)
             self._kill()
-            raise RuntimeError("Worker process died during initialisation")
+            raise error
 
         if isinstance(msg, WorkerErrorMsg):
             self._kill()

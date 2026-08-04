@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`StForkUnsafe`: a named error for fork-hostile hosts.** A process worker
+  that dies before signalling ready used to raise a bare
+  `RuntimeError("Worker process died during initialisation")`, and the
+  automatic respawn re-forked the same hostile host — producing a permanent,
+  unexplained loop. That signature now raises `StForkUnsafe`, reporting the
+  worker's exit signal and the host's live thread count, and listing the
+  fixes (construct the sandbox earlier, set `ARROW_DEFAULT_MEMORY_POOL=system`
+  for pyarrow/pandas hosts, or drop to `isolation="none"`). Only death before
+  `ReadyMsg` is treated this way — a ready-timeout and a clean
+  `WorkerErrorMsg` still raise as before, since neither indicates fork
+  hostility. The error subclasses both `StError` and `RuntimeError`, so
+  existing handlers keep working. Recovering automatically is tracked in
+  [#33](https://github.com/ashenfad/sandtrap/issues/33).
+
 ### Changed
 - **Requires monkeyfs >= 0.1.6.** The floor was previously unbounded below, so
   an old monkeyfs could satisfy the dependency while leaving filesystem

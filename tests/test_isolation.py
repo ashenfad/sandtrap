@@ -6,6 +6,7 @@ by sandtrap's Python-level policy.
 """
 
 import multiprocessing
+import multiprocessing.connection
 import os
 import sys
 from unittest.mock import ANY, patch
@@ -796,3 +797,92 @@ class TestSeccompUnavailable:
         with patch("sandtrap.process.seccomp.sys") as mock_sys:
             mock_sys.platform = "darwin"
             assert apply() is False
+
+
+class TestForkUnsafeError:
+    """A worker that dies before ReadyMsg must be named, not looped on.
+
+    Respawning re-forks the same host process, so this condition never
+    clears on its own (issue #33). The error has to say so.
+    """
+
+    def _sandbox(self):
+        from sandtrap import Policy
+        from sandtrap.process.sandbox import ProcessSandbox
+
+        return ProcessSandbox(Policy(timeout=5.0))
+
+    def test_init_death_raises_st_fork_unsafe(self):
+        """Simulate the fork-hostile signature: child dies before ready."""
+        from sandtrap import StForkUnsafe
+
+        sb = self._sandbox()
+        # EOF on the control connection before ReadyMsg is exactly what a
+        # child that segfaults in C-library setup produces.
+        with patch.object(
+            multiprocessing.connection.Connection, "recv", side_effect=EOFError
+        ):
+            with pytest.raises(StForkUnsafe) as exc:
+                sb.__enter__()
+        sb.shutdown()
+
+        msg = str(exc.value)
+        assert "died during initialisation" in msg
+        assert "Respawning will not clear this" in msg
+        assert "ARROW_DEFAULT_MEMORY_POOL" in msg
+        assert 'isolation="none"' in msg
+
+    def test_stays_catchable_as_runtime_error(self):
+        """This path raised a bare RuntimeError before; keep that working."""
+        sb = self._sandbox()
+        with patch.object(
+            multiprocessing.connection.Connection, "recv", side_effect=EOFError
+        ):
+            with pytest.raises(RuntimeError):
+                sb.__enter__()
+        sb.shutdown()
+
+    def test_timeout_is_not_reported_as_fork_unsafe(self):
+        """A slow worker is not a fork-hostile one -- don't conflate them."""
+        from sandtrap import StForkUnsafe
+
+        sb = self._sandbox()
+        with patch.object(
+            multiprocessing.connection.Connection, "poll", return_value=False
+        ):
+            with pytest.raises(RuntimeError) as exc:
+                sb.__enter__()
+        sb.shutdown()
+
+        assert not isinstance(exc.value, StForkUnsafe)
+        assert "did not become ready" in str(exc.value)
+
+    def test_signal_death_is_named(self):
+        """A segfaulted worker should say so, not just 'exited'."""
+        from sandtrap.process.sandbox import _describe_exit
+
+        class FakeProc:
+            exitcode = -11  # SIGSEGV
+
+            def join(self, timeout=None):
+                pass
+
+        assert "SIGSEGV" in _describe_exit(FakeProc())
+
+    def test_clean_worker_error_is_not_fork_unsafe(self):
+        """A policy failure reports itself; it isn't a fork problem."""
+        from sandtrap import StForkUnsafe
+        from sandtrap.process.protocol import WorkerErrorMsg
+
+        sb = self._sandbox()
+        with patch.object(
+            multiprocessing.connection.Connection,
+            "recv",
+            return_value=WorkerErrorMsg(message="policy blew up"),
+        ):
+            with pytest.raises(RuntimeError) as exc:
+                sb.__enter__()
+        sb.shutdown()
+
+        assert not isinstance(exc.value, StForkUnsafe)
+        assert "failed to initialise" in str(exc.value)

@@ -256,6 +256,15 @@ can produce children that die instantly — the signature is a
 automatic respawn re-forks the *current* (now hostile) process on every
 attempt.
 
+sandtrap raises `StForkUnsafe` on that signature rather than looping
+quietly. The error names the cause it can see -- the worker's exit signal
+and the host's live thread count -- and lists the fixes below. It is a
+subclass of both `StError` and `RuntimeError`, so existing `except
+RuntimeError` handlers keep working. Recovering automatically (via a
+spawned or forkserver-backed worker) is tracked in
+[issue #33](https://github.com/ashenfad/sandtrap/issues/33); today the
+condition is reported clearly, not repaired.
+
 Practical rules:
 
 - **Construct process sandboxes early**, before your host grows threads.
