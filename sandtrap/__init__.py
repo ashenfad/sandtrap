@@ -1,5 +1,12 @@
 from .builtins import passthrough_stdio
-from .errors import StCancelled, StError, StTickLimit, StTimeout, StValidationError
+from .errors import (
+    StCancelled,
+    StError,
+    StForkUnsafe,
+    StTickLimit,
+    StTimeout,
+    StValidationError,
+)
 from .factory import sandbox
 from .fs import FileSystem, IsolatedFS, VirtualFS
 from .policy import MemberSpec, Policy
@@ -18,6 +25,7 @@ __all__ = [
     "RpcProxyMarker",
     "StCancelled",
     "StError",
+    "StForkUnsafe",
     "StTickLimit",
     "StTimeout",
     "StValidationError",

@@ -30,6 +30,26 @@ class StTickLimit(StError):
     pass
 
 
+class StForkUnsafe(StError, RuntimeError):
+    """Raised when a process worker dies before signalling ready.
+
+    Workers are forked from the embedding process, so this almost always
+    means the host is no longer fork-safe -- it has grown threads or
+    fork-hostile C-library state since startup. Respawning re-forks the
+    same hostile process, so the condition does not clear on its own.
+
+    Subclasses ``RuntimeError`` as well as ``StError``: this path used to
+    raise a bare ``RuntimeError``, and callers already catching that
+    should keep working.
+
+    See ``docs/process.md`` ("Fork safety") for the remedies, and issue #33
+    for the spawn/forkserver work that would let this recover instead of
+    only reporting clearly.
+    """
+
+    pass
+
+
 class StValidationError(StError):
     """Raised when AST validation rejects code before compilation."""
 
