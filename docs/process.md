@@ -258,7 +258,11 @@ attempt.
 
 sandtrap raises `StForkUnsafe` on that signature rather than looping
 quietly. The error names the cause it can see -- the worker's exit signal
-and the host's live thread count -- and lists the fixes below. It is a
+and the host's live thread count -- and lists the fixes below. It is
+raised only when the worker died from a *native crash signal*
+(`SIGSEGV`, `SIGBUS`, `SIGABRT`, …), which is what fork-broken C-library
+state produces. A worker that exits nonzero, is `SIGKILL`ed by an OOM
+killer, or fails in Python-level setup reports its own cause instead. It is a
 subclass of both `StError` and `RuntimeError`, so existing `except
 RuntimeError` handlers keep working. Recovering automatically (via a
 spawned or forkserver-backed worker) is tracked in
