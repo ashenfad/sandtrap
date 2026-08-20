@@ -290,15 +290,15 @@ raised only when the worker died from a *native crash signal*
 state produces. A worker that exits nonzero, is `SIGKILL`ed by an OOM
 killer, or fails in Python-level setup reports its own cause instead. It is a
 subclass of both `StError` and `RuntimeError`, so existing `except
-RuntimeError` handlers keep working. Recovering automatically (via a
-spawned or forkserver-backed worker) is tracked in
-[issue #33](https://github.com/ashenfad/sandtrap/issues/33); today the
-condition is reported clearly, not repaired.
+RuntimeError` handlers keep working.
 
-Practical rules:
+**None of this is reachable on the default start method** — a worker that
+doesn't inherit your memory cannot inherit broken allocator state from it.
+`StForkUnsafe` is raised only under `start_method="fork"`. The rules below
+apply if you opt into it.
 
-- **Construct process sandboxes early**, before your host grows threads.
-  The eager fork at `__enter__` exists for exactly this reason.
+- **Construct sandboxes early**, before your host grows threads. The eager
+  worker start at `__enter__` exists for exactly this reason.
 - **Known offender: pyarrow's default mimalloc pool.** Its per-thread
   heaps don't survive fork; a forked child segfaults inside `libarrow`
   (`mi_thread_init`) on its first arrow allocation — macOS crash
@@ -311,12 +311,17 @@ Practical rules:
   ```
 
   pyarrow reads the variable at import time; setting it later is a
-  no-op.
+  no-op. Not needed on the default start method: the broker never imports
+  your grants (see `preload_grants`), so no arrow state exists to inherit.
 - macOS is the strictest platform (the Objective-C runtime aborts
   forked children that touch certain frameworks), but allocator
   thread-state hazards exist on Linux too.
 - CPython agrees fork-with-threads is a hazard: 3.12 deprecates it and
   3.14 moves the multiprocessing default away from fork on Linux.
+- **`preload_grants=True` reopens a narrow version of this.** It imports
+  your granted modules into the broker, so a grant that leaves allocator
+  or thread state there is inherited by every worker forked from it. The
+  arrow fix above applies to that configuration too.
 
 ### What the default costs, and what it requires
 
