@@ -39,9 +39,19 @@ class RpcProxy:
     domain-specific interface.
     """
 
-    def __init__(self, conn: Connection, target: str) -> None:
-        self._conn = conn
-        self._target = target
+    def __init__(
+        self,
+        conn: Connection,
+        target: str,
+        methods: tuple[str, ...] | None = None,
+        attributes: tuple[str, ...] | None = None,
+    ) -> None:
+        # object.__setattr__: this class refuses attribute writes (see
+        # __setattr__), and its own construction must not trip that.
+        object.__setattr__(self, "_conn", conn)
+        object.__setattr__(self, "_target", target)
+        object.__setattr__(self, "_methods", methods)
+        object.__setattr__(self, "_attributes", attributes)
 
     def _call(self, method: str, *args: Any, **kwargs: Any) -> Any:
         call_id = uuid.uuid4().hex
@@ -73,11 +83,44 @@ class RpcProxy:
         if name.startswith("_"):
             raise AttributeError(name)
 
+        # A proxy can't inspect the object it stands for, so without a
+        # declared surface every name looks like a method and reading a
+        # data attribute hands back a function -- which then vanishes
+        # from the result namespace as unpicklable, leaving the caller a
+        # silent None. Where the surface IS declared, say what's wrong.
+        if self._attributes is not None and name in self._attributes:
+            raise AttributeError(
+                f"{name!r} is a data attribute of the host object, and the "
+                "process-isolation bridge carries method calls only. Reading "
+                "it here would cross by value and any mutation would be lost, "
+                "so it is refused rather than silently copied. Expose a method "
+                f"that returns it (e.g. get_{name}()), or run with "
+                'isolation="none" where the object itself is in scope.'
+            )
+        if self._methods is not None and name not in self._methods:
+            raise AttributeError(
+                f"{name!r} is not part of the host object's exposed surface "
+                f"(available: {', '.join(sorted(self._methods)) or 'nothing'})"
+            )
+
         def bound(*args: Any, **kwargs: Any) -> Any:
             return self._call(name, *args, **kwargs)
 
         bound.__name__ = name
         return bound
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        """Refuse writes instead of silently landing them on the proxy.
+
+        The host object lives in the parent process; assigning here would
+        set an attribute on this stand-in and leave the real object
+        untouched, with nothing to indicate the write went nowhere.
+        """
+        raise AttributeError(
+            f"cannot set {name!r}: this is a proxy for a host object in "
+            "another process, so the assignment would be lost. Expose a "
+            f"method that performs the update (e.g. set_{name}(value))."
+        )
 
     def __repr__(self) -> str:
         return f"RpcProxy(target={self._target!r})"
@@ -115,7 +158,12 @@ def _substitute_proxy_markers(
     out: dict[str, Any] = {}
     for k, v in namespace.items():
         if isinstance(v, RpcProxyMarker):
-            proxy = RpcProxy(conn, v.target)
+            proxy = RpcProxy(
+                conn,
+                v.target,
+                methods=getattr(v, "methods", None),
+                attributes=getattr(v, "attributes", None),
+            )
             if v.wrapper:
                 mod_name, _, cls_name = v.wrapper.partition(":")
                 try:
@@ -133,6 +181,27 @@ def _substitute_proxy_markers(
         else:
             out[k] = v
     return out
+
+
+def _warm_deferred_imports() -> None:
+    """Import what sandtrap itself defers, before the filesystem is restricted.
+
+    Each entry here is a module reached *lazily* on a path that runs after
+    isolation is applied:
+
+    * ``concurrent.futures.thread`` -- ``concurrent.futures`` resolves it in a
+      module-level ``__getattr__``, so ``net.patch.install_threading``'s
+      reference to ``ThreadPoolExecutor`` triggers the import at exec time.
+
+    Failures are ignored: a module that can't be imported here would not have
+    been importable later either, and reporting it as a worker startup failure
+    would be worse than letting the real use site raise.
+    """
+    for name in ("concurrent.futures.thread",):
+        try:
+            importlib.import_module(name)
+        except Exception:
+            pass
 
 
 def worker_main(
@@ -187,6 +256,14 @@ def worker_main(
                 root = str(filesystem.root)
         except ImportError:
             pass
+
+        # Warm every import the worker still needs, while the filesystem is
+        # readable. Landlock confines it to the sandbox root, so a module first
+        # touched after apply_isolation cannot be read at all -- and Python's
+        # lazy imports make that easy to do by accident. A forked worker
+        # inherited these in sys.modules and never noticed; one that starts
+        # fresh has to fetch them from disk.
+        _warm_deferred_imports()
 
         # Apply kernel-level isolation before running any user code.
         from .platform import apply_isolation

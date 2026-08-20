@@ -173,8 +173,43 @@ _NETWORK_SYSCALLS = [
 ]
 
 
+def preload() -> bool:
+    """Import the seccomp backend, before anything restricts the filesystem.
+
+    Must run *before* Landlock. Landlock has to be applied first — its own
+    setup needs syscalls seccomp would block — but once it has, reading
+    ``pyseccomp.py`` out of site-packages is a ``PermissionError``, and the
+    worker dies during initialisation.
+
+    A forked worker hid this by inheriting the module in ``sys.modules``,
+    making the later import a dict hit that touched no files. A worker that
+    starts fresh has to read it from disk, so the ordering had to become
+    explicit rather than incidental.
+
+    Returns True if a backend is available. Idempotent — Python caches the
+    module, so later imports cost nothing and reach no filesystem.
+    """
+    if sys.platform != "linux":
+        return False
+    try:
+        import seccomp  # noqa: F401
+
+        return True
+    except ImportError:
+        pass
+    try:
+        import pyseccomp  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
 def apply(*, allow_network: bool = False) -> bool:
     """Install an allowlist seccomp filter.
+
+    Call :func:`preload` before any filesystem restriction is in force;
+    otherwise the backend import here can be denied.
 
     Parameters
     ----------

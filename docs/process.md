@@ -1,6 +1,6 @@
 # Process Sandbox
 
-`sandbox(policy, isolation="process")` and `sandbox(policy, isolation="kernel")` run sandboxed code in a forked child process. They provide the same `exec()`/`aexec()`/`cancel()` API as `isolation="none"`, but the child process is isolated from the host.
+`sandbox(policy, isolation="process")` and `sandbox(policy, isolation="kernel")` run sandboxed code in a separate worker process — by default one that does *not* inherit your process's memory (see [How workers are created](#how-workers-are-created)). They provide the same `exec()`/`aexec()`/`cancel()` API as `isolation="none"`, but the child process is isolated from the host.
 
 - **`isolation="process"`** -- subprocess-backed execution with crash protection. No kernel-level restrictions.
 - **`isolation="kernel"`** -- subprocess + kernel-level filesystem restriction, syscall filtering, and network blocking.
@@ -214,18 +214,22 @@ If using `VirtualFS` or another non-`IsolatedFS` filesystem, there's no host pat
 
 ## Worker lifecycle
 
-- The worker process is forked eagerly when entering the context manager (`__enter__`)
+- The worker process is started eagerly when entering the context manager (`__enter__`)
 - The worker persists across multiple `exec()` calls
 - If the worker crashes (OOM, SIGKILL, seccomp violation), the next `exec()` automatically spawns a new one
-- Each child closes inherited copies of all active Sandtrap parent control endpoints, so an idle worker observes EOF and exits if the parent process disappears — even while a later worker remains busy
+- An idle worker observes EOF and exits if the parent process disappears, even while a later worker remains busy. Under `start_method="fork"` this needs care, since each child inherits copies of every active Sandtrap control endpoint and closes them; a worker that inherited nothing has none to close
 - `shutdown()` sends a clean shutdown message; `__exit__` calls `shutdown()` automatically
 
 ### Host file descriptors
 
+Only relevant under `start_method="fork"`. A worker that doesn't inherit your
+memory doesn't inherit your descriptors either, so there is nothing to close
+and `close_fds` is a no-op there.
+
 Fork copies the embedding process's open file descriptors even when they are
-marked close-on-exec. By default Sandtrap preserves that behavior because a
+marked close-on-exec. Under fork, Sandtrap preserves that by default, because a
 policy-registered function or object may intentionally depend on a live
-fork-inherited resource.
+inherited resource.
 
 Pass `close_fds=True` to neutralize ambient descriptors in the child before
 worker initialization, preserving only standard streams and the worker's
@@ -245,16 +249,38 @@ This makes ownership explicit and prevents a worker from keeping unrelated
 host resources alive. Leave `close_fds=False` only when inherited live state
 is an intentional part of the policy contract.
 
-## Fork safety (read this if your host is long-lived)
+## How workers are created
 
-Workers are `fork()`ed **from the embedding process**, and fork is only
-safe while that process is fork-friendly: effectively single-threaded,
-with no fork-hostile C-library state. A host that has accumulated
-threads (web server, browser automation, SSE streams) and C extensions
-can produce children that die instantly — the signature is a
-**`"Worker process died during initialisation"` loop**, because the
-automatic respawn re-forks the *current* (now hostile) process on every
-attempt.
+By default a worker is **not** forked from your process. A broker is started
+once, from a fresh interpreter, and forks each worker from it — `forkserver`,
+selected automatically. `ProcessSandbox(..., start_method=...)` overrides that.
+
+(Process and kernel isolation are POSIX-only: cancellation is delivered with
+`SIGUSR1`, which Windows has no equivalent of. The start method is chosen from
+what the platform offers, so `spawn` would be selected where forkserver is
+absent, but that path is untested.)
+
+The reason is below, and it's the whole point: because the broker never grows
+threads, no worker can inherit a lock your process holds.
+
+### Why not fork
+
+`fork()` duplicates only the calling thread, so a lock another thread holds at
+that instant is inherited already-held by a child with no thread left to
+release it. Such a child does not crash — it **hangs**, on first contention,
+until your own timeout fires and reports something unrelated-sounding
+(`"Worker process became unresponsive"`).
+
+A host that has accumulated threads — a web server, browser automation, SSE
+streams — has no quiet moment to fork from. That is not an unusual
+configuration: uvicorn is multi-threaded by construction, and CPython agrees
+the pattern is a hazard (3.12 warns on fork from a multi-threaded process; 3.14
+moves multiprocessing's Linux default off fork).
+
+Fork-hostile C-library state produces a related, louder failure: children that
+die instantly, in a **`"Worker process died during initialisation"` loop**,
+because the automatic respawn re-forks the *current* (still hostile) process on
+every attempt.
 
 sandtrap raises `StForkUnsafe` on that signature rather than looping
 quietly. The error names the cause it can see -- the worker's exit signal
@@ -291,6 +317,62 @@ Practical rules:
   thread-state hazards exist on Linux too.
 - CPython agrees fork-with-threads is a hazard: 3.12 deprecates it and
   3.14 moves the multiprocessing default away from fork on Linux.
+
+### What the default costs, and what it requires
+
+The broker preloads sandtrap itself, so workers inherit it rather than
+importing it:
+
+| start method | worker start + one exec |
+|---|---|
+| `fork` (opt-in; inherits your memory) | ~4.8 ms |
+| `forkserver` + `preload_grants=True` | ~5.5 ms |
+| **`forkserver` (the default)** | **~18 ms** |
+| `forkserver`, nothing preloaded | ~42 ms |
+| `spawn` | ~77 ms |
+
+*(41-grant stdlib policy, macOS/CPython 3.12. Median of repeated starts.)*
+
+**`preload_grants=True` also imports your granted modules into the broker.**
+It is off by default because preloading runs their *import-time code there*: a
+grant that starts a background thread on import leaves the broker
+multi-threaded, and a worker forked from it can inherit a lock held by that
+thread — the same permanent hang this default exists to prevent. Your grants
+are yours, so only you can say whether that is true of them. Turn it on when
+you know they start no threads on import.
+
+What the default requires:
+
+- **The policy must be serializable.** Module grants cross by name and
+  re-import; classes and module-level functions cross by reference. A grant
+  holding a live object is refused — see
+  [Registering a live host object](policy.md#exposing-a-live-host-object).
+- **Modules are re-imported, not inherited**, so the worker gets fresh
+  C-library state (the point) but loses any host-side monkeypatching.
+- **`__main__` must be import-safe.** The child re-imports it, so module-level
+  work in your entry point needs an `if __name__ == "__main__":` guard. A host
+  run as `python -c` or from a REPL has no importable `__main__` at all.
+  Servers are unaffected — an ASGI app is imported, not run as `__main__`.
+- **`close_fds` is a no-op**: nothing is inherited to close.
+- **A worker's parent is the broker**, not your process, so `os.getppid()`
+  inside a worker doesn't name the embedding process.
+
+`start_method="fork"` remains available as the escape hatch for a policy that
+can't be serialized — explicitly, never as a silent fallback, because falling
+back quietly would put you back on the hanging path without saying so.
+
+The preload list is process-global and read once, when the broker starts: the
+first worker started in your process fixes it. A sandbox created later with
+different grants still works — its modules are simply imported in the worker
+rather than inherited.
+
+**Pre-fork servers.** multiprocessing tracks the broker in a module-level
+singleton and registers no after-fork hook, so a process forked from one that
+already started a broker inherits a pid that isn't its child. gunicorn and
+`uvicorn --workers N` fork their workers from a supervisor, so they hit this
+whenever a broker was started before the fork. sandtrap detects the resulting
+`ChildProcessError`, drops the inherited bookkeeping, and lets that process
+start its own broker.
 
 ## Namespace serialization
 

@@ -16,6 +16,8 @@ import sys
 import threading
 import types
 
+import pytest
+
 from sandtrap import Policy, Sandbox, passthrough_stdio
 from sandtrap.builtins import _StdoutRouter, install_stdout, redirect_stdout
 
@@ -193,6 +195,9 @@ def test_concurrent_execs_do_not_cross_contaminate():
 # -- process isolation ---------------------------------------------------------
 
 
+# Grants a dynamically created module, which has no importable name for a
+# worker that didn't inherit it -- refused by design, see Policy.__setstate__.
+@pytest.mark.fork_only
 def test_process_isolation_stdout_crosses_boundary():
     from sandtrap.process.sandbox import ProcessSandbox
 

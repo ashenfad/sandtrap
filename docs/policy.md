@@ -51,6 +51,12 @@ def fetch_url(url):
 
 **Options**: `name` (override function name), `host_fs_access` (grant real filesystem access), `network_access` (grant network access).
 
+Register functions that can be looked up by name — module-level functions,
+builtins, classmethods, `functools.partial` of any of those. A **bound method or
+callable instance** is deprecated here (it carries the object with it, and
+crosses to a worker as a copy); see
+[Exposing a live host object](#exposing-a-live-host-object).
+
 ## Registering classes
 
 ```python
@@ -103,13 +109,53 @@ import json
 policy.module(json, recursive=True)
 ```
 
-Registering a live object as a module:
+**Options**: `name`, `include`, `exclude`, `configure`, `recursive`, `host_fs_access`, `network_access`.
+
+## Exposing a live host object
+
+Register the object's **class**, and bind the instance in the exec namespace:
 
 ```python
-policy.module(my_service, name="service")
+policy.cls(Service, include=("query", "describe"))
+
+with sandbox(policy) as sb:
+    sb.exec("rows = service.query('select 1')", namespace={"service": my_service})
 ```
 
-**Options**: `name`, `include`, `exclude`, `configure`, `recursive`, `host_fs_access`, `network_access`.
+The class registration carries the policy — member filters, and per-member
+privileges via `configure` — while the instance itself never enters the policy.
+Both halves matter:
+
+- **The class crosses by name.** Classes pickle by reference, so the policy
+  stays portable to a worker that wasn't forked from this process
+  (`isolation="process"` / `"kernel"`; see
+  [Process Sandbox](process.md) and [the forkserver design notes](forkserver-design.md)).
+- **The instance crosses per call**, as a namespace value in-process, or as an
+  RPC marker under process isolation — so the live object stays where it is.
+
+A **narrowing wrapper** is the alternative: hand the sandbox a small class that
+exposes only what you want, and skip the filters. That works, with one thing it
+cannot do — a wrapper cannot grant itself network or host-filesystem access.
+Privilege elevation comes from the policy registration and nowhere else, so a
+method that has to make a real network call on the sandbox's behalf needs
+`network_access=True` on the registration (or a `MemberSpec`), whatever the
+object's shape.
+
+Two limits worth knowing. Filters apply to the **bound object**, not to whatever
+its methods return — a returned object gets the default rules unless its own
+class is registered. And under process/kernel isolation the RPC bridge carries
+**method calls only**, so an attribute grant like `include=("token",)` resolves
+in-process but has nothing to deliver across a worker boundary.
+
+> **Deprecated:** `policy.module(my_service, name="service")` registered a live
+> object directly. It still works and now warns; it will be removed in 0.3.
+> Under `isolation="process"`/`"kernel"` it never did what it looked like —
+> fork handed the worker a **copy**, so mutations never reached the host object
+> — and it makes the policy unpicklable, which blocks non-forked workers
+> entirely. Migrate to the class registration above. Note that `import service`
+> stops working for a live object: bind the name in the namespace instead.
+> The same applies to `policy.fn(my_service.query)` — register the class and
+> bind the instance rather than registering a bound method.
 
 ## Pattern filtering
 

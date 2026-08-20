@@ -2,6 +2,8 @@
 
 import math
 
+import pytest
+
 from sandtrap import Policy
 
 
@@ -88,6 +90,7 @@ def test_module_instance_requires_name():
         assert "name is required" in str(e)
 
 
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 def test_module_instance_with_name():
     policy = Policy()
     obj = {"key": "value"}

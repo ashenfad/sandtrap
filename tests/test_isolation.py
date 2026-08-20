@@ -619,6 +619,77 @@ def _force_kernel_unavailable(monkeypatch):
     monkeypatch.setattr(seatbelt, "apply", lambda *a, **k: False)
 
 
+class TestFailClosedDecision:
+    """The fail-closed decision itself, exercised directly.
+
+    ``_verify_isolation`` reads a status and decides: accept, warn, or refuse.
+    It is entirely parent-side and never touches the start method, so testing
+    it through a real worker only adds a requirement the code does not have --
+    that the worker be *made* to report degraded, which needs fork's inherited
+    memory to patch. That was a property of the test, and it left the decision
+    unverified for workers created any other way.
+    """
+
+    def _sandbox(self, **kwargs):
+        from sandtrap import Policy
+        from sandtrap.process.sandbox import ProcessSandbox
+
+        # Constructed, never entered: no worker is involved in this decision.
+        return ProcessSandbox(Policy(timeout=5.0), isolation="auto", **kwargs)
+
+    def _degraded(self):
+        from sandtrap.sandbox import IsolationStatus
+
+        return IsolationStatus(requested=True, platform="linux", seccomp=False)
+
+    def test_degraded_status_is_refused_by_default(self):
+        from sandtrap import IsolationUnavailable
+
+        with pytest.raises(IsolationUnavailable, match="could not be fully applied"):
+            self._sandbox()._verify_isolation(self._degraded())
+
+    def test_missing_status_counts_as_unconfirmed_and_refused(self):
+        """Fail-closed means unconfirmed is a failure, not a pass."""
+        from sandtrap import IsolationUnavailable
+
+        with pytest.raises(IsolationUnavailable, match="status missing"):
+            self._sandbox()._verify_isolation(None)
+
+    def test_allow_degraded_warns_instead_of_raising(self):
+        import warnings
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            self._sandbox(allow_degraded=True)._verify_isolation(self._degraded())
+        assert any("reduced isolation" in str(w.message) for w in caught)
+
+    def test_a_fully_applied_status_passes_quietly(self):
+        import warnings
+
+        from sandtrap.sandbox import IsolationStatus
+
+        applied = IsolationStatus(requested=True, platform="linux", seccomp=True)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            self._sandbox()._verify_isolation(applied)
+        assert not caught
+
+    def test_process_mode_never_refuses(self):
+        """isolation="process" requests no kernel restrictions, so a missing
+        or degraded status is not a shortfall against anything."""
+        from sandtrap import Policy
+        from sandtrap.process.sandbox import ProcessSandbox
+
+        sb = ProcessSandbox(Policy(timeout=5.0), isolation="none")
+        sb._verify_isolation(None)
+        sb._verify_isolation(self._degraded())
+
+
+# End-to-end wiring: the worker really does report a degraded status and the
+# parent really does act on it. Fork-only because forcing the worker's report
+# means patching this process and relying on inheritance -- the decision above
+# is what covers every start method.
+@pytest.mark.fork_only
 class TestFailClosed:
     def test_kernel_raises_when_isolation_unavailable(self, monkeypatch):
         """Default (allow_degraded=False): degraded kernel isolation is a
@@ -802,6 +873,68 @@ class TestSeccompUnavailable:
             assert apply() is False
 
 
+class TestInitDeathClassification:
+    """How a worker that died before ready is diagnosed.
+
+    Pure classification over an exit status, so it needs no worker and no
+    particular start method -- which matters, because the advice differs by
+    start method and driving it through a real worker hid that for a while.
+    """
+
+    class _Dead:
+        def __init__(self, exitcode):
+            self.exitcode = exitcode
+
+        def join(self, timeout=None):
+            pass
+
+    def test_a_forked_worker_crashing_natively_is_fork_hostility(self):
+        import signal
+
+        from sandtrap import StForkUnsafe
+        from sandtrap.process.sandbox import _init_death_error
+
+        error = _init_death_error(self._Dead(-signal.SIGSEGV), "fork")
+        assert isinstance(error, StForkUnsafe)
+        assert "re-forks the same host process" in str(error)
+
+    def test_a_spawned_worker_crashing_natively_is_not(self):
+        """It inherited nothing, so fork advice would send someone to fix a
+        process they aren't forking -- the misdiagnosis this test exists for."""
+        import signal
+
+        from sandtrap import StForkUnsafe
+        from sandtrap.process.sandbox import _init_death_error
+
+        for method in ("spawn", "forkserver"):
+            error = _init_death_error(self._Dead(-signal.SIGSEGV), method)
+            assert not isinstance(error, StForkUnsafe), method
+            message = str(error)
+            assert "inherited nothing" in message
+            assert "re-forks" not in message
+            assert "ARROW_DEFAULT_MEMORY_POOL" not in message  # fork-only remedy
+
+    def test_a_clean_nonzero_exit_is_never_fork_hostility(self):
+        from sandtrap import StForkUnsafe
+        from sandtrap.process.sandbox import _init_death_error
+
+        for method in ("fork", "spawn"):
+            error = _init_death_error(self._Dead(1), method)
+            assert not isinstance(error, StForkUnsafe)
+            assert "stderr" in str(error)
+
+    def test_an_external_kill_says_so(self):
+        import signal
+
+        from sandtrap.process.sandbox import _init_death_error
+
+        error = _init_death_error(self._Dead(-signal.SIGKILL), "fork")
+        assert "out-of-memory killer or a supervisor" in str(error)
+
+
+# Patches the parent and relies on fork to carry it into the child; a
+# spawned worker re-imports pristine modules and never sees it.
+@pytest.mark.fork_only
 class TestForkUnsafeError:
     """A worker that dies before ReadyMsg must be named, not looped on.
 
