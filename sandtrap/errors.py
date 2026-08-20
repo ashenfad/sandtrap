@@ -42,12 +42,29 @@ class StForkUnsafe(StError, RuntimeError):
     raise a bare ``RuntimeError``, and callers already catching that
     should keep working.
 
-    See ``docs/process.md`` ("Fork safety") for the remedies, and issue #33
-    for the spawn/forkserver work that would let this recover instead of
-    only reporting clearly.
+    Only raised under ``start_method="fork"``. The default creates workers
+    that do not inherit this process at all, so they cannot reach this state;
+    see ``docs/process.md`` ("How workers are created").
     """
 
     pass
+
+
+class StPolicyNotPortable(StError, ValueError):
+    """A policy can't reach a worker that isn't forked from this process.
+
+    Raised at construction, not at worker start, and listing *every* problem
+    rather than the first: a policy that can't be serialized is a
+    configuration mistake, and the embedder can only act on it where they
+    wrote it. See ``Policy.check_picklable()``.
+
+    Subclasses ``ValueError`` as well as ``StError`` so ordinary
+    ``except ValueError`` handlers around construction keep working.
+    """
+
+    def __init__(self, message: str, problems: tuple = ()):
+        self.problems = problems
+        super().__init__(message)
 
 
 class StValidationError(StError):

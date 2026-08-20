@@ -5,7 +5,6 @@ import os
 import signal
 import socket
 import stat
-import sys
 import threading
 import time
 import warnings
@@ -364,6 +363,9 @@ def test_worker_does_not_suppress_eof_on_unrelated_host_socket(isolation):
         writer.close()
 
 
+# The behaviour under test IS fork inheritance -- a spawned worker has no
+# inherited descriptors to preserve.
+@pytest.mark.fork_only
 def test_worker_preserves_inherited_descriptors_by_default():
     """Legacy policy registrations may intentionally depend on fork state."""
     host, peer = socket.socketpair()
@@ -428,6 +430,13 @@ def test_idle_worker_exits_when_parent_process_disappears():
             os.kill(worker_pid, signal.SIGKILL)
 
 
+# The worker signals the host with os.kill(os.getppid(), ...), and under
+# forkserver a worker's parent is the BROKER, not the embedding process --
+# so the notification never arrives. A genuine semantic difference (see
+# docs/forkserver-design.md), not the inherited-broker-state bug: the
+# scenario it guards -- one worker's INHERITED endpoint suppressing
+# another's EOF -- cannot arise where nothing is inherited.
+@pytest.mark.no_forkserver
 def test_idle_worker_exits_while_later_worker_remains_busy():
     """Another worker's inherited endpoint must not suppress control EOF."""
     ctx = multiprocessing.get_context("fork")
@@ -570,6 +579,9 @@ def test_exec_after_shutdown_raises(root):
 # ------------------------------------------------------------------
 
 
+# Patches the parent and relies on fork to carry it into the child; a
+# spawned worker re-imports pristine modules and never sees it.
+@pytest.mark.fork_only
 def test_worker_init_failure_reported(root):
     """If the worker fails to initialise, a RuntimeError is raised."""
     with patch(
@@ -784,147 +796,66 @@ def test_non_picklable_namespace_warns(psandbox):
 
 
 # ------------------------------------------------------------------
-# Integration: policy flags → apply_isolation
+# Integration: policy flags → kernel isolation
 # ------------------------------------------------------------------
+#
+# Asserted from what the worker REPORTS, not by intercepting what the parent
+# passed. Intercepting meant patching apply_isolation here and relying on fork
+# to carry the patch into the child, which pinned these to one start method --
+# and left the behaviour unverified for workers created any other way, where
+# the child re-imports a pristine module and never sees the patch.
+#
+# IsolationStatus carries allow_network / allow_host_fs / root for exactly
+# this reason: an embedder verifying isolation wants to know what the worker
+# was built with, not merely which mechanisms engaged.
 
 
-def _read_isolation_args(marker_path):
-    """Read the isolation args recorded by the child process."""
-    import json
-
-    with open(marker_path) as f:
-        return json.load(f)
+def _needs_network():  # module-level: crosses to any worker, unlike a lambda
+    return None
 
 
-def _recording_apply_isolation(marker_path):
-    """Return a replacement for apply_isolation that records args to a file."""
-    import json
-
-    def _record(mode, root, *, allow_network=False, allow_host_fs=False):
-        with open(marker_path, "w") as f:
-            json.dump(
-                {
-                    "mode": mode,
-                    "root": root,
-                    "allow_network": allow_network,
-                    "allow_host_fs": allow_host_fs,
-                },
-                f,
-            )
-        # Return a non-degraded status so the parent's fail-closed check
-        # passes — these tests only care that apply_isolation is called
-        # with the right args, not about the isolation outcome.
-        from sandtrap.sandbox import IsolationStatus
-
-        return IsolationStatus(
-            requested=(mode == "auto"),
-            platform=sys.platform,
-            seccomp=True,
-            seatbelt=True,
-        )
-
-    return _record
+def _needs_host_fs():
+    return None
 
 
-def test_network_access_policy_forwards_to_isolation(root):
-    """A policy with network_access=True passes allow_network=True to apply_isolation."""
+def _status_for(policy, filesystem, **kwargs):
+    with ProcessSandbox(
+        policy, filesystem=filesystem, isolation="auto", allow_degraded=True, **kwargs
+    ) as sb:
+        return sb.exec("x = 1").isolation
+
+
+def test_network_access_policy_reaches_isolation(root):
     policy = Policy(timeout=10.0)
-    policy.fn(lambda: None, name="fetch", network_access=True)
-
-    marker = os.path.join(root, "_isolation_args.json")
-    with patch(
-        "sandtrap.process.platform.apply_isolation",
-        new=_recording_apply_isolation(marker),
-    ):
-        with ProcessSandbox(policy, filesystem=IsolatedFS(root), isolation="auto"):
-            pass
-
-    args = _read_isolation_args(marker)
-    assert args["allow_network"] is True
+    policy.fn(_needs_network, name="fetch", network_access=True)
+    assert _status_for(policy, IsolatedFS(root)).allow_network is True
 
 
-def test_host_fs_access_policy_forwards_to_isolation(root):
-    """A policy with host_fs_access=True passes allow_host_fs=True to apply_isolation."""
+def test_host_fs_access_policy_reaches_isolation(root):
     policy = Policy(timeout=10.0)
-    policy.fn(lambda: None, name="save", host_fs_access=True)
-
-    marker = os.path.join(root, "_isolation_args.json")
-    with patch(
-        "sandtrap.process.platform.apply_isolation",
-        new=_recording_apply_isolation(marker),
-    ):
-        with ProcessSandbox(policy, filesystem=IsolatedFS(root), isolation="auto"):
-            pass
-
-    args = _read_isolation_args(marker)
-    assert args["allow_host_fs"] is True
+    policy.fn(_needs_host_fs, name="save", host_fs_access=True)
+    assert _status_for(policy, IsolatedFS(root)).allow_host_fs is True
 
 
-def test_default_policy_no_network_no_host_fs(root):
-    """Default policy passes allow_network=False, allow_host_fs=False."""
+def test_default_policy_grants_neither(root):
+    status = _status_for(Policy(timeout=10.0), IsolatedFS(root))
+    assert status.allow_network is False
+    assert status.allow_host_fs is False
+
+
+def test_both_flags_reach_isolation(root):
     policy = Policy(timeout=10.0)
-
-    marker = os.path.join(root, "_isolation_args.json")
-    with patch(
-        "sandtrap.process.platform.apply_isolation",
-        new=_recording_apply_isolation(marker),
-    ):
-        with ProcessSandbox(policy, filesystem=IsolatedFS(root), isolation="auto"):
-            pass
-
-    args = _read_isolation_args(marker)
-    assert args["allow_network"] is False
-    assert args["allow_host_fs"] is False
+    policy.fn(_needs_network, name="fetch", network_access=True)
+    policy.fn(_needs_host_fs, name="save", host_fs_access=True)
+    status = _status_for(policy, IsolatedFS(root))
+    assert status.allow_network is True
+    assert status.allow_host_fs is True
 
 
-def test_both_flags_forwarded(root):
-    """Policy with both network and host_fs access forwards both flags."""
-    policy = Policy(timeout=10.0)
-    policy.fn(lambda: None, name="fetch", network_access=True)
-    policy.fn(lambda: None, name="save", host_fs_access=True)
-
-    marker = os.path.join(root, "_isolation_args.json")
-    with patch(
-        "sandtrap.process.platform.apply_isolation",
-        new=_recording_apply_isolation(marker),
-    ):
-        with ProcessSandbox(policy, filesystem=IsolatedFS(root), isolation="auto"):
-            pass
-
-    args = _read_isolation_args(marker)
-    assert args["allow_network"] is True
-    assert args["allow_host_fs"] is True
+def test_virtual_fs_confines_no_real_path(root):
+    """A purely virtual filesystem has no path for the kernel to restrict."""
+    assert _status_for(Policy(timeout=10.0), VirtualFS({})).root is None
 
 
-def test_filesystem_param_passes_root_none_to_isolation(root):
-    """When using VirtualFS, root=None is passed to apply_isolation."""
-    policy = Policy(timeout=10.0)
-    fs = VirtualFS({})
-
-    marker = os.path.join(root, "_isolation_args.json")
-    with patch(
-        "sandtrap.process.platform.apply_isolation",
-        new=_recording_apply_isolation(marker),
-    ):
-        with ProcessSandbox(policy, filesystem=fs, isolation="auto"):
-            pass
-
-    args = _read_isolation_args(marker)
-    assert args["root"] is None
-
-
-def test_isolatedfs_root_extracted_for_isolation(root):
-    """When using IsolatedFS, root path is extracted and passed to apply_isolation."""
-    policy = Policy(timeout=10.0)
-
-    marker = os.path.join(root, "_isolation_args.json")
-    with patch(
-        "sandtrap.process.platform.apply_isolation",
-        new=_recording_apply_isolation(marker),
-    ):
-        with ProcessSandbox(policy, filesystem=IsolatedFS(root), isolation="auto"):
-            pass
-
-    args = _read_isolation_args(marker)
-    assert args["root"] is not None
-    assert args["root"] == root
+def test_isolatedfs_root_is_what_gets_confined(root):
+    assert _status_for(Policy(timeout=10.0), IsolatedFS(root)).root == root

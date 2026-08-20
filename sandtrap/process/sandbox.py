@@ -12,9 +12,10 @@ import traceback
 import warnings
 import weakref
 from collections.abc import Callable, Mapping
+from types import ModuleType
 from typing import Any, Literal
 
-from ..errors import StForkUnsafe
+from ..errors import StForkUnsafe, StPolicyNotPortable
 from ..policy import Policy
 from ..sandbox import (
     ExecResult,
@@ -86,17 +87,40 @@ def _describe_exit(process: Any) -> str:
     return f"the worker exited with status {exitcode}"
 
 
-def _init_death_error(process: Any) -> BaseException:
+def _native_crash_error(process: Any, start_method: str) -> RuntimeError:
+    """A worker that crashed in native code without inheriting our memory.
+
+    Same signature as the fork-hostility case, opposite cause: this worker
+    started from a fresh interpreter, so none of this process's threads,
+    locks, or allocator state reached it. Offering the fork advice here would
+    send someone to fix a process they aren't forking.
+    """
+    return RuntimeError(
+        f"Worker process died during initialisation -- {_describe_exit(process)}. "
+        f"This worker was created with start_method={start_method!r}, so it "
+        "inherited nothing from this process: fork hostility is not the cause, "
+        "and constructing the sandbox earlier will not help.\n"
+        "\n"
+        "A crash this early is the worker's own setup -- most often a granted "
+        "module whose import crashes in a fresh interpreter. The worker's "
+        "traceback goes to its stderr, which is where the cause will be."
+    )
+
+
+def _init_death_error(process: Any, start_method: str = "fork") -> BaseException:
     """Classify a worker that died before signalling ready.
 
-    Only a crash inside native code indicates fork hostility. A clean
-    nonzero exit means Python-level setup raised without reporting, and
-    any other signal means something external killed the worker -- both
-    deserve their own message rather than allocator advice.
+    Only a crash inside native code indicates fork hostility, and only when
+    the worker was actually forked from this process. A clean nonzero exit
+    means Python-level setup raised without reporting, and any other signal
+    means something external killed the worker -- each deserves its own
+    message rather than allocator advice.
     """
     sig = _exit_signal(process)
     if sig is not None and sig in _CRASH_SIGNALS:
-        return _fork_unsafe_error(process)
+        if start_method == "fork":
+            return _fork_unsafe_error(process)
+        return _native_crash_error(process, start_method)
 
     detail = ""
     if sig == getattr(signal, "SIGKILL", None):
@@ -117,12 +141,12 @@ def _init_death_error(process: Any) -> BaseException:
 
 
 def _fork_unsafe_error(process: Any) -> StForkUnsafe:
-    """Build the explanatory error for a worker that crashed during init.
+    """Build the explanatory error for a forked worker that crashed during init.
 
     Respawning cannot help: the next worker forks the same host process,
-    which is still hostile. Until sandtrap can fall back to a spawned or
-    forkserver-backed worker (issue #33), the useful thing to do is name
-    the condition and point at the fixes rather than loop.
+    which is still hostile. Only reached under ``start_method="fork"`` now
+    that it is opt-in, so the first remedy offered is simply to stop asking
+    for it.
     """
     threads = threading.active_count()
     thread_note = (
@@ -140,14 +164,151 @@ def _fork_unsafe_error(process: Any) -> StForkUnsafe:
         "\n"
         "Respawning will not clear this: each attempt re-forks the same host "
         "process. Fixes, in order of preference:\n"
-        "  1. Construct the sandbox earlier, before the host grows threads.\n"
-        "  2. If pyarrow or pandas is loaded, set "
+        '  1. Drop start_method="fork". The default does not fork this '
+        "process, so it cannot inherit its threads or C-library state.\n"
+        "  2. Construct the sandbox earlier, before the host grows threads.\n"
+        "  3. If pyarrow or pandas is loaded, set "
         'os.environ["ARROW_DEFAULT_MEMORY_POOL"] = "system" before the first '
         "import -- its default allocator does not survive fork.\n"
-        '  3. Use isolation="none" if a process boundary is not required.\n'
+        '  4. Use isolation="none" if a process boundary is not required.\n'
         "\n"
-        'See docs/process.md ("Fork safety") for the full list.'
+        'See docs/process.md ("How workers are created") for the full list.'
     )
+
+
+def default_start_method() -> str:
+    """How workers are created unless the caller says otherwise.
+
+    ``forkserver`` where it exists: a broker started once from a fresh
+    interpreter forks each worker, so no worker inherits the embedding
+    process's threads and none of its locks can arrive already held. With the
+    preload derived from the policy that costs ~0.7ms per worker against a
+    plain fork, which is why this is the default rather than an opt-in.
+
+    ``spawn`` where forkserver is absent, and ``fork`` only if neither exists
+    — a position no supported platform is actually in, kept so this can never
+    return something unusable. Note that process isolation is POSIX-only for
+    reasons unrelated to the start method (cancellation uses ``SIGUSR1``), so
+    the non-forkserver branches are defensive rather than exercised.
+    """
+    available = multiprocessing.get_all_start_methods()
+    for candidate in ("forkserver", "spawn", "fork"):
+        if candidate in available:
+            return candidate
+    return "fork"
+
+
+def _require_portable_policy(policy: Any, start_method: str) -> None:
+    """Raise unless *policy* can reach a worker created by *start_method*.
+
+    Reports every problem at once. ``pickle`` surfaces one at a time, from
+    inside the serializer, so fixing a policy that way is a loop of rerun,
+    read, fix — for something wholly knowable up front.
+    """
+    check = getattr(policy, "check_picklable", None)
+    if check is None:
+        return
+    problems = check()
+    if not problems:
+        return
+
+    listed = "\n".join(f"  - {problem}" for problem in problems)
+    raise StPolicyNotPortable(
+        f"This policy cannot be sent to a start_method={start_method!r} "
+        f"worker, which does not inherit this process's memory.\n\n{listed}\n\n"
+        'Use start_method="fork" to keep inheriting memory (and its '
+        "constraint: forking a multi-threaded host can deadlock the worker), "
+        "or adjust the registrations above. See docs/process.md.",
+        tuple(problems),
+    )
+
+
+def _forkserver_preload_names(policy: Any, include_grants: bool = False) -> list[str]:
+    """Importable module names a forkserver broker should preload.
+
+    Always ``sandtrap`` itself, which we control and which is import-inert.
+    That alone takes a worker from ~42ms to ~16ms.
+
+    Granted modules are opt-in, because **preloading runs their import-time
+    code in the broker**. A module that starts a background thread on import
+    leaves the broker multi-threaded, and every worker forked from it can then
+    inherit a lock held by that thread — recreating precisely the permanent
+    hang this default exists to prevent. Grants belong to the embedder, so
+    only the embedder can say whether that is true of theirs; sandtrap will
+    not assume it.
+
+    With grants included a worker costs ~5.3ms against ~4.8ms for a plain
+    fork; without, ~16ms. The difference is not worth reintroducing the
+    failure silently.
+
+    Names come from each module's real ``__name__`` rather than its
+    registration name — they can differ, and only the former is importable.
+    """
+    names = {"sandtrap"}
+    if include_grants:
+        for reg in getattr(policy, "modules", {}).values():
+            obj = getattr(reg, "obj", None)
+            if isinstance(obj, ModuleType):
+                name = getattr(obj, "__name__", None)
+                if name:
+                    names.add(name)
+    return sorted(names)
+
+
+def _apply_forkserver_preload(names: list[str]) -> None:
+    """Union *names* into multiprocessing's forkserver preload list.
+
+    The list is process-global and read **once**, when the broker starts, so
+    the first worker started in this process fixes the set — a later sandbox
+    with different grants re-imports its own modules in the child instead
+    (correct, just not free).
+
+    Additive on purpose: never drop an embedder's own preload, and never let
+    one sandbox shrink another's.
+    """
+    from multiprocessing import forkserver as _forkserver_module
+
+    try:
+        existing = set(_forkserver_module._forkserver._preload_modules)
+    except Exception:
+        existing = {"__main__"}  # multiprocessing's own default
+    merged = existing | set(names)
+    if merged != existing:
+        multiprocessing.set_forkserver_preload(sorted(merged))
+
+
+def _reset_inherited_forkserver() -> None:
+    """Drop forkserver state that belongs to a process we were forked from.
+
+    multiprocessing keeps the broker's pid in a module-level singleton and
+    registers no after-fork hook, so a forked child inherits a pid that is not
+    its child and ``ensure_running()`` raises ``ChildProcessError``. The
+    pre-fork server model — gunicorn, ``uvicorn --workers N`` — hits this
+    whenever a broker was started before the supervisor forked.
+
+    Deliberately not ``ForkServer._stop()``: that ``waitpid()``s a process we
+    are not the parent of, and ``unlink()``s the *other* process's socket.
+    Only our own inherited copies are released here. The lock is replaced
+    rather than acquired — if the fork interrupted a broker operation we would
+    have inherited it already held, with no thread left to release it.
+    """
+    from multiprocessing import forkserver as _forkserver_module
+
+    server = getattr(_forkserver_module, "_forkserver", None)
+    if server is None:
+        return
+
+    alive_fd = getattr(server, "_forkserver_alive_fd", None)
+    if alive_fd is not None:
+        try:
+            os.close(alive_fd)  # our copy; the real parent keeps its own
+        except OSError:
+            pass
+
+    server._forkserver_alive_fd = None
+    server._forkserver_pid = None
+    server._forkserver_address = None
+    server._lock = threading.RLock()
 
 
 def _is_isolated_fs(filesystem: Any) -> bool:
@@ -248,15 +409,18 @@ class ProcessSandbox:
             result = sb.exec(crashy)    # result.error: worker died
             result = sb.exec("2 + 2")   # OK again — fresh worker
 
-    **Threading:** The worker is forked via ``multiprocessing.get_context("fork")``.
-    Enter the context manager before starting threads or async tasks to avoid
-    forking a multithreaded process, which can deadlock on macOS.
+    **Threading:** The worker is forked by default. Enter the context manager
+    before starting threads or async tasks — forking a multithreaded process
+    can leave the child holding a lock no surviving thread will release, and
+    such a child hangs rather than crashing.
 
     **File descriptors:** Fork inheritance is preserved by default for
     compatibility with policy registrations that use live resources. Pass
     ``close_fds=True`` to neutralize ambient host descriptors in the child;
     registrations needing live host resources must then bridge them through
-    RPC instead.
+    RPC instead. Under a non-fork ``start_method`` the flag is a no-op: the
+    child inherits no descriptors to begin with, so what it asks for already
+    holds.
 
     Parameters
     ----------
@@ -277,6 +441,28 @@ class ProcessSandbox:
     isolation:
         ``"auto"`` applies platform-appropriate kernel sandboxing;
         ``"none"`` skips it.
+    start_method:
+        How the worker process is created. ``None`` (default) picks the
+        safest available — ``"forkserver"`` on POSIX, ``"spawn"`` elsewhere.
+
+        ``"forkserver"`` starts a broker once, from a fresh interpreter, and
+        forks each worker from it. Because the broker never grows threads, no
+        worker can inherit a lock this process holds — which is what makes a
+        forked worker of a multi-threaded host hang. The module set granted by
+        the policy is preloaded into the broker, so this costs ~0.7ms per
+        worker over a plain fork.
+
+        ``"fork"`` inherits this process's memory, so the policy needs no
+        serialization — the escape hatch for policies that can't cross, at the
+        cost of the deadlock hazard above.
+
+        A non-fork worker requires the policy to be serializable (checked at
+        construction; see :meth:`Policy.check_picklable`) and the embedding
+        program's entry point to be **import-safe** — the child re-imports
+        ``__main__``, so module-level work there must sit behind
+        ``if __name__ == "__main__":``, and a host started as ``python -c`` or
+        from a REPL has no importable ``__main__`` at all. Servers are
+        unaffected: an ASGI app is imported, not executed as ``__main__``.
     allow_degraded:
         When ``isolation="auto"`` and the platform can't apply the
         requested kernel mechanisms, ``False`` (default) raises
@@ -299,7 +485,29 @@ class ProcessSandbox:
         allow_degraded: bool = False,
         echo: Literal["none", "last", "all"] = "none",
         close_fds: bool = False,
+        start_method: Literal["fork", "spawn", "forkserver"] | None = None,
+        preload_grants: bool = False,
     ) -> None:
+        # None means "whatever is safest here" — forkserver on POSIX. Validate
+        # rather than defer: an unavailable method is a construction mistake,
+        # and discovering it inside a worker start would report as a worker
+        # failure, which is a much worse place to learn it.
+        if start_method is None:
+            start_method = default_start_method()
+        available = multiprocessing.get_all_start_methods()
+        if start_method not in available:
+            raise ValueError(
+                f"start_method={start_method!r} is not available on this "
+                f"platform (has: {', '.join(sorted(available))})"
+            )
+        self._start_method = start_method
+        self._preload_grants = preload_grants
+        if start_method != "fork":
+            # Fail here rather than at worker start. A policy that can't be
+            # serialized is a configuration mistake, and this is the only place
+            # the embedder can act on it — by first exec it is a worker failure
+            # with pickle's first error and no idea which grant caused it.
+            _require_portable_policy(policy, start_method)
         self._policy = policy
         self._filesystem = filesystem
         self._mode = mode
@@ -358,18 +566,38 @@ class ProcessSandbox:
         if self._process is not None:
             self._cleanup()
 
+        # Two mechanisms below exist purely to undo fork inheritance, and both
+        # are meaningless — descriptor neutralization is actively hazardous —
+        # when the child inherits nothing. See docs/forkserver-design.md.
+        forking = self._start_method == "fork"
+
         # Snapshot before creating any worker plumbing. The child neutralizes
         # exactly this ambient set while preserving the Pipe and
         # multiprocessing's own fork-bootstrap descriptors.
-        inherited_fds = _open_file_descriptors() if self._close_fds else ()
+        #
+        # Fork only: these are the PARENT's descriptor NUMBERS. A spawned child
+        # builds its own, so the numbers name unrelated descriptors there —
+        # neutralizing them could clobber its own control channel. Nothing is
+        # inherited to close, so close_fds is satisfied by construction.
+        inherited_fds = _open_file_descriptors() if self._close_fds and forking else ()
         parent_conn, child_conn = multiprocessing.Pipe(duplex=True)
+        # Registered whatever the start method: a *later* fork still inherits
+        # this endpoint and must close its copy, even if this worker didn't.
         _PARENT_CONNECTIONS.add(parent_conn)
-        parent_connections = tuple(_PARENT_CONNECTIONS)
+        # Fork only: a spawned child would receive these PICKLED — duplicating
+        # live parent endpoints into it rather than cleaning up copies it never
+        # got.
+        parent_connections = tuple(_PARENT_CONNECTIONS) if forking else ()
 
-        # Use fork context — the child inherits the parent's memory
-        # space, so the Policy (with its live module/class references)
-        # is available directly without pickling.
-        ctx = multiprocessing.get_context("fork")
+        # Fork lets the child inherit this process's memory, so the Policy
+        # (with its live module/class references) arrives without pickling.
+        # Non-fork methods send it instead — see Policy.__getstate__.
+        if self._start_method == "forkserver":
+            # Must be set before the broker starts; it is read once, there.
+            _apply_forkserver_preload(
+                _forkserver_preload_names(self._policy, self._preload_grants)
+            )
+        ctx = multiprocessing.get_context(self._start_method)
         self._process = ctx.Process(
             target=_worker_entry,
             args=(
@@ -386,7 +614,16 @@ class ProcessSandbox:
             daemon=True,
         )
         try:
-            self._process.start()
+            try:
+                self._process.start()
+            except ChildProcessError:
+                # A broker pid inherited from a process we were forked from —
+                # it isn't our child, so multiprocessing's waitpid check fails.
+                # Drop the inherited state and let this process start its own.
+                # Retried once: a second failure is a real problem, not stale
+                # bookkeeping.
+                _reset_inherited_forkserver()
+                self._process.start()
         except BaseException:
             _PARENT_CONNECTIONS.discard(parent_conn)
             parent_conn.close()
@@ -409,7 +646,7 @@ class ProcessSandbox:
             # child never got far enough to report a policy problem, so it
             # died in interpreter/C-library setup. Read the exit status
             # before _kill() resets the process handle.
-            error = _init_death_error(self._process)
+            error = _init_death_error(self._process, self._start_method)
             self._kill()
             raise error
 
@@ -434,27 +671,39 @@ class ProcessSandbox:
         # against version skew (an older worker) or a future refactor
         # that drops the field.
         self._isolation_status = msg.isolation
-        status = msg.isolation
-        if self._isolation == "auto" and (status is None or status.degraded):
-            summary = (
-                status.summary()
-                if status is not None
-                else "kernel isolation status missing from worker"
+        self._verify_isolation(msg.isolation)
+
+    def _verify_isolation(self, status: IsolationStatus | None) -> None:
+        """Accept, warn about, or refuse the isolation the worker reported.
+
+        Entirely parent-side and independent of how the worker was created —
+        it reads a status and decides. Separated so that decision can be
+        exercised directly: driving it through a real worker means forcing the
+        worker to report degraded, which only fork's inherited memory makes
+        patchable, and that is a property of the test rather than of the code.
+        """
+        if self._isolation != "auto" or not (status is None or status.degraded):
+            return
+
+        summary = (
+            status.summary()
+            if status is not None
+            else "kernel isolation status missing from worker"
+        )
+        if not self._allow_degraded:
+            self._kill()
+            raise IsolationUnavailable(
+                f"{summary}. Kernel isolation was requested but "
+                "could not be fully applied (or confirmed) on this "
+                "platform. Pass allow_degraded=True to proceed with "
+                "reduced isolation, or run on a platform with the "
+                "required support."
             )
-            if not self._allow_degraded:
-                self._kill()
-                raise IsolationUnavailable(
-                    f"{summary}. Kernel isolation was requested but "
-                    "could not be fully applied (or confirmed) on this "
-                    "platform. Pass allow_degraded=True to proceed with "
-                    "reduced isolation, or run on a platform with the "
-                    "required support."
-                )
-            warnings.warn(
-                f"{summary}. Proceeding with reduced isolation (allow_degraded=True).",
-                RuntimeWarning,
-                stacklevel=3,
-            )
+        warnings.warn(
+            f"{summary}. Proceeding with reduced isolation (allow_degraded=True).",
+            RuntimeWarning,
+            stacklevel=4,
+        )
 
     def _kill(self) -> None:
         """Force-kill the worker process."""

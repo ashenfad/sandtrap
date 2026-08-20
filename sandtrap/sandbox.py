@@ -97,6 +97,21 @@ class IsolationStatus:
     seccomp: bool | None = None
     seatbelt: bool | None = None
 
+    allow_network: bool = False
+    """Whether the policy asked for network to stay reachable. A grant
+    anywhere in the policy disables the network restriction for the WHOLE
+    worker (seccomp and Landlock are monotonic), so this reports what the
+    worker was actually built with rather than what any one grant asked
+    for — it is the difference between believing network is blocked and
+    knowing it."""
+    allow_host_fs: bool = False
+    """Whether the policy asked for real-filesystem access to stay
+    reachable, with the same whole-worker consequence."""
+    root: str | None = None
+    """The real directory the filesystem restriction was confined to, or
+    ``None`` when no real-path confinement applied (a purely virtual
+    filesystem has no path for the kernel to restrict)."""
+
     @property
     def degraded(self) -> bool:
         """True if kernel isolation was requested but not fully applied.

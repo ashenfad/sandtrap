@@ -164,6 +164,36 @@ class RpcReturnMsg:
     error: BaseException | None = None
 
 
+def rpc_surface(
+    obj: Any, policy: Any = None
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Split a host object's public surface into ``(methods, attributes)``.
+
+    Built parent-side, where the object lives, and shipped on an
+    :class:`RpcProxyMarker` so the worker's proxy can tell a method from a
+    data attribute without asking. Pass the ``policy`` to narrow the result
+    to what it actually permits — the proxy then refuses everything else by
+    name, which is the only place those filters reach a bridged object.
+
+    Underscore-prefixed names are excluded: the proxy refuses them anyway.
+    Attributes that raise on access (properties with side effects) are
+    skipped rather than allowed to break marker construction.
+    """
+    methods: list[str] = []
+    attributes: list[str] = []
+    for name in dir(obj):
+        if name.startswith("_"):
+            continue
+        if policy is not None and not policy.is_attr_allowed(obj, name):
+            continue
+        try:
+            value = getattr(obj, name)
+        except Exception:
+            continue
+        (methods if callable(value) else attributes).append(name)
+    return tuple(methods), tuple(attributes)
+
+
 @dataclass
 class RpcProxyMarker:
     """Picklable placeholder injected into the namespace by the parent.
@@ -178,8 +208,22 @@ class RpcProxyMarker:
     a typed object (e.g. agex's ``RemoteCache`` wraps the proxy in a
     ``MutableMapping`` interface).  When ``None``, the agent gets the
     bare ``RpcProxy`` instance.
+
+    ``methods`` and ``attributes`` declare the object's surface so the
+    worker's proxy can answer for it locally. Without them the proxy
+    cannot tell a method from a data attribute — it returns a caller
+    for *every* name, so reading ``obj.token`` silently yields a
+    function instead of a value. Supplying them turns that into a
+    clear error. ``None`` (the default) keeps the older permissive
+    behaviour for embedders that haven't declared a surface yet; see
+    :func:`sandtrap.rpc_surface` for building them from a live object.
     """
 
     target: str
     wrapper: str | None = None
     init_args: tuple = field(default_factory=tuple)
+    methods: tuple[str, ...] | None = None
+    """Names the proxy may call. ``None`` means "undeclared, allow any"."""
+    attributes: tuple[str, ...] | None = None
+    """Data attribute names — declared so the proxy can say *why* they
+    don't work, rather than handing back a callable that isn't one."""

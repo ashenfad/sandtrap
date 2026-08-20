@@ -38,7 +38,16 @@ def apply_isolation(
         If True, skip kernel-level filesystem restriction (the policy
         has registrations that need host filesystem access).
     """
-    status = IsolationStatus(requested=(mode == "auto"), platform=sys.platform)
+    # Recorded whatever the mode: the caller asked what this worker was built
+    # with, and "no kernel restrictions were requested" doesn't answer whether
+    # the policy wanted network reachable.
+    status = IsolationStatus(
+        requested=(mode == "auto"),
+        platform=sys.platform,
+        allow_network=allow_network,
+        allow_host_fs=allow_host_fs,
+        root=root,
+    )
     if mode == "none":
         return status
 
@@ -64,6 +73,12 @@ def _apply_linux(
 ) -> None:
     """Apply Landlock + seccomp on Linux, recording what took effect."""
     from . import landlock, seccomp
+
+    # Import the seccomp backend while the filesystem is still readable:
+    # Landlock has to be applied first (its setup needs syscalls seccomp
+    # would block), but once it is, reading pyseccomp out of site-packages
+    # is denied. A forked worker inherited the module and never noticed.
+    seccomp.preload()
 
     # Landlock first (filesystem restriction), then seccomp (syscall filter).
     # Order matters: Landlock setup requires syscalls that seccomp may block.

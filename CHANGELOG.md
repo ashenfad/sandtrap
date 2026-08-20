@@ -5,6 +5,85 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **BREAKING: process/kernel workers are no longer forked from the embedding
+  process.** The default `start_method` is now `forkserver` on POSIX (`spawn`
+  where forkserver doesn't exist). A broker is started once from a fresh
+  interpreter and forks each worker; because the broker never grows threads, no
+  worker can inherit a lock the host holds.
+
+  This closes a failure that had no good diagnosis: forking a multi-threaded
+  host — a uvicorn server, browser automation, anything with a thread pool —
+  can hand the child a lock held by a thread that doesn't exist in it. The
+  child then *hangs* rather than crashing, until the caller's own timeout fires
+  and reports `"Worker process became unresponsive"`, which names none of it.
+  Confirmed at kernel level in production: every thread of a hung worker parked
+  on `futex_wait_queue` with no voluntary context switches.
+
+  The broker preloads sandtrap itself, putting a worker at about **18ms**
+  against 4.8ms for a plain fork (and 42ms with nothing preloaded, 77ms for
+  `spawn`). Passing `preload_grants=True` also preloads your granted modules
+  and brings that to ~5.5ms — off by default, because preloading runs those
+  modules' import-time code *in the broker*, and a grant that starts a thread
+  on import would leave the broker multi-threaded and reintroduce the very
+  hang this change removes.
+
+  **What this requires of your policy.** A worker that doesn't inherit memory
+  needs the policy serialized to it, so registrations must be reachable by
+  name. Checked at construction — `ProcessSandbox` raises `StPolicyNotPortable`
+  listing *every* problem, rather than surfacing pickle's first failure at
+  worker start. Most policies are unaffected: module grants, module-level
+  functions, and classes all cross by name. What doesn't: lambdas and closures,
+  bound methods and callable instances, dynamically created modules, callable
+  `include`/`exclude` predicates, and classes defined inside a function.
+
+  `start_method="fork"` remains available as the escape hatch — explicitly,
+  never as a silent fallback, since falling back quietly would put you back on
+  the hanging path without saying so.
+
+- **Live-object grants are deprecated** (removal in 0.3). `policy.module(obj)`
+  and `policy.fn(obj.method)` pinned a live object inside the policy. Register
+  the **class** and bind the instance in the exec namespace instead — same
+  member filters, same per-member privileges, and the policy stays portable.
+
+  Under `isolation="process"`/`"kernel"` the old form never did what it looked
+  like: fork handed the worker a copy-on-write *snapshot*, so mutations
+  sandboxed code made never reached the host object. This closes a silent bug
+  rather than removing a working feature.
+
+### Added
+
+- **`Policy.check_picklable()`** — every reason a policy can't reach a
+  non-forked worker, in one pass, with the registration named and a remedy
+  attached. Reasons about *importability*, not just serializability: a module
+  built at runtime pickles happily and fails to load on the other side.
+- **`sandtrap.rpc_surface(obj, policy=None)`** and `RpcProxyMarker(methods=,
+  attributes=)` — declare a bridged object's surface so the worker's proxy can
+  answer for it. Without a declared surface a proxy returns a caller for
+  *every* name, so reading `obj.token` silently yielded a function (and `None`
+  by the time it crossed back), and `obj.token = x` was silently lost. Both are
+  now clear `AttributeError`s. Passing the policy narrows the surface to what
+  it permits, which is the only place a policy's member filters reach a bridged
+  object.
+- **`IsolationStatus` reports `allow_network`, `allow_host_fs`, and `root`** —
+  what the worker was actually built with, not only which mechanisms engaged.
+- **`ProcessSandbox(start_method=...)`** — `"forkserver"`, `"spawn"`, or
+  `"fork"`, defaulting to the safest available.
+
+### Fixed
+
+- **A worker that died during init was diagnosed as fork-hostile regardless of
+  how it was created.** A spawned worker inherits nothing, so advice to
+  "construct the sandbox earlier" or set `ARROW_DEFAULT_MEMORY_POOL` sent
+  people to fix a process they weren't forking. `StForkUnsafe` is now raised
+  only for genuinely forked workers.
+- **Assignment to an RPC proxy no longer silently vanishes.** `obj.attr = x`
+  set an attribute on the worker-side stand-in and left the host object
+  untouched, with nothing to indicate the write went nowhere.
+
 ## [0.2.14] - 2026-08-04
 
 ### Added

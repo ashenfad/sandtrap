@@ -58,11 +58,14 @@ print(result.stdout)       # "total = 45\n"
 print(result.namespace)    # {"total": 45}
 ```
 
-`isolation="kernel"` runs code in a forked child process with:
+`isolation="kernel"` runs code in an isolated worker process with:
 - Filesystem restricted to the `IsolatedFS` root via Landlock (Linux) or Seatbelt (macOS)
 - Syscall filtering via seccomp (Linux) or Seatbelt (macOS)
 - Network blocked at the kernel level (unless the policy enables it)
 - Worker crash doesn't take down the host process
+- The worker does not inherit the host's memory or threads — it is forked from
+  a dedicated broker, so a multi-threaded host can't deadlock it
+  (see [process docs](docs/process.md#how-workers-are-created))
 
 Kernel mode is **defense-in-depth** — a second layer that contains accidental or casual escape (a buggy agent's stray network call, a walk outside the root) under the cooperative-code Python sandbox. It is **not** a boundary against code actively trying to escape: the inner Python layer isn't adversarial-safe, and the worker→host IPC uses `pickle`. See the [security model](docs/security.md#threat-model) for the full picture and the [roadmap](docs/roadmap.md) for hardening plans.
 

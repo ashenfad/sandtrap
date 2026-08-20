@@ -37,6 +37,40 @@ adversarial-safe." The full list of prerequisites:
 Only when 1–4 are addressed does re-marketing kernel mode as adversarial
 containment become honest.
 
+## Let Landlock read the Python installation
+
+Landlock currently allows the worker exactly one path: the `IsolatedFS` root.
+Seatbelt, for the same `isolation="kernel"`, additionally permits system
+read-only paths (`/usr`, `/System/Library`, `/Library`). The two platforms
+therefore make **different promises** for the same API.
+
+The practical consequence is that any module first imported *after*
+`apply_isolation` is unreadable on Linux. Two instances have already been
+fixed by importing earlier — the seccomp backend, and
+`concurrent.futures.thread`, which `concurrent.futures` resolves through a
+module-level `__getattr__` on the exec path. Both were invisible while workers
+were forked, because the child inherited them in `sys.modules` and touched no
+files.
+
+The class remains open, and Python's lazy imports make it easy to re-enter by
+accident. The known outstanding instance is `RpcProxyMarker(wrapper=...)`,
+whose dotted path is imported at exec time; the parent cannot preload it,
+because it does not know the wrapper paths when the broker starts.
+
+Allowing read access to the Python installation (`sys.base_prefix`,
+`sys.prefix`, and the `site-packages` directories) would close the class and
+align the two platforms. It is a **widening** of what a worker may read, so it
+wants an explicit decision rather than being slipped in:
+
+- *For*: a Python worker fundamentally needs to read its own stdlib; Seatbelt
+  already permits it; reading library source is not an escalation path for a
+  boundary whose threat model is [cooperative code](security.md#threat-model);
+  and the alternative is an open-ended list of modules to pre-import.
+- *Against*: it enlarges the readable surface, and any future move toward an
+  adversarial boundary (see below) would want that surface small — though a
+  reader that can already execute Python has little to gain from the source
+  of the stdlib it is running.
+
 ## Restricted deserialization (prerequisite #1)
 
 ### The problem
