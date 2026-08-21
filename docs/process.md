@@ -380,10 +380,11 @@ you know they start no threads on import.
 
 What the default requires:
 
-- **The policy must be serializable.** Module grants cross by name and
-  re-import; classes and module-level functions cross by reference. A grant
-  holding a live object is refused — see
-  [Registering a live host object](policy.md#exposing-a-live-host-object).
+- **The policy must be serializable**, since it is sent rather than inherited.
+  Checked at construction, so an unportable policy raises
+  `StPolicyNotPortable` where you wrote it. What crosses, what doesn't, and how
+  to check before you get there:
+  [Checking a policy is portable](policy.md#checking-a-policy-is-portable).
 - **Modules are re-imported, not inherited**, so the worker gets fresh
   C-library state (the point) but loses any host-side monkeypatching.
 - **`__main__` must be import-safe.** The child re-imports it, so module-level
