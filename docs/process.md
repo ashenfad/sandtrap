@@ -338,6 +338,22 @@ importing it:
 
 *(41-grant stdlib policy, macOS/CPython 3.12. Median of repeated starts.)*
 
+Those are stdlib numbers. **Grant a heavyweight stack and the gap becomes the
+dominant cost of a worker**, because every worker imports its own copy:
+
+| pandas + numpy + plotly + matplotlib granted | worker start | worker RSS |
+|---|---|---|
+| **default (grants not preloaded)** | **~235 ms** | **~113 MB** |
+| `preload_grants=True` | ~14 ms | ~29 MB |
+
+*(Same host. RSS is `ps` resident size for the worker process.)*
+
+The memory difference is not a rounding artifact: preloaded modules live in the
+broker and workers share those pages copy-on-write, so the stack is paid for
+once rather than per worker. Size a pool of workers with the right row — the
+default's ~113 MB apiece is what a resident worker actually holds, before any
+of your data.
+
 **`preload_grants=True` also imports your granted modules into the broker.**
 It is off by default because preloading runs their *import-time code there*: a
 grant that starts a background thread on import leaves the broker
@@ -370,6 +386,14 @@ The preload list is process-global and read once, when the broker starts: the
 first worker started in your process fixes it. A sandbox created later with
 different grants still works — its modules are simply imported in the worker
 rather than inherited.
+
+This matters most for `preload_grants`, which is therefore **effectively a
+process-wide setting wearing per-sandbox clothes**: only the first sandbox to
+start a worker can turn it on. A host that builds many sandboxes (one per
+session, say) should set it uniformly, or set it on the first. Asking for a
+preload the running broker doesn't have emits a `RuntimeWarning` naming the
+modules that won't be inherited — otherwise the flag looks accepted while
+worker start stays slow, which is indistinguishable from it being broken.
 
 **Pre-fork servers.** multiprocessing tracks the broker in a module-level
 singleton and registers no after-fork hook, so a process forked from one that
