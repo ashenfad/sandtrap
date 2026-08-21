@@ -36,6 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the docstring was stale.
 - `policy:` in the same docstring still described being "inherited by the child
   process via fork", which stopped being the default in 0.3.0.
+- **The live-object deprecation named a version that had already shipped.** It
+  announced removal "in 0.3" — the release that introduced the deprecation —
+  so anyone planning against it read a date that was already past. Retargeted
+  to **0.4.0**, the next version permitted to break, in the warning text,
+  `docs/policy.md`, and the 0.3.0 changelog entry. Live-object grants are
+  unchanged and still work; only the removal date they promise has moved.
 
 ### Documentation
 
@@ -89,7 +95,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never as a silent fallback, since falling back quietly would put you back on
   the hanging path without saying so.
 
-- **Live-object grants are deprecated** (removal in 0.3). `policy.module(obj)`
+- **Live-object grants are deprecated** (removal in 0.4.0 — this entry said
+  "0.3" on release, which was this same version; corrected in 0.3.1).
+  `policy.module(obj)`
   and `policy.fn(obj.method)` pinned a live object inside the policy. Register
   the **class** and bind the instance in the exec namespace instead — same
   member filters, same per-member privileges, and the policy stays portable.

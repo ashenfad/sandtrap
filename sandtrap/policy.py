@@ -56,7 +56,7 @@ def _warn_live_object(
 ) -> None:
     warnings.warn(
         f"{call} registered {detail} as {name!r}. This is deprecated and will "
-        f"be removed in 0.3.\n\n{_LIVE_OBJECT_MIGRATION}{import_note}",
+        f"be removed in 0.4.0.\n\n{_LIVE_OBJECT_MIGRATION}{import_note}",
         DeprecationWarning,
         stacklevel=stacklevel,
     )
