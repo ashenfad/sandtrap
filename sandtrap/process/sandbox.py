@@ -255,6 +255,65 @@ def _forkserver_preload_names(policy: Any, include_grants: bool = False) -> list
     return sorted(names)
 
 
+# What the broker THIS process started actually loaded: (owner pid, broker
+# pid, module names). Neither of multiprocessing's own signals can answer
+# "will my modules be in the broker my worker forks from?":
+#
+# - ``_preload_modules`` is what was *requested*, and it keeps growing as
+#   later sandboxes ask for more. It diverges from what a running broker
+#   imported the moment anyone asks for something new.
+# - ``_forkserver_pid`` alone can't tell a broker we started from one
+#   inherited through fork, and a pre-fork child's inherited pid is stale —
+#   its first worker start replaces it with a broker that DOES honour the
+#   current list (see ``_reset_inherited_forkserver``).
+#
+# Both are inherited across fork, so both lie in a forked child. Only a
+# record written when a broker of ours starts can answer, and stamping the
+# owner pid is what stops a child reading its parent's record as its own.
+_BROKER_PRELOAD: "tuple[int, int, frozenset[str]] | None" = None
+
+
+def _active_broker_preload() -> "frozenset[str] | None":
+    """Modules the live broker loaded, or ``None`` when this process has no
+    broker it can vouch for — never started one, inherited someone else's, or
+    had it replaced since."""
+    record = _BROKER_PRELOAD
+    if record is None:
+        return None
+    owner, broker_pid, names = record
+    if owner != os.getpid():
+        return None  # inherited through fork; the parent's broker, not ours
+    from multiprocessing import forkserver as _forkserver_module
+
+    live = getattr(_forkserver_module._forkserver, "_forkserver_pid", None)
+    if live != broker_pid:
+        return None  # replaced or stopped; we know nothing about the new one
+    return names
+
+
+def _record_broker_preload() -> None:
+    """Note what the broker loaded, once it exists. Called after a worker
+    starts, which is the first moment the broker's pid is knowable.
+
+    Records the preload list as it stands right after the broker came up —
+    for a broker we just started that is exactly what it imported. A broker
+    someone else started in this process before our first worker is recorded
+    from the same list, which can over-count if they mutated it in between;
+    the cost of that is a missed warning, never a false one.
+    """
+    global _BROKER_PRELOAD
+    from multiprocessing import forkserver as _forkserver_module
+
+    server = getattr(_forkserver_module, "_forkserver", None)
+    pid = getattr(server, "_forkserver_pid", None)
+    if pid is None:
+        return
+    me = os.getpid()
+    if _BROKER_PRELOAD is not None and _BROKER_PRELOAD[:2] == (me, pid):
+        return  # already recorded; a running broker's contents never change
+    _BROKER_PRELOAD = (me, pid, frozenset(getattr(server, "_preload_modules", ())))
+
+
 def _apply_forkserver_preload(names: list[str]) -> None:
     """Union *names* into multiprocessing's forkserver preload list.
 
@@ -266,15 +325,19 @@ def _apply_forkserver_preload(names: list[str]) -> None:
     Additive on purpose: never drop an embedder's own preload, and never let
     one sandbox shrink another's.
 
-    Adding to the set after the broker is already up warns: the entries stay
-    on the module-level list (a broker started later — in a forked child that
-    reset its inherited state, say — would honour them), but no worker of the
-    RUNNING broker inherits them. Without the warning that reads as
+    Asking for something the running broker doesn't have warns. The entries
+    still go on the module-level list, so a broker started later honours them
+    — but no worker of the CURRENT one does. Without the warning that reads as
     ``preload_grants=True`` silently doing nothing, which is exactly how it
     presents: the flag is accepted, and worker start stays slow.
 
-    Only a set that actually GROWS warns. A second sandbox asking for a
-    preload the broker already carries is the common case and is silent.
+    The test is what the broker LOADED (see ``_active_broker_preload``), not
+    whether this call grows the requested list. Those differ: the first
+    unserved request grows the list, so a second sandbox asking for the same
+    module would find it already there and say nothing, while being equally
+    unserved. And a process with no broker of its own — including a pre-fork
+    child whose inherited pid is about to be replaced by a broker that will
+    honour these names — has nothing to warn about.
     """
     from multiprocessing import forkserver as _forkserver_module
 
@@ -282,21 +345,21 @@ def _apply_forkserver_preload(names: list[str]) -> None:
         existing = set(_forkserver_module._forkserver._preload_modules)
     except Exception:
         existing = {"__main__"}  # multiprocessing's own default
-    merged = existing | set(names)
-    if merged == existing:
-        return
-    if getattr(_forkserver_module._forkserver, "_forkserver_pid", None) is not None:
+    loaded = _active_broker_preload()
+    if loaded is not None and (missing := sorted(set(names) - loaded)):
         warnings.warn(
             "the forkserver broker is already running, so it will not preload "
-            f"{sorted(merged - existing)!r} — those modules will be imported "
-            "in each worker instead. multiprocessing reads the preload list "
-            "once, at broker start, so the first sandbox to start a worker in "
-            "this process fixes it. Build sandboxes that need a preload "
-            "first, or give them all the same preload_grants value.",
+            f"{missing!r} — those modules will be imported in each worker "
+            "instead. multiprocessing reads the preload list once, at broker "
+            "start, so the first sandbox to start a worker in this process "
+            "fixes it. Build sandboxes that need a preload first, or give "
+            "them all the same preload_grants value.",
             RuntimeWarning,
             stacklevel=3,
         )
-    multiprocessing.set_forkserver_preload(sorted(merged))
+    merged = existing | set(names)
+    if merged != existing:
+        multiprocessing.set_forkserver_preload(sorted(merged))
 
 
 def _reset_inherited_forkserver() -> None:
@@ -314,11 +377,16 @@ def _reset_inherited_forkserver() -> None:
     rather than acquired — if the fork interrupted a broker operation we would
     have inherited it already held, with no thread left to release it.
     """
+    global _BROKER_PRELOAD
     from multiprocessing import forkserver as _forkserver_module
 
     server = getattr(_forkserver_module, "_forkserver", None)
     if server is None:
         return
+
+    # Whatever we knew described the other process's broker. The next worker
+    # start raises a broker of our own and re-records it.
+    _BROKER_PRELOAD = None
 
     alive_fd = getattr(server, "_forkserver_alive_fd", None)
     if alive_fd is not None:
@@ -685,6 +753,11 @@ class ProcessSandbox:
             child_conn.close()
             self._process = None
             raise
+        if self._start_method == "forkserver":
+            # First moment the broker's pid exists. Note what it loaded, so a
+            # later sandbox asking for more can be told it won't get it — the
+            # requested list can't answer that (see _apply_forkserver_preload).
+            _record_broker_preload()
         child_conn.close()  # Parent doesn't use the child end
 
         self._conn = parent_conn

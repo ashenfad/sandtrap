@@ -28,6 +28,7 @@ import warnings
 import pytest
 
 from sandtrap import Policy
+from sandtrap.process import sandbox as sandbox_mod
 from sandtrap.process.sandbox import (
     ProcessSandbox,
     _apply_forkserver_preload,
@@ -120,43 +121,88 @@ def test_applying_preload_is_additive():
 # accepted; worker start just stays slow). These pin the warning that says so.
 
 
-def _with_fake_broker(pid, names, fn):
-    """Run ``fn`` with the forkserver singleton reporting ``pid`` as its broker
-    and ``names`` as its preload list, then restore both. Faking beats starting
-    a real broker: the test would otherwise depend on whether some earlier test
-    in the session already started one."""
+BROKER_PID = 12345
+
+
+def _with_recorded_broker(loaded, fn, *, owner=None, requested=None):
+    """Run ``fn`` against a broker that LOADED ``loaded``, then restore state.
+
+    Fakes the record rather than starting a real broker: whether one is
+    already up otherwise depends on what ran earlier in the session.
+
+    ``owner`` defaults to this process. Pass a different pid to model a record
+    inherited through fork — the parent's broker, which this process is about
+    to replace. ``requested`` seeds the module-level *requested* list, which is
+    deliberately allowed to differ from ``loaded``: that divergence is the
+    whole point of tracking them separately.
+    """
     from multiprocessing import forkserver as fs
 
     before_names = list(getattr(fs._forkserver, "_preload_modules", ["__main__"]))
     before_pid = getattr(fs._forkserver, "_forkserver_pid", None)
+    before_record = sandbox_mod._BROKER_PRELOAD
     try:
-        multiprocessing.set_forkserver_preload(names)
-        fs._forkserver._forkserver_pid = pid
+        multiprocessing.set_forkserver_preload(
+            list(loaded) if requested is None else list(requested)
+        )
+        fs._forkserver._forkserver_pid = BROKER_PID
+        sandbox_mod._BROKER_PRELOAD = (
+            os.getpid() if owner is None else owner,
+            BROKER_PID,
+            frozenset(loaded),
+        )
         return fn()
     finally:
+        sandbox_mod._BROKER_PRELOAD = before_record
         fs._forkserver._forkserver_pid = before_pid
         multiprocessing.set_forkserver_preload(before_names)
 
 
-def test_growing_the_preload_after_broker_start_warns():
+def test_asking_a_running_broker_for_a_module_it_lacks_warns():
     with pytest.warns(RuntimeWarning, match="already running") as caught:
-        _with_fake_broker(
-            12345,
+        _with_recorded_broker(
             ["__main__", "sandtrap"],
             lambda: _apply_forkserver_preload(["sandtrap", "pandas_stand_in"]),
         )
     # names the module that won't be inherited, so the reader can act on it
     assert "pandas_stand_in" in str(caught[0].message)
+    assert "sandtrap" not in str(caught[0].message)  # that one IS loaded
+
+
+def test_every_unserved_request_warns_not_only_the_first():
+    """Regression: the warning used to trigger on the REQUESTED list growing.
+
+    The first unserved request appends to that list (correctly — a broker
+    started later should honour it), so a second sandbox asking for the same
+    module found it already there and said nothing, while being just as
+    unserved. For a host building one sandbox per session that meant exactly
+    one warning and then silence, which is the pattern most likely to be
+    missed. What matters is what the broker LOADED, and that never changes
+    while it runs.
+    """
+    seen = []
+
+    def two_sandboxes_in_a_row():
+        for _ in range(2):
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                _apply_forkserver_preload(["sandtrap", "pandas_stand_in"])
+            seen.append([str(w.message) for w in caught])
+
+    _with_recorded_broker(["__main__", "sandtrap"], two_sandboxes_in_a_row)
+
+    assert len(seen[0]) == 1, "first request should warn"
+    assert len(seen[1]) == 1, "second request is equally unserved and must warn"
+    assert all("pandas_stand_in" in m for group in seen for m in group)
 
 
 def test_no_warning_when_the_broker_already_carries_the_preload():
     """The common case for a multi-workspace host: every sandbox asks for the
-    same preload, and only the first one's request could possibly take effect.
-    Warning on each of the rest would be noise, not signal."""
+    same preload, the first one's request took effect, and the rest inherit
+    it. Warning on those would be noise, not signal."""
     with warnings.catch_warnings():
         warnings.simplefilter("error")  # any warning fails the test
-        _with_fake_broker(
-            12345,
+        _with_recorded_broker(
             ["__main__", "sandtrap", "math"],
             lambda: _apply_forkserver_preload(["sandtrap", "math"]),
         )
@@ -164,13 +210,53 @@ def test_no_warning_when_the_broker_already_carries_the_preload():
 
 def test_no_warning_before_the_broker_starts():
     """The path that actually works — set the list, then start the broker."""
+    from multiprocessing import forkserver as fs
+
+    before_record = sandbox_mod._BROKER_PRELOAD
+    before_pid = getattr(fs._forkserver, "_forkserver_pid", None)
+    try:
+        sandbox_mod._BROKER_PRELOAD = None  # no broker of ours
+        fs._forkserver._forkserver_pid = None
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            _apply_forkserver_preload(["sandtrap", "math"])
+    finally:
+        fs._forkserver._forkserver_pid = before_pid
+        sandbox_mod._BROKER_PRELOAD = before_record
+
+
+def test_no_warning_for_a_broker_inherited_through_fork():
+    """Regression: pre-fork servers (gunicorn, ``uvicorn --workers N``) warned
+    in every worker.
+
+    A forked child inherits both the broker pid and the requested list, but
+    the pid names a process that is not its child — so its first worker start
+    raises ``ChildProcessError``, resets, and gets a broker of its own that
+    DOES honour the current list. Warning there is a false positive, and it
+    would fire once per worker on every deployment of that shape. The record's
+    owner pid is what distinguishes the two.
+    """
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        _with_fake_broker(
-            None,  # no broker yet
-            ["__main__"],
-            lambda: _apply_forkserver_preload(["sandtrap", "math"]),
+        _with_recorded_broker(
+            ["__main__", "sandtrap"],
+            lambda: _apply_forkserver_preload(["sandtrap", "pandas_stand_in"]),
+            owner=os.getpid() + 1,  # recorded by the process we were forked from
         )
+
+
+def test_a_replaced_broker_invalidates_the_record():
+    """If the live pid isn't the one we recorded, we know nothing about what
+    the current broker holds — so say nothing rather than guess."""
+    from multiprocessing import forkserver as fs
+
+    def swap_the_broker_then_ask():
+        fs._forkserver._forkserver_pid = BROKER_PID + 1
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            _apply_forkserver_preload(["sandtrap", "pandas_stand_in"])
+
+    _with_recorded_broker(["__main__", "sandtrap"], swap_the_broker_then_ask)
 
 
 # -- the broker actually gets used -------------------------------------------
