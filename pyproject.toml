@@ -44,7 +44,10 @@ test = [
     "pytest-asyncio",
     "pandas",
 ]
-process = [
+# Kernel mode on LINUX only: seccomp + Landlock bindings. macOS needs nothing
+# (Seatbelt ships with the OS), and isolation="process" needs nothing anywhere
+# — which is what the old name, [process], kept implying.
+kernel = [
     "landlock; sys_platform == 'linux'",
     "pyseccomp; sys_platform == 'linux'",
 ]

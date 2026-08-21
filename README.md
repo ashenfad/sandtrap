@@ -19,7 +19,7 @@ That covers `"none"` and `"process"` on every platform, and `"kernel"` on macOS
 Landlock bindings:
 
 ```
-pip install sandtrap[process]
+pip install sandtrap[kernel]
 ```
 
 ## Quick start
@@ -99,7 +99,7 @@ and what it asks of you:
 
 Kernel mode is **defense-in-depth** — a second layer that contains accidental or casual escape (a buggy agent's stray network call, a walk outside the root) under the cooperative-code Python sandbox. It is **not** a boundary against code actively trying to escape: the inner Python layer isn't adversarial-safe, and the worker→host IPC uses `pickle`. See the [security model](docs/security.md#threat-model) for the full picture and the [roadmap](docs/roadmap.md) for hardening plans.
 
-If the platform can't apply the requested kernel restrictions (missing `sandtrap[process]` packages, Landlock-less kernel, unsupported OS), `isolation="kernel"` **fails closed** — it raises `IsolationUnavailable` rather than silently running with no protection. Pass `allow_degraded=True` to proceed anyway; inspect `result.isolation` to see exactly what took effect.
+If the platform can't apply the requested kernel restrictions (missing `sandtrap[kernel]` packages, Landlock-less kernel, unsupported OS), `isolation="kernel"` **fails closed** — it raises `IsolationUnavailable` rather than silently running with no protection. Pass `allow_degraded=True` to proceed anyway; inspect `result.isolation` to see exactly what took effect.
 
 ## Part of the agex stack
 

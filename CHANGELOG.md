@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## 0.3.2 - 2026-08-21
 
+### Changed
+
+- **The `process` extra is now `kernel`:** `pip install sandtrap[kernel]`.
+
+  It was misnamed from the start. Its contents are `landlock` and `pyseccomp`,
+  both behind `sys_platform == 'linux'` — so it is the *Linux kernel-mode*
+  extra. It has nothing to do with `isolation="process"`, which needs no extras
+  on any platform, and nothing to do with kernel mode on macOS, where Seatbelt
+  ships with the OS. The old name told readers to install it for crash
+  containment they already had, and told mac users to install a package set
+  that resolves to nothing for them.
+
+  Renamed rather than aliased because nothing depends on it yet. If you do have
+  it pinned, pip warns (`does not provide the extra 'process'`) and installs
+  without the bindings; `isolation="kernel"` on Linux then fails closed with
+  `IsolationUnavailable`, as it always has. Two loud signals, no silent loss of
+  protection.
+
 ### Fixed
 
 - **`sandbox()` can now express `start_method` and `preload_grants`.** Both are

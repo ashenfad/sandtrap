@@ -104,7 +104,7 @@ In short: use kernel mode to reduce the blast radius of mistakes and to add a re
 
 #### Fail-closed by default
 
-Kernel restrictions are applied once at worker startup and **cannot be loosened afterward** (seccomp/Landlock are strictly monotonic; Seatbelt is one-shot). If the platform can't apply what was requested -- missing package (`pip install sandtrap[process]`), kernel too old (Landlock needs 5.13+, often off in containers), or an unsupported OS -- `isolation="kernel"` **raises `IsolationUnavailable` at worker startup** rather than silently running user code with no kernel restrictions. Pass `allow_degraded=True` to proceed anyway; that emits a `RuntimeWarning` and records the shortfall.
+Kernel restrictions are applied once at worker startup and **cannot be loosened afterward** (seccomp/Landlock are strictly monotonic; Seatbelt is one-shot). If the platform can't apply what was requested -- missing package (`pip install sandtrap[kernel]`), kernel too old (Landlock needs 5.13+, often off in containers), or an unsupported OS -- `isolation="kernel"` **raises `IsolationUnavailable` at worker startup** rather than silently running user code with no kernel restrictions. Pass `allow_degraded=True` to proceed anyway; that emits a `RuntimeWarning` and records the shortfall.
 
 Every `ExecResult` from a process/kernel sandbox carries an `isolation: IsolationStatus` describing exactly what took effect (`requested`, `platform`, and per-mechanism `landlock`/`seccomp`/`seatbelt` flags, plus a `.degraded` property). Inspect it to *verify* -- not assume -- that the restrictions you asked for are in force:
 
