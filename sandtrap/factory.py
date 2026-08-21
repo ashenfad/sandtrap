@@ -23,6 +23,8 @@ def sandbox(
     allow_degraded: bool = False,
     echo: Literal["none", "last", "all"] = "none",
     close_fds: bool = False,
+    start_method: Literal["fork", "spawn", "forkserver"] | None = None,
+    preload_grants: bool = False,
 ) -> Sandbox | ProcessSandbox:
     """Create a sandbox with the specified isolation level.
 
@@ -32,8 +34,9 @@ def sandbox(
         A :class:`Policy` instance controlling what sandboxed code can access.
     isolation:
         ``"none"`` (default) -- in-process, lightweight.
-        ``"process"`` -- fork a worker process (crash protection, no kernel restrictions).
-        ``"kernel"`` -- fork a worker + seccomp/Landlock/Seatbelt.
+        ``"process"`` -- run in a worker process (crash protection, no kernel
+        restrictions).
+        ``"kernel"`` -- a worker + seccomp/Landlock/Seatbelt.
     mode:
         ``"wrapped"`` (default) or ``"raw"``.
     filesystem:
@@ -81,6 +84,29 @@ def sandbox(
         preserving standard streams and private IPC. Defaults to ``False``
         because policy registrations may intentionally rely on fork-inherited
         live resources; those registrations must use RPC when this is enabled.
+    start_method:
+        How the worker process is created — ``None`` (default) picks the
+        safest available, ``"forkserver"`` on POSIX. Ignored for
+        ``isolation="none"`` (there is no worker).
+
+        ``"fork"`` is the escape hatch for a policy that cannot be
+        serialized: it inherits this process's memory, at the cost of the
+        deadlock hazard the default exists to avoid. It is what
+        :class:`~sandtrap.StPolicyNotPortable` points you at, so it has to be
+        reachable from here. See :class:`~sandtrap.process.sandbox.ProcessSandbox`
+        for the full contract.
+    preload_grants:
+        Import the policy's granted modules into the forkserver broker so
+        workers inherit them rather than importing their own copies. Off by
+        default, because preloading runs those modules' import-time code *in
+        the broker* — a grant that starts a thread on import would leave it
+        multi-threaded and reintroduce the hang the default prevents. Ignored
+        unless a forkserver worker is being created.
+
+        Where it applies it is a large win: on a pandas/numpy/plotly policy a
+        worker goes from ~235ms and ~113MB to ~14ms and ~29MB. It is also
+        process-global and first-use-wins — see ``ProcessSandbox`` and
+        ``docs/process.md``.
     """
     if isolation == "none":
         return Sandbox(
@@ -106,4 +132,6 @@ def sandbox(
         allow_degraded=allow_degraded,
         echo=echo,
         close_fds=close_fds,
+        start_method=start_method,
+        preload_grants=preload_grants,
     )

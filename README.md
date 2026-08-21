@@ -67,6 +67,17 @@ print(result.namespace)    # {"total": 45}
   a dedicated broker, so a multi-threaded host can't deadlock it
   (see [process docs](docs/process.md#how-workers-are-created))
 
+Because a worker inherits no memory, both worker-backed levels send the policy
+to it — so **the policy has to be serializable.** Module grants, module-level
+functions, and classes cross by name and need nothing; lambdas, closures, bound
+methods, and classes defined inside a function don't. `sandbox()` checks at
+construction and raises `StPolicyNotPortable` listing every problem at once,
+rather than surfacing pickle's first failure later from inside a worker. See
+[checking a policy is portable](docs/policy.md#checking-a-policy-is-portable)
+for the full rules and `Policy.check_picklable()`, or pass
+`start_method="fork"` to keep inheriting memory and accept the deadlock hazard
+above.
+
 Kernel mode is **defense-in-depth** — a second layer that contains accidental or casual escape (a buggy agent's stray network call, a walk outside the root) under the cooperative-code Python sandbox. It is **not** a boundary against code actively trying to escape: the inner Python layer isn't adversarial-safe, and the worker→host IPC uses `pickle`. See the [security model](docs/security.md#threat-model) for the full picture and the [roadmap](docs/roadmap.md) for hardening plans.
 
 If the platform can't apply the requested kernel restrictions (missing `sandtrap[process]` packages, Landlock-less kernel, unsupported OS), `isolation="kernel"` **fails closed** — it raises `IsolationUnavailable` rather than silently running with no protection. Pass `allow_degraded=True` to proceed anyway; inspect `result.isolation` to see exactly what took effect.

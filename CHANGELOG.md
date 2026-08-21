@@ -5,6 +5,54 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.3.2 - 2026-08-21
+
+### Fixed
+
+- **`sandbox()` can now express `start_method` and `preload_grants`.** Both are
+  public `ProcessSandbox` arguments, and neither was reachable through the
+  factory — which matters because `sandbox` is the only sandbox constructor in
+  `sandtrap.__all__`.
+
+  For `start_method` that made a documented remedy unusable. 0.3.0 refuses a
+  policy that can't be serialized to a non-forked worker, and says so:
+
+  ```
+  StPolicyNotPortable: This policy cannot be sent to a
+  start_method='forkserver' worker ...
+  Use start_method="fork" to keep inheriting memory ...
+  ```
+
+  Following that advice from the public API was impossible; it required
+  importing `sandtrap.process.sandbox.ProcessSandbox`, which is not exported.
+  So 0.3.0 shipped a breaking change whose escape hatch only worked if you
+  reached past the front door.
+
+  `preload_grants` was unreachable the same way, making the 16×-faster,
+  4×-smaller worker configuration documented in 0.3.1 inapplicable to anyone
+  using the factory.
+
+  Both are ignored under `isolation="none"`, matching how `rpc_handlers`,
+  `allow_degraded`, and `close_fds` already behave there — so one config can
+  drive every rung.
+
+- The factory's `isolation` docs still described `"process"` and `"kernel"` as
+  forking a worker. They haven't since 0.3.0.
+
+### Documentation
+
+- **`Policy.check_picklable()` is documented.** It shipped as a headline 0.3.0
+  addition and appeared nowhere user-facing — only in an internal design note.
+  `policy.md` now covers it, with what crosses by name and what doesn't, and
+  the `PolicyProblem` fields.
+- **The policy-portability requirement is in the README.** Reaching for
+  `isolation="process"` from the README alone could produce a
+  `StPolicyNotPortable` the README never hinted at.
+- `sandbox.md`'s parameter list — which `process.md` calls the canonical
+  reference — stopped before every worker-only argument, so `rpc_handlers`,
+  `allow_degraded`, and `close_fds` were undocumented there too. All five are
+  now listed, with the ignored-under-`isolation="none"` rule stated once.
+
 ## 0.3.1 - 2026-08-21
 
 ### Added
