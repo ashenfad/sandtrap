@@ -20,6 +20,14 @@ sb = sandbox(policy)
 - `snapshot_prints` -- when `True`, deep-copies `print()` arguments at call time and populates `result.prints`. Default `False`. Works with all isolation levels.
 - `echo` -- `"none"` (default), `"last"`, or `"all"`. REPL/notebook-style auto-display of bare top-level expressions. See [Expression echo](#expression-echo-repl-style).
 
+`sandbox()` takes five more that only mean something once there is a worker process, and are ignored under `isolation="none"` — so a single call can drive every rung. All are documented in [process.md](process.md#creating-a-process-sandbox):
+
+- `start_method` -- how the worker is created (`None` picks the safest available; `"fork"` is the escape hatch for a policy that can't be serialized).
+- `preload_grants` -- import granted modules into the forkserver broker so workers inherit them instead of importing their own copies.
+- `rpc_handlers` -- bridge live parent-side objects into the worker.
+- `allow_degraded` -- `isolation="kernel"` only; proceed with a warning rather than raising when the platform can't apply kernel restrictions.
+- `close_fds` -- neutralize ambient host file descriptors in the worker.
+
 ## Context manager
 
 `sandbox()` returns objects that support `with`:

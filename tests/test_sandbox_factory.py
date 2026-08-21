@@ -6,7 +6,7 @@ import threading
 import pytest
 from monkeyfs import IsolatedFS, VirtualFS
 
-from sandtrap import Policy, sandbox
+from sandtrap import Policy, StPolicyNotPortable, sandbox
 from sandtrap.process.sandbox import ProcessSandbox
 from sandtrap.sandbox import Sandbox
 
@@ -56,6 +56,61 @@ def test_process_forwards_close_fds():
     sb = sandbox(Policy(timeout=5.0), isolation="process", close_fds=True)
     assert isinstance(sb, ProcessSandbox)
     assert sb._close_fds is True
+
+
+def test_process_forwards_start_method():
+    sb = sandbox(Policy(timeout=5.0), isolation="process", start_method="spawn")
+    assert sb._start_method == "spawn"
+
+
+def test_process_forwards_preload_grants():
+    sb = sandbox(Policy(timeout=5.0), isolation="process", preload_grants=True)
+    assert sb._preload_grants is True
+
+
+def test_start_method_defaults_to_the_safe_one():
+    """Unset must keep meaning "whatever is safest here" — forwarding None
+    rather than a literal would pin the factory to one platform's choice."""
+    from sandtrap.process.sandbox import default_start_method
+
+    sb = sandbox(Policy(timeout=5.0), isolation="process")
+    assert sb._start_method == default_start_method()
+
+
+@pytest.mark.parametrize("isolation", ["process", "kernel"])
+def test_the_unportable_policy_escape_hatch_is_reachable(isolation):
+    """The point of forwarding ``start_method``.
+
+    A policy holding a live object can't be serialized to a non-forked
+    worker, so 0.3.0 refuses it with ``StPolicyNotPortable`` — and names
+    ``start_method="fork"`` as the way out. ``sandbox()`` is the only
+    constructor in ``sandtrap.__all__``, so if it can't express that, the
+    documented remedy is unreachable from the public API.
+    """
+
+    class Live:
+        def ping(self):
+            return "pong"
+
+    policy = Policy(timeout=5.0)
+    with pytest.warns(DeprecationWarning):  # live-object grants are deprecated
+        policy.module(Live(), name="live")
+
+    with pytest.raises(StPolicyNotPortable):
+        sandbox(policy, isolation=isolation)
+
+    # ...and the escape hatch works, from the public API, with no reach
+    # into sandtrap.process.
+    sb = sandbox(policy, isolation=isolation, start_method="fork")
+    assert sb._start_method == "fork"
+
+
+def test_start_method_is_ignored_without_a_worker():
+    """``isolation="none"`` has no worker to create — same posture as
+    ``rpc_handlers`` and ``close_fds``: accepted and ignored, not an error,
+    so one config can drive every rung."""
+    sb = sandbox(Policy(timeout=5.0), start_method="spawn", preload_grants=True)
+    assert isinstance(sb, Sandbox)
 
 
 def test_process_basic_exec(root):

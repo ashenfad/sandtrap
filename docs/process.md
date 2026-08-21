@@ -40,6 +40,13 @@ All `sandbox()` parameters are documented in [sandbox.md](sandbox.md). The proce
 - `isolation` -- `"process"` or `"kernel"`.
 - `filesystem` -- a `monkeyfs.FileSystem` implementation (e.g., `IsolatedFS`, `VirtualFS`). Optional -- when `None`, sandboxed code has no file I/O. When an `IsolatedFS` is provided with `isolation="kernel"`, kernel-level filesystem restriction locks access to its root directory.
 - `snapshot_prints` -- works across all isolation levels. When `True`, `result.prints` contains deep-copied `print()` arguments from the worker, pickled back with the result.
+- `start_method` -- how the worker is created; `None` (default) picks the safest available. `"fork"` is the escape hatch for a policy that can't be serialized. See [How workers are created](#how-workers-are-created).
+- `preload_grants` -- import your granted modules into the forkserver broker so workers inherit them. Off by default; a large win where it's safe. See [What the default costs](#what-the-default-costs-and-what-it-requires).
+- `allow_degraded` -- `isolation="kernel"` only. Proceed with a warning when the platform can't apply the requested kernel mechanisms, instead of raising. See [Fail-closed when isolation is unavailable](#fail-closed-when-isolation-is-unavailable).
+- `rpc_handlers` -- bridge live parent-side objects into the worker. See [Exposing a live host object](policy.md#exposing-a-live-host-object).
+- `close_fds` -- neutralize ambient host descriptors in the worker. See [Host file descriptors](#host-file-descriptors).
+
+The last five are ignored under `isolation="none"`, so one config can drive every rung.
 
 ## Running code
 
@@ -253,7 +260,16 @@ is an intentional part of the policy contract.
 
 By default a worker is **not** forked from your process. A broker is started
 once, from a fresh interpreter, and forks each worker from it — `forkserver`,
-selected automatically. `ProcessSandbox(..., start_method=...)` overrides that.
+selected automatically. Override with `start_method=`, on either constructor:
+
+```python
+sandbox(policy, isolation="process", start_method="fork")   # the factory
+ProcessSandbox(policy, start_method="fork")                 # or directly
+```
+
+`preload_grants=` rides along the same way. Both were reachable only through
+`ProcessSandbox` before 0.3.2, which made the escape hatch below unusable from
+`sandtrap.sandbox()` — the only constructor in `sandtrap.__all__`.
 
 (Process and kernel isolation are POSIX-only: cancellation is delivered with
 `SIGUSR1`, which Windows has no equivalent of. The start method is chosen from

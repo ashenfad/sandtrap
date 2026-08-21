@@ -157,6 +157,51 @@ in-process but has nothing to deliver across a worker boundary.
 > The same applies to `policy.fn(my_service.query)` — register the class and
 > bind the instance rather than registering a bound method.
 
+## Checking a policy is portable
+
+`isolation="process"` / `"kernel"` send the policy to a worker that inherits no
+memory, so every registration has to be reachable by name. `sandbox()` checks
+at construction and raises `StPolicyNotPortable` — listing *every* problem, not
+just the first, because a policy that can't be serialized is a configuration
+mistake and you can only act on it where you wrote it.
+
+`Policy.check_picklable()` runs the same check on demand, returning a list of
+`PolicyProblem` — empty means portable:
+
+```python
+for problem in policy.check_picklable():
+    print(problem)          # "'rec' (live-object grant): ... Register the class ..."
+
+assert not policy.check_picklable()   # in a test, so drift fails in CI
+```
+
+Each carries `kind`, `name`, `detail`, and `remedy` separately if you want to
+format them yourself.
+
+Two things it can't decide for you: whether a class defined in `__main__` will
+resolve (that depends on your entry point being import-safe — see
+[Process Sandbox](process.md#what-the-default-costs-and-what-it-requires)), and
+whether a value that crosses *by value* should have.
+
+What crosses, and what doesn't:
+
+| crosses by name | doesn't cross |
+|---|---|
+| module grants (re-imported in the worker) | lambdas and closures |
+| module-level functions | bound methods, callable instances |
+| classes defined at module level | classes defined inside a function |
+| | modules built at runtime |
+| | callable `include` / `exclude` predicates |
+| | live objects (see the deprecation above) |
+
+The check reasons about **importability**, not just picklability: a module
+assembled at runtime pickles happily and then fails to load on the other side,
+which is a much worse place to find out.
+
+The escape hatch is `sandbox(..., start_method="fork")`, which inherits memory
+so nothing needs to serialize — at the cost of the deadlock hazard described in
+[Process Sandbox](process.md#why-not-fork).
+
 ## Pattern filtering
 
 `include` and `exclude` accept:
