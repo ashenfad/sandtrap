@@ -148,7 +148,7 @@ class is registered. And under process/kernel isolation the RPC bridge carries
 in-process but has nothing to deliver across a worker boundary.
 
 > **Deprecated:** `policy.module(my_service, name="service")` registered a live
-> object directly. It still works and now warns; it will be removed in 0.3.
+> object directly. It still works and now warns; it will be removed in 0.4.0.
 > Under `isolation="process"`/`"kernel"` it never did what it looked like —
 > fork handed the worker a **copy**, so mutations never reached the host object
 > — and it makes the policy unpicklable, which blocks non-forked workers
