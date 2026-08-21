@@ -146,7 +146,7 @@ When `isolation="kernel"`, platform-appropriate kernel restrictions are applied 
 Install both with:
 
 ```
-pip install sandtrap[process]
+pip install sandtrap[kernel]
 ```
 
 ### macOS
@@ -157,7 +157,7 @@ No extra packages needed on macOS.
 
 ### Fail-closed when isolation is unavailable
 
-Kernel isolation is best-effort in the sense that the *mechanisms* may not exist on a given platform (missing `sandtrap[process]` packages, Landlock-less kernel, unsupported OS). But `isolation="kernel"` does **not** silently downgrade when they're missing — that would run user code with none of the protection the caller asked for.
+Kernel isolation is best-effort in the sense that the *mechanisms* may not exist on a given platform (missing `sandtrap[kernel]` packages, Landlock-less kernel, unsupported OS). But `isolation="kernel"` does **not** silently downgrade when they're missing — that would run user code with none of the protection the caller asked for.
 
 Instead, the worker records exactly what took effect and the parent **fails closed**: if kernel isolation was requested but couldn't be fully applied, entering the sandbox raises `IsolationUnavailable` before any user code runs.
 
@@ -168,7 +168,7 @@ try:
     with sandbox(Policy(), isolation="kernel", filesystem=IsolatedFS("/tmp/box")) as sb:
         sb.exec("...")
 except IsolationUnavailable as e:
-    # e.g. running in a container without Landlock, or sandtrap[process] not installed
+    # e.g. running in a container without Landlock, or sandtrap[kernel] not installed
     ...
 ```
 
