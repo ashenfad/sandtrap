@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.3.1 - 2026-08-21
+
+### Added
+
+- **`preload_grants` warns when it can't take effect.** multiprocessing reads
+  the forkserver preload list once, when the broker starts, so only the first
+  sandbox to start a worker in a process can set it. Asking afterwards now
+  emits a `RuntimeWarning` naming the modules that won't be inherited.
+
+  The behaviour is unchanged and was always correct — later sandboxes work,
+  their grants are simply imported per worker. But it was *silent*, and it
+  presents exactly as the flag being broken: `preload_grants=True` is accepted
+  and worker start stays slow. It fooled us on our own benchmark, where the
+  measured difference was 234ms vs 238ms until each case was run in a fresh
+  process, whereupon it was 14ms vs 233ms.
+
+  In practice this makes `preload_grants` a process-wide setting wearing
+  per-sandbox clothes. A host building one sandbox per session should set it
+  uniformly, or set it on the first.
+
+### Fixed
+
+- **`ProcessSandbox`'s docstring said granted modules are preloaded into the
+  broker by default. They are not** — that describes `preload_grants=True`,
+  which is opt-in. The quoted cost ("~0.7ms per worker over a plain fork") was
+  the opt-in figure, so a reader sizing a system from the class docs
+  underestimated worker start by more than two orders of magnitude on a
+  heavyweight policy. `docs/process.md` and the CHANGELOG had it right; only
+  the docstring was stale.
+- `policy:` in the same docstring still described being "inherited by the child
+  process via fork", which stopped being the default in 0.3.0.
+
+### Documentation
+
+- `preload_grants` now has a parameter entry at all — it was a public keyword
+  argument documented nowhere user-facing, with its rationale readable only in
+  a private helper.
+- Recorded what granting a heavyweight stack actually costs, since the existing
+  table measures a stdlib policy and the gap is much wider than it suggests:
+  with pandas/numpy/plotly/matplotlib granted, a worker is **~235ms and ~113MB**
+  by default against **~14ms and ~29MB** with `preload_grants=True`. Preloaded
+  modules are shared copy-on-write from the broker, so the stack is paid for
+  once rather than per worker — which is what makes the memory difference, and
+  what a pool of resident workers should be sized against.
+
 ## 0.3.0 - 2026-08-20
 
 ### Changed

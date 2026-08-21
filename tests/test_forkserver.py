@@ -7,9 +7,10 @@ interpreter boot.
 
 Two things make that real:
 
-- **Preload.** Without it a worker re-imports every granted module, which is
-  most of the cost (~42ms vs ~5.5ms for a 41-grant policy; a plain fork is
-  ~4.8ms). The list is derived from the policy's own grants.
+- **Preload.** The broker preloads ``sandtrap`` itself, taking a worker from
+  ~42ms to ~18ms (a plain fork is ~4.8ms). Grants are NOT preloaded by
+  default — ``preload_grants=True`` adds them and reaches ~5.5ms, at the cost
+  of running their import-time code in the broker.
 - **Surviving a forked host.** multiprocessing keeps the broker pid in a
   module-level singleton with no after-fork hook, so a process forked from one
   that already started a broker inherits a pid that isn't its child. The
@@ -22,6 +23,7 @@ import multiprocessing
 import os
 import string
 import sys
+import warnings
 
 import pytest
 
@@ -94,7 +96,13 @@ def test_applying_preload_is_additive():
     before = list(getattr(fs._forkserver, "_preload_modules", ["__main__"]))
     try:
         multiprocessing.set_forkserver_preload([*before, "sandtrap_probe_sentinel"])
-        _apply_forkserver_preload(["math"])
+        # Whether this grows the set after a broker is up depends on what ran
+        # earlier in the session, so the already-running warning is expected
+        # here in a full run and absent in an isolated one. It has its own
+        # tests above; this one is about the union.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            _apply_forkserver_preload(["math"])
         after = set(fs._forkserver._preload_modules)
         assert "sandtrap_probe_sentinel" in after  # kept
         assert "math" in after  # added
@@ -103,11 +111,83 @@ def test_applying_preload_is_additive():
         multiprocessing.set_forkserver_preload(before)
 
 
+# -- growing the list after the broker is up ----------------------------------
+#
+# The list is read ONCE, at broker start. A later sandbox asking for more gets
+# it on the module-level list but not into the running broker, so its workers
+# import those modules themselves. That is correct and documented — but silent,
+# and it presents as `preload_grants=True` doing nothing at all (the flag is
+# accepted; worker start just stays slow). These pin the warning that says so.
+
+
+def _with_fake_broker(pid, names, fn):
+    """Run ``fn`` with the forkserver singleton reporting ``pid`` as its broker
+    and ``names`` as its preload list, then restore both. Faking beats starting
+    a real broker: the test would otherwise depend on whether some earlier test
+    in the session already started one."""
+    from multiprocessing import forkserver as fs
+
+    before_names = list(getattr(fs._forkserver, "_preload_modules", ["__main__"]))
+    before_pid = getattr(fs._forkserver, "_forkserver_pid", None)
+    try:
+        multiprocessing.set_forkserver_preload(names)
+        fs._forkserver._forkserver_pid = pid
+        return fn()
+    finally:
+        fs._forkserver._forkserver_pid = before_pid
+        multiprocessing.set_forkserver_preload(before_names)
+
+
+def test_growing_the_preload_after_broker_start_warns():
+    with pytest.warns(RuntimeWarning, match="already running") as caught:
+        _with_fake_broker(
+            12345,
+            ["__main__", "sandtrap"],
+            lambda: _apply_forkserver_preload(["sandtrap", "pandas_stand_in"]),
+        )
+    # names the module that won't be inherited, so the reader can act on it
+    assert "pandas_stand_in" in str(caught[0].message)
+
+
+def test_no_warning_when_the_broker_already_carries_the_preload():
+    """The common case for a multi-workspace host: every sandbox asks for the
+    same preload, and only the first one's request could possibly take effect.
+    Warning on each of the rest would be noise, not signal."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # any warning fails the test
+        _with_fake_broker(
+            12345,
+            ["__main__", "sandtrap", "math"],
+            lambda: _apply_forkserver_preload(["sandtrap", "math"]),
+        )
+
+
+def test_no_warning_before_the_broker_starts():
+    """The path that actually works — set the list, then start the broker."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _with_fake_broker(
+            None,  # no broker yet
+            ["__main__"],
+            lambda: _apply_forkserver_preload(["sandtrap", "math"]),
+        )
+
+
 # -- the broker actually gets used -------------------------------------------
 
 
 @pytest.mark.parametrize("preload_grants", [False, True])
 def test_forkserver_worker_runs_with_grants(preload_grants):
+    """Both settings produce a WORKING worker — which is the whole assertion
+    here, and is true regardless of which one wins the broker.
+
+    Expect the ``True`` case to emit the already-running warning: the ``False``
+    case ran first and started the broker, so this one's grants can't be
+    preloaded. That is the documented behaviour, not a failure — the worker
+    imports them itself. Whether a preload actually took effect is timing
+    within one process, so it belongs to the unit tests above (which fake the
+    broker) rather than here.
+    """
     with ProcessSandbox(
         policy_with_grants(),
         isolation="none",

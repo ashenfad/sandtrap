@@ -265,6 +265,16 @@ def _apply_forkserver_preload(names: list[str]) -> None:
 
     Additive on purpose: never drop an embedder's own preload, and never let
     one sandbox shrink another's.
+
+    Adding to the set after the broker is already up warns: the entries stay
+    on the module-level list (a broker started later — in a forked child that
+    reset its inherited state, say — would honour them), but no worker of the
+    RUNNING broker inherits them. Without the warning that reads as
+    ``preload_grants=True`` silently doing nothing, which is exactly how it
+    presents: the flag is accepted, and worker start stays slow.
+
+    Only a set that actually GROWS warns. A second sandbox asking for a
+    preload the broker already carries is the common case and is silent.
     """
     from multiprocessing import forkserver as _forkserver_module
 
@@ -273,8 +283,20 @@ def _apply_forkserver_preload(names: list[str]) -> None:
     except Exception:
         existing = {"__main__"}  # multiprocessing's own default
     merged = existing | set(names)
-    if merged != existing:
-        multiprocessing.set_forkserver_preload(sorted(merged))
+    if merged == existing:
+        return
+    if getattr(_forkserver_module._forkserver, "_forkserver_pid", None) is not None:
+        warnings.warn(
+            "the forkserver broker is already running, so it will not preload "
+            f"{sorted(merged - existing)!r} — those modules will be imported "
+            "in each worker instead. multiprocessing reads the preload list "
+            "once, at broker start, so the first sandbox to start a worker in "
+            "this process fixes it. Build sandboxes that need a preload "
+            "first, or give them all the same preload_grants value.",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+    multiprocessing.set_forkserver_preload(sorted(merged))
 
 
 def _reset_inherited_forkserver() -> None:
@@ -425,8 +447,10 @@ class ProcessSandbox:
     Parameters
     ----------
     policy:
-        A :class:`~sandtrap.Policy` instance.  Inherited by the child
-        process via fork.
+        A :class:`~sandtrap.Policy` instance.  Serialized to the worker
+        under the default ``start_method`` (module grants cross by name and
+        are re-imported there); inherited through memory under
+        ``start_method="fork"``.
     filesystem:
         A ``monkeyfs.FileSystem`` implementation (e.g., ``IsolatedFS``,
         ``VirtualFS``).  When an ``IsolatedFS`` is provided, kernel-level
@@ -448,9 +472,13 @@ class ProcessSandbox:
         ``"forkserver"`` starts a broker once, from a fresh interpreter, and
         forks each worker from it. Because the broker never grows threads, no
         worker can inherit a lock this process holds — which is what makes a
-        forked worker of a multi-threaded host hang. The module set granted by
-        the policy is preloaded into the broker, so this costs ~0.7ms per
-        worker over a plain fork.
+        forked worker of a multi-threaded host hang.
+
+        The broker preloads ``sandtrap`` itself but **not your grants**, so a
+        worker re-imports every granted module. That is what the safety is
+        bought with, and it is not free: ~18ms per worker for a stdlib policy,
+        but ~235ms and ~113MB resident once a heavyweight stack (pandas, numpy,
+        plotly) is granted. ``preload_grants=True`` trades it back — see below.
 
         ``"fork"`` inherits this process's memory, so the policy needs no
         serialization — the escape hatch for policies that can't cross, at the
@@ -463,6 +491,33 @@ class ProcessSandbox:
         ``if __name__ == "__main__":``, and a host started as ``python -c`` or
         from a REPL has no importable ``__main__`` at all. Servers are
         unaffected: an ASGI app is imported, not executed as ``__main__``.
+    preload_grants:
+        Import the policy's granted modules into the forkserver broker, so
+        workers inherit them instead of importing their own copies. Off by
+        default. Ignored unless ``start_method="forkserver"``.
+
+        It is a large win where it applies — measured on a
+        pandas/numpy/plotly/matplotlib policy, a worker goes from ~235ms and
+        ~113MB to ~14ms and ~29MB, since the shared pages are paid for once in
+        the broker rather than per worker.
+
+        It is off by default because preloading runs your grants'
+        **import-time code in the broker**. A module that starts a background
+        thread on import leaves the broker multi-threaded, and a worker forked
+        from it can then inherit a lock held by that thread — recreating
+        precisely the permanent hang the default start method exists to
+        prevent. (The pyarrow allocator note in ``docs/process.md`` applies to
+        this configuration too.) Your grants are yours, so only you can say
+        whether that is true of them; turn this on when you know they start no
+        threads on import.
+
+        **Process-global, first-use-wins.** multiprocessing reads the preload
+        list once, when the broker starts, so whichever sandbox starts the
+        first worker in this process fixes it. Asking for preload after that
+        emits a :class:`RuntimeWarning` and is otherwise a no-op — later
+        sandboxes still work, their modules are simply imported per worker.
+        Set it on the first sandbox you build, or build them all with the same
+        value.
     allow_degraded:
         When ``isolation="auto"`` and the platform can't apply the
         requested kernel mechanisms, ``False`` (default) raises
