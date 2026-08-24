@@ -837,3 +837,59 @@ def test_dynamic_import_in_vfs_module_respects_policy():
 
     result = sandbox.exec("import sneaky")
     assert isinstance(result.error, ImportError)
+
+
+def test_dynamic_import_fromlist_resolves_a_vfs_package_directory():
+    """`__import__('pkg', fromlist=['sub'])` must reach as far as
+    `from pkg import sub`.
+
+    VFS package directories are built by ensure_package_chain, not found as
+    `<name>.py`, so the aliased resolution used for the fromlist form misses
+    them without an explicit fallback.
+    """
+    sandbox, fs = _make_sandbox()
+    fs.write("/pkg/__init__.py", b"MARK = 1")
+    fs.write("/pkg/sub.py", b"VALUE = 42")
+
+    statement = sandbox.exec("from pkg import sub\nresult = sub.VALUE")
+    assert statement.error is None, f"unexpected error: {statement.error}"
+
+    dynamic = sandbox.exec(
+        "m = __import__('pkg', fromlist=['sub'])\nresult = m.sub.VALUE"
+    )
+    assert dynamic.error is None, f"unexpected error: {dynamic.error}"
+    assert dynamic.namespace["result"] == statement.namespace["result"] == 42
+
+
+def test_dynamic_import_fromlist_runs_the_package_init():
+    """The fallback must return the real package, __init__ side effects and all."""
+    sandbox, fs = _make_sandbox()
+    fs.write("/pkg/__init__.py", b"MARK = 'loaded'")
+    fs.write("/pkg/sub.py", b"VALUE = 42")
+
+    result = sandbox.exec("m = __import__('pkg', fromlist=['sub'])\nresult = m.MARK")
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert result.namespace["result"] == "loaded"
+
+
+def test_dynamic_import_fromlist_dotted_vfs_package():
+    """The fallback walks back down to the package the caller asked for."""
+    sandbox, fs = _make_sandbox()
+    fs.write("/a/__init__.py", b"")
+    fs.write("/a/b/__init__.py", b"")
+    fs.write("/a/b/c.py", b"V = 9")
+
+    result = sandbox.exec("m = __import__('a.b', fromlist=['c'])\nresult = m.c.V")
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert result.namespace["result"] == 9
+
+
+def test_dynamic_import_fromlist_propagates_a_vfs_submodule_failure():
+    """A submodule that exists but blows up must not read as 'absent'."""
+    sandbox, fs = _make_sandbox()
+    fs.write("/pkg/__init__.py", b"")
+    fs.write("/pkg/broken.py", b"import totally_not_granted\n")
+
+    result = sandbox.exec("m = __import__('pkg', fromlist=['broken'])")
+    assert isinstance(result.error, ImportError)
+    assert "totally_not_granted" in str(result.error)

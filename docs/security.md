@@ -75,6 +75,14 @@ Semantics match CPython, with one exception:
 | `__import__(name, level=N)` for `N > 0` | `ImportError` -- use a `from . import ...` statement |
 | `globals` / `locals` arguments | accepted and ignored (CPython uses them only for `level > 0`) |
 
+A fromlist entry that is a lazily-loaded submodule is imported and bound, as
+CPython does, so `__import__("PIL", fromlist=["Image"]).Image` resolves. An
+*absent* entry is tolerated — `__import__(m, fromlist=["dummy"])` is the
+standard idiom for "give me the leaf, not the top package". A submodule that
+exists but *fails to load* is not tolerated: its error propagates, exactly as
+`from m import sub` would report it. Collapsing that into a silent success is
+how the two forms drift apart.
+
 Relative dynamic imports are declined because the gate has no well-defined
 caller package to resolve against; the statement form handles them.
 

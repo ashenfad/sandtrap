@@ -1,5 +1,6 @@
 """Tests for import gates (Phase 3)."""
 
+import importlib
 import math
 import sys
 import types
@@ -612,3 +613,64 @@ def test_dynamic_import_fromlist_still_swallows_a_missing_name():
     result = sandbox.exec("m = __import__('math', fromlist=['no_such_thing'])")
     assert result.error is None, f"unexpected error: {result.error}"
     assert result.namespace["m"] is math
+
+
+def _write_pkg(tmp_path, monkeypatch):
+    """A real on-disk package with a lazily-loaded good and broken submodule."""
+    pkg = tmp_path / "lazypkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")  # deliberately no eager submodule imports
+    (pkg / "fine.py").write_text("VALUE = 7")
+    (pkg / "broken.py").write_text("import totally_missing_dependency\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    return importlib.import_module("lazypkg")
+
+
+def test_dynamic_import_fromlist_binds_a_lazy_submodule(tmp_path, monkeypatch):
+    """The prefetch is what makes PIL-style lazy submodules reachable."""
+    pkg = _write_pkg(tmp_path, monkeypatch)
+    policy = Policy()
+    policy.module(pkg, recursive=True)
+    sandbox = Sandbox(policy)
+
+    result = sandbox.exec(
+        "m = __import__('lazypkg', fromlist=['fine'])\nx = m.fine.VALUE"
+    )
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert result.namespace["x"] == 7
+
+
+def test_dynamic_import_fromlist_propagates_a_submodule_load_failure(
+    tmp_path, monkeypatch
+):
+    """A submodule that exists but fails to load must not read as 'absent'.
+
+    Swallowing it would hand back the parent module as though nothing went
+    wrong, and the real cause would resurface much later as a confusing
+    AttributeError -- where the statement form reports it immediately.
+    """
+    pkg = _write_pkg(tmp_path, monkeypatch)
+    policy = Policy()
+    policy.module(pkg, recursive=True)
+    sandbox = Sandbox(policy)
+
+    statement = sandbox.exec("from lazypkg import broken")
+    dynamic = sandbox.exec("m = __import__('lazypkg', fromlist=['broken'])")
+    assert isinstance(statement.error, ImportError)
+    assert isinstance(dynamic.error, ImportError), (
+        f"load failure was swallowed: {dynamic.error!r}"
+    )
+    assert str(dynamic.error) == str(statement.error)
+
+
+def test_dynamic_import_fromlist_dummy_idiom_still_tolerated(tmp_path, monkeypatch):
+    """`__import__(m, fromlist=['dummy'])` is the standard 'give me the leaf'
+    idiom -- an absent entry must stay tolerated."""
+    pkg = _write_pkg(tmp_path, monkeypatch)
+    policy = Policy()
+    policy.module(pkg, recursive=True)
+    sandbox = Sandbox(policy)
+
+    result = sandbox.exec("m = __import__('lazypkg', fromlist=['dummy'])")
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert result.namespace["m"] is pkg
