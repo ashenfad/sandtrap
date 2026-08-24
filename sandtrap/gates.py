@@ -3,6 +3,7 @@
 import ast
 import builtins as _builtins
 import functools
+import importlib.util
 import inspect
 import posixpath
 import string as _string_mod
@@ -565,6 +566,42 @@ def make_gates(
         loc = f" (line {lineno})" if lineno else ""
         raise ImportError(_import_error_message(module_name) + loc)
 
+    def _submodule_exists(full_name: str) -> bool:
+        """Does *full_name* exist as an importable submodule?
+
+        Existence only -- permission is the caller's business.  This is what
+        separates an absent fromlist entry (tolerated, as CPython tolerates
+        it) from one that exists but fails to load (must propagate).
+        """
+        try:
+            return importlib.util.find_spec(full_name) is not None
+        except (ImportError, AttributeError, ValueError):
+            return False
+
+    def _vfs_package(name: str, fromlist: Any) -> Any:
+        """Resolve a VFS package *directory* named *name*, if there is one.
+
+        ``ensure_package_chain`` only builds parent packages for a *dotted*
+        target, so drive it with a fromlist entry and then walk back down to
+        the package the caller actually asked for.  Returns None when no
+        entry names a real module; failures raised by a module's own body
+        propagate.
+        """
+        for entry in fromlist:
+            if not isinstance(entry, str) or entry == "*":
+                continue
+            top = vfs.ensure_package_chain(f"{name}.{entry}")
+            if top is None:
+                continue
+            obj = top
+            for part in name.split(".")[1:]:
+                obj = getattr(obj, part, None)
+                if obj is None:
+                    break
+            if obj is not None:
+                return obj
+        return None
+
     def __st_dynimport__(
         name: str,
         globals: Any = None,
@@ -600,28 +637,45 @@ def make_gates(
             # exactly __st_import__'s no-alias branch.
             return __st_import__(name, _depth=1)
 
-        # With a non-empty fromlist CPython returns the named module itself;
-        # passing the name as its own alias selects that branch.
-        mod = __st_import__(name, alias=name, _depth=1)
+        # With a non-empty fromlist CPython returns the module named by
+        # `name` itself; passing the name as its own alias selects that
+        # branch of __st_import__.
+        try:
+            mod = __st_import__(name, alias=name, _depth=1)
+        except ImportError:
+            # A VFS *package directory* doesn't resolve that way: packages
+            # are built by ensure_package_chain, not found as <name>.py.
+            # `from pkg import sub` already works, so the dynamic spelling
+            # of the same import must not be stricter.
+            mod = _vfs_package(name, fromlist)
+            if mod is None:
+                raise
+
         # CPython also imports each fromlist entry that turns out to be a
         # submodule, binding it on the parent -- do the same so that
         # __import__('PIL', fromlist=['Image']).Image resolves for packages
         # whose __init__ doesn't eager-import its submodules.
-        #
-        # A missing or ungranted name is swallowed, as CPython swallows it:
-        # it surfaces on the attribute access that follows, which the policy
-        # gates in its own right.  Only ImportError/AttributeError, though --
-        # anything a submodule's import-time code raises propagates, and in
-        # particular StTimeout/StCancelled/StTickLimit are plain Exception
-        # subclasses (see errors.StError), so a blanket `except Exception`
-        # here would silently eat a timeout or a cancellation.
         for entry in fromlist:
-            if not isinstance(entry, str) or entry == "*":
+            if not isinstance(entry, str) or entry == "*" or hasattr(mod, entry):
                 continue
-            try:
-                __st_importfrom__(name, entry, _depth=1)
-            except (ImportError, AttributeError):
-                pass
+            full = f"{name}.{entry}"
+            if vfs.resolve_module(full) is not None:
+                continue  # VFS submodule; resolving it attached it
+            if not policy.is_import_allowed(full) or not _submodule_exists(full):
+                # Absent or ungranted.  CPython tolerates absent fromlist
+                # entries, and `__import__(m, fromlist=['dummy'])` is a
+                # standard idiom for "give me the leaf, not the top
+                # package".  A denied name resurfaces on the attribute
+                # access that follows, which the policy gates in its own
+                # right.
+                continue
+            # It exists and is granted, so anything raised while loading it
+            # is a real failure -- a missing dependency, an error in its
+            # body, or a StTimeout/StCancelled from a checkpoint (those are
+            # plain Exception subclasses, see errors.StError).  Reducing any
+            # of those to a silent success is how the statement form and
+            # this one drift apart.  Deliberately uncaught.
+            __st_importfrom__(name, entry, _depth=1)
         return mod
 
     def __st_defun__(name: str, compiled_fn: Any, ast_ref: int | str) -> Any:

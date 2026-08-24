@@ -35,6 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   raises `ImportError`: the gate has no well-defined caller package to resolve
   against, and the `from . import ...` statement handles that case.
 
+  A `fromlist` behaves as CPython's does: lazily-loaded submodules are imported
+  and bound, absent entries are tolerated (`fromlist=['dummy']` is the standard
+  "give me the leaf" idiom), and a submodule that exists but fails to load
+  reports its error rather than silently handing back the parent.
+
   The tradeoff is auditability, not security: the import set of a script is no
   longer fully enumerable at rewrite time. The policy check was always runtime.
   See [docs/security.md](docs/security.md#dynamic-imports).
