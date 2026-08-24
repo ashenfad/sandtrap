@@ -25,10 +25,19 @@ def _extract_names(nodes: Sequence[ast.AST]) -> set[str]:
 _BLOCKED_NAMES = frozenset({"exec", "eval", "compile", "__import__"})
 
 # Names that cannot be read (Load context).  __builtins__ is blocked so
-# sandboxed code cannot fish out __import__ via __builtins__["__import__"].
-# __import__ is blocked because the real __import__ lives in builtins
-# (for C extension support) and must not be callable from user code.
-_BLOCKED_LOAD_NAMES = frozenset({"__builtins__", "__import__"})
+# sandboxed code cannot fish out the real __import__ via
+# __builtins__["__import__"] -- that one lives in builtins for C extension
+# support (see Sandbox._build_namespace) and must never reach user code.
+_BLOCKED_LOAD_NAMES = frozenset({"__builtins__"})
+
+# Reading __import__ is rewritten to the policy-gated __st_dynimport__
+# rather than blocked.  The `import` statement resolves __import__ from the
+# frame's *builtins*, so the real one stays reachable for C extensions
+# importing their transitive deps, while a source-level __import__ is an
+# ordinary name load that this rewrite redirects to the gate.  Storing to
+# or deleting the name stays blocked (_BLOCKED_NAMES), so the redirect
+# cannot be shadowed out of the way.
+_DYNAMIC_IMPORT_GATE = "__st_dynimport__"
 
 
 class Rewriter(ast.NodeTransformer):
@@ -416,7 +425,7 @@ class Rewriter(ast.NodeTransformer):
 
     def visit_Global(self, node: ast.Global) -> ast.AST:
         for name in node.names:
-            if name.startswith("__st_"):
+            if name.startswith("__st_") or name in _BLOCKED_NAMES:
                 raise StValidationError(
                     f"Cannot declare '{name}' as global",
                     lineno=node.lineno,
@@ -426,7 +435,7 @@ class Rewriter(ast.NodeTransformer):
 
     def visit_Nonlocal(self, node: ast.Nonlocal) -> ast.AST:
         for name in node.names:
-            if name.startswith("__st_"):
+            if name.startswith("__st_") or name in _BLOCKED_NAMES:
                 raise StValidationError(
                     f"Cannot declare '{name}' as nonlocal",
                     lineno=node.lineno,
@@ -720,6 +729,14 @@ class Rewriter(ast.NodeTransformer):
         return node
 
     def visit_Name(self, node: ast.Name) -> ast.AST:
+        if isinstance(node.ctx, ast.Load) and node.id == "__import__":
+            # Redirect to the policy-gated dynamic import.  Rewriting the
+            # name (rather than the enclosing Call) keeps aliasing honest:
+            # `f = __import__` binds the gate itself, so `f('os')` is gated
+            # exactly like `__import__('os')`.
+            return ast.copy_location(
+                ast.Name(id=_DYNAMIC_IMPORT_GATE, ctx=ast.Load()), node
+            )
         if isinstance(node.ctx, ast.Load) and node.id.startswith("__st_"):
             raise StValidationError(
                 f"Cannot reference reserved name '{node.id}'",

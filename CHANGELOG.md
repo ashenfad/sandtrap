@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- **`__import__` is now available to sandboxed code, policy-gated.** A computed
+  module name reaches the same check as a literal one:
+
+  ```python
+  mod = __import__("math")        # fine if math is granted
+  mod = __import__(user_choice)   # ImportError unless the name is granted
+  ```
+
+  Agents reach for `__import__` often enough that refusing it outright cost a
+  turn every time, and the workaround they fall back to (an `import` statement)
+  was never any more restricted — so the refusal bought nothing.
+
+  It is safe because CPython keeps the two lookups apart. The `import`
+  statement resolves `__import__` from the frame's *builtins*, where the real
+  one stays parked so C extensions (numpy, pandas) can import their transitive
+  dependencies; a source-level `__import__` is an ordinary *name* load, which
+  the rewriter now redirects to a `__st_dynimport__` gate. Gating the name
+  never touches library internals. The redirect can't be shadowed — assigning
+  to, deleting, or declaring `__import__` global still fails validation, and
+  `__builtins__` remains unreadable.
+
+  Semantics follow CPython (`__import__("a.b")` binds the top-level package, a
+  non-empty `fromlist` selects the leaf) except that relative form `level > 0`
+  raises `ImportError`: the gate has no well-defined caller package to resolve
+  against, and the `from . import ...` statement handles that case.
+
+  The tradeoff is auditability, not security: the import set of a script is no
+  longer fully enumerable at rewrite time. The policy check was always runtime.
+  See [docs/security.md](docs/security.md#dynamic-imports).
+
+### Fixed
+
+- **`global`/`nonlocal` now reject the reserved names they always claimed to.**
+  `global __import__` (and `exec`/`eval`/`compile`) parsed cleanly even though
+  assignment to those names was blocked. Harmless on its own — the assignment
+  that would follow still failed — but the declaration is now refused where it
+  is written.
+
 ## 0.3.2 - 2026-08-21
 
 ### Changed
