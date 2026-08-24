@@ -21,6 +21,7 @@ The rewriter injects calls to these internal functions:
 | `__st_delattr__` | Policy-checked attribute delete (`del obj.attr`) |
 | `__st_import__` | Module import (`import x`) |
 | `__st_importfrom__` | From-import (`from x import y`) |
+| `__st_dynimport__` | Dynamic import (`__import__(name)`) |
 | `__st_checkpoint__` | Timeout, tick limit, memory, and cancellation check |
 | `__st_defun__` | Function definition wrapping (wrapped mode) |
 | `__st_defclass__` | Class definition wrapping (wrapped mode) |
@@ -33,15 +34,59 @@ Sandboxed code gets a restricted `__builtins__` (frozen via `_FrozenBuiltins`, a
 
 **Available**: `abs`, `all`, `any`, `ascii`, `bin`, `bool`, `bytearray`, `bytes`, `callable`, `chr`, `classmethod`, `complex`, `dict`, `divmod`, `enumerate`, `filter`, `float`, `format`, `frozenset`, `getattr` (policy-gated), `hasattr` (policy-gated), `hash`, `hex`, `id`, `int`, `isinstance`, `issubclass`, `iter`, `len`, `list`, `locals`, `map`, `max`, `min`, `next`, `object`, `oct`, `ord`, `pow`, `property`, `range`, `repr`, `reversed`, `round`, `set`, `slice`, `sorted`, `staticmethod`, `str`, `sum`, `super`, `tuple`, `type` (single-arg only), `zip`, plus ~40 exception types.
 
-**Not available**: `exec`, `eval`, `compile`, `__import__`, `globals`, `vars`, `open` (unless filesystem provided), `dir`, `help`, `breakpoint`, `exit`, `quit`, `input`, `memoryview`.
+**Not available**: `exec`, `eval`, `compile`, `globals`, `vars`, `open` (unless filesystem provided), `dir`, `help`, `breakpoint`, `exit`, `quit`, `input`, `memoryview`.
+
+**Policy-gated**: `__import__` -- see [Dynamic imports](#dynamic-imports) below.
 
 `getattr()` and `hasattr()` are routed through the attribute policy -- they respect the same allow/deny rules as `obj.attr` syntax.
 
 **Not available as names**: `BaseException`, `KeyboardInterrupt`, `GeneratorExit`, `SystemExit`.
 
+### Dynamic imports
+
+`__import__(name)` is available to sandboxed code and lands on the same policy
+check as an `import` statement, so a computed module name is neither more nor
+less permitted than a literal one:
+
+```python
+mod = __import__("math")        # fine if math is granted
+mod = __import__(user_choice)   # ImportError unless the name is granted
+```
+
+This is safe because CPython keeps the two lookups apart. The `import`
+statement resolves `__import__` from the frame's **builtins**, which is where
+the sandbox parks the *real* `__import__` so C extensions (numpy, pandas) can
+import their transitive dependencies. A source-level `__import__` is an
+ordinary **name** load, and the rewriter redirects it to the `__st_dynimport__`
+gate (`Rewriter.visit_Name`). Gating the name therefore never touches library
+internals.
+
+The redirect cannot be shadowed: `__import__` stays in `_BLOCKED_NAMES`, so
+sandboxed code can't assign to it, delete it, or declare it `global`/`nonlocal`
+to make the name fall through to the real builtin. `__builtins__` itself stays
+unreadable, so the real `__import__` has no other route out.
+
+Semantics match CPython, with one exception:
+
+| Form | Result |
+| --- | --- |
+| `__import__("a.b")` | top-level package `a` |
+| `__import__("a.b", fromlist=["c"])` | the leaf module `a.b` |
+| `__import__(name, level=N)` for `N > 0` | `ImportError` -- use a `from . import ...` statement |
+| `globals` / `locals` arguments | accepted and ignored (CPython uses them only for `level > 0`) |
+
+Relative dynamic imports are declined because the gate has no well-defined
+caller package to resolve against; the statement form handles them.
+
+**What you give up**: with literal imports, every module a script reaches for
+is visible at rewrite time, so you can enumerate them by reading the code.
+`__import__(computed)` moves that to runtime. The *policy* check is runtime
+either way -- the security boundary is unchanged -- but static auditability of
+the import set is not.
+
 ## What's blocked
 
-- **Arbitrary imports** -- only policy-registered modules and VFS files
+- **Arbitrary imports** -- only policy-registered modules and VFS files, whether via an `import` statement or `__import__`
 - **Private attributes** -- `_name` and `__dunder__` (except allowed dunders) blocked by default
 - **Network I/O** -- socket operations blocked unless `allow_network=True`
 - **File I/O** -- routes through VFS when filesystem provided, otherwise `open` unavailable

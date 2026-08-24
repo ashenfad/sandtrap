@@ -2,11 +2,12 @@
 
 import math
 import sys
+import types
 
 import pytest
 
 from sandtrap import Policy, Sandbox
-from sandtrap.errors import StValidationError
+from sandtrap.errors import StCancelled, StTickLimit, StTimeout, StValidationError
 
 
 def test_import_allowed_module():
@@ -412,3 +413,202 @@ def test_from_main_import_missing_name_still_errors():
     result = sandbox.exec("from main import NoSuchThing")
     assert result.error is not None
     assert isinstance(result.error, ImportError)
+
+
+# ---- dynamic __import__ ----
+#
+# Source-level ``__import__`` is rewritten to the policy-gated
+# __st_dynimport__ (Rewriter.visit_Name).  It reaches the same policy check
+# as an ``import`` statement, and stays separate from the real __import__
+# that lives in builtins for C extensions -- the statement resolves that one
+# from the frame's builtins, a name load never does.
+
+
+def test_dynamic_import_granted_module():
+    """__import__('math') resolves like `import math`."""
+    policy = Policy()
+    policy.module(math)
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("m = __import__('math')\nx = m.sqrt(16)")
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert result.namespace["x"] == 4.0
+
+
+def test_dynamic_import_computed_name():
+    """The whole point: the module name need not be a literal."""
+    policy = Policy()
+    policy.module(math)
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("name = 'ma' + 'th'\nx = __import__(name).pi")
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert result.namespace["x"] == math.pi
+
+
+def test_dynamic_import_ungranted_module_blocked():
+    """An ungranted module is refused, same as the statement form."""
+    policy = Policy()
+    policy.module(math)
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("m = __import__('os')")
+    assert isinstance(result.error, ImportError)
+    assert "os" in str(result.error)
+
+
+def test_dynamic_import_reports_the_users_line():
+    """The gate's extra frame must not swallow the real line number."""
+    policy = Policy()
+    policy.module(math)
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("x = 1\ny = 2\nm = __import__('os')")
+    assert isinstance(result.error, ImportError)
+    assert "(line 3)" in str(result.error)
+
+
+def test_dynamic_import_alias_is_the_gate():
+    """`f = __import__` binds the gate, so calls through it stay gated."""
+    policy = Policy()
+    policy.module(math)
+    sandbox = Sandbox(policy)
+    ok = sandbox.exec("f = __import__\nx = f('math').tau")
+    assert ok.error is None, f"unexpected error: {ok.error}"
+    assert ok.namespace["x"] == math.tau
+
+    blocked = sandbox.exec("f = __import__\nx = f('os')")
+    assert isinstance(blocked.error, ImportError)
+
+
+def test_dynamic_import_cannot_be_rebound_or_deleted():
+    """Rebinding would let the name fall through to the real builtin."""
+    policy = Policy()
+    policy.module(math)
+    sandbox = Sandbox(policy)
+    for src in ("__import__ = None", "del __import__", "global __import__"):
+        result = sandbox.exec(src)
+        assert isinstance(result.error, StValidationError), src
+
+
+def test_dynamic_import_works_inside_a_function():
+    """LOAD_GLOBAL from a function body resolves the gate too."""
+    policy = Policy()
+    policy.module(math)
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("def f():\n    return __import__('math').e\nx = f()")
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert result.namespace["x"] == math.e
+
+
+def test_dynamic_import_dotted_returns_top_level():
+    """__import__('os.path') returns `os`, matching CPython."""
+    import os
+
+    policy = Policy()
+    policy.module(os, recursive=True)
+    sandbox = Sandbox(policy)
+    # `os` has a `path` attribute; `os.path` does not -- so a successful
+    # m.path.join proves the top-level package came back, not the leaf.
+    result = sandbox.exec("m = __import__('os.path')\nx = m.path.join('a', 'b')")
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert result.namespace["x"] == "a/b"
+
+
+def test_dynamic_import_fromlist_returns_the_submodule():
+    """A non-empty fromlist selects the leaf module, matching CPython."""
+    import os
+
+    policy = Policy()
+    policy.module(os, recursive=True)
+    sandbox = Sandbox(policy)
+    result = sandbox.exec(
+        "m = __import__('os.path', fromlist=['join'])\nx = m.join('a', 'b')"
+    )
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert result.namespace["x"] == "a/b"
+
+
+def test_dynamic_import_fromlist_does_not_widen_policy():
+    """fromlist can't reach a member the policy filters out."""
+    policy = Policy()
+    policy.module(math, include=("sqrt",))
+    sandbox = Sandbox(policy)
+    ok = sandbox.exec("x = __import__('math', fromlist=['sqrt']).sqrt(9)")
+    assert ok.error is None, f"unexpected error: {ok.error}"
+    assert ok.namespace["x"] == 3.0
+
+    blocked = sandbox.exec("x = __import__('math', fromlist=['pow']).pow(2, 3)")
+    assert blocked.error is not None
+    assert isinstance(blocked.error, AttributeError)
+
+
+def test_dynamic_import_relative_is_refused():
+    """level > 0 has no well-defined caller context here; say so clearly."""
+    policy = Policy()
+    policy.module(math)
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("m = __import__('math', level=1)")
+    assert isinstance(result.error, ImportError)
+    assert "level > 0" in str(result.error)
+
+
+def test_dynamic_import_of_synthetic_sys():
+    """The synthetic `sys` is reachable dynamically, like `import sys`."""
+    policy = Policy()
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("s = __import__('sys')\nx = s.argv", argv=["prog", "a"])
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert result.namespace["x"] == ["prog", "a"]
+
+
+def test_dynamic_import_gate_does_not_leak_into_namespace():
+    """The gate is internal; it must not show up in result.namespace."""
+    policy = Policy()
+    policy.module(math)
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("m = __import__('math')")
+    assert result.error is None
+    assert not [k for k in result.namespace if "import" in k.lower()]
+
+
+def test_real_import_still_unreachable_via_builtins():
+    """The C-extension __import__ must stay out of reach."""
+    policy = Policy()
+    policy.module(math)
+    sandbox = Sandbox(policy)
+    for src in ("x = __builtins__['__import__']", "x = __builtins__.__import__"):
+        result = sandbox.exec(src)
+        assert isinstance(result.error, StValidationError), src
+        assert "__builtins__" in str(result.error)
+
+
+@pytest.mark.parametrize("exc", [StTimeout, StCancelled, StTickLimit])
+def test_dynamic_import_fromlist_does_not_swallow_control_flow(exc):
+    """The fromlist prefetch swallows a missing name, but must not eat a
+    timeout/cancellation raised while resolving one.
+
+    StTimeout/StCancelled/StTickLimit derive from StError(Exception), so a
+    blanket `except Exception` around the prefetch would silently defeat
+    timeouts and cancellation.
+    """
+
+    class _Boom(types.ModuleType):
+        def __getattr__(self, attr):
+            # Only the fromlist entry detonates -- anything else must behave
+            # like a normal missing attribute so sandbox setup can probe it.
+            if attr == "boom":
+                raise exc("raised during fromlist resolution")
+            raise AttributeError(attr)
+
+    policy = Policy()
+    policy.module(_Boom("boomy"))
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("m = __import__('boomy', fromlist=['boom'])")
+    assert isinstance(result.error, exc), f"got {result.error!r}"
+
+
+def test_dynamic_import_fromlist_still_swallows_a_missing_name():
+    """The CPython behaviour the narrow except preserves."""
+    policy = Policy()
+    policy.module(math)
+    sandbox = Sandbox(policy)
+    result = sandbox.exec("m = __import__('math', fromlist=['no_such_thing'])")
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert result.namespace["m"] is math

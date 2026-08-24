@@ -794,3 +794,46 @@ def test_module_root_relative_import_cannot_escape_root():
     result = sandbox.exec("from helpers import esc")
     assert isinstance(result.error, ImportError)
     assert "pwned" not in str(result.namespace)
+
+
+def test_dynamic_import_of_vfs_module():
+    """__import__ resolves VFS modules, like the statement form."""
+    sandbox, fs = _make_sandbox()
+    fs.write("/helpers.py", b"def double(x): return x * 2")
+
+    result = sandbox.exec("h = __import__('helpers')\nresult = h.double(5)")
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert result.namespace["result"] == 10
+
+
+def test_dynamic_import_inside_a_vfs_module():
+    """VFS modules are rewritten too, so __import__ is gated there as well."""
+    import math
+
+    policy = Policy()
+    policy.module(math)
+    sandbox, fs = _make_sandbox(policy=policy)
+    fs.write(
+        "/geom.py",
+        b"m = __import__('math')\ndef area(r): return m.pi * r * r",
+    )
+
+    result = sandbox.exec("import geom\nresult = round(geom.area(2), 4)")
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert result.namespace["result"] == 12.5664
+
+    # the gate itself must not be copied onto the module object
+    leaked = sandbox.exec(
+        "import geom\nresult = [k for k in dir(geom) if 'import' in k]"
+    )
+    assert leaked.error is None, f"unexpected error: {leaked.error}"
+    assert leaked.namespace["result"] == []
+
+
+def test_dynamic_import_in_vfs_module_respects_policy():
+    """An ungranted module stays refused from inside a VFS module."""
+    sandbox, fs = _make_sandbox()
+    fs.write("/sneaky.py", b"os = __import__('os')")
+
+    result = sandbox.exec("import sneaky")
+    assert isinstance(result.error, ImportError)

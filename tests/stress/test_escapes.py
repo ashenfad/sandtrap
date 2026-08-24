@@ -72,8 +72,21 @@ def test_no_compile(sandbox):
 
 
 def test_no_dunder_import(sandbox):
+    """__import__ is callable but policy-gated -- nothing is granted here."""
     result = sandbox.exec("__import__('os')")
-    assert result.error is not None
+    assert isinstance(result.error, ImportError)
+
+
+def test_no_dunder_import_via_alias(sandbox):
+    """Binding __import__ to another name doesn't shed the gate."""
+    result = sandbox.exec("f = __import__\nf('os')")
+    assert isinstance(result.error, ImportError)
+
+
+def test_no_dunder_import_rebinding(sandbox):
+    """The gate binding can't be shadowed to fall through to the real one."""
+    result = sandbox.exec("__import__ = None")
+    assert isinstance(result.error, StValidationError)
 
 
 def test_no_globals_builtin(sandbox):

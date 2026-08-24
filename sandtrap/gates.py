@@ -432,7 +432,13 @@ def make_gates(
             )
         delattr(obj, attr)
 
-    def __st_import__(module_name: str, *, alias: str | None = None) -> Any:
+    def __st_import__(
+        module_name: str, *, alias: str | None = None, _depth: int = 0
+    ) -> Any:
+        # _depth offsets the caller-frame walks below by the number of extra
+        # frames between user code and here (1 when __st_dynimport__ calls
+        # through), so line numbers and the __main__ proxy still read the
+        # sandboxed frame rather than an intermediate gate frame.
         # Synthetic safe `sys` (stdin/stdout/stderr/argv) when provided —
         # takes precedence over the policy so `import sys` returns it
         # rather than being blocked. Safe by construction (see SandboxSys).
@@ -458,18 +464,20 @@ def make_gates(
         # that LLM-generated code like "from main import X" works when X is
         # already available in the sandbox globals.
         if module_name in ("main", "__main__"):
-            caller_globals = sys._getframe(1).f_globals
+            caller_globals = sys._getframe(1 + _depth).f_globals
             proxy = types.ModuleType(module_name)
             proxy.__dict__.update(
                 {k: v for k, v in caller_globals.items() if not k.startswith("__st_")}
             )
             return proxy
 
-        lineno = _caller_lineno()
+        lineno = _caller_lineno(2 + _depth)
         loc = f" (line {lineno})" if lineno else ""
         raise ImportError(_import_error_message(module_name) + loc)
 
-    def __st_importfrom__(module_name: str, name: str, *, _level: int = 0) -> Any:
+    def __st_importfrom__(
+        module_name: str, name: str, *, _level: int = 0, _depth: int = 0
+    ) -> Any:
         # `from sys import stdin, argv, ...` — mirror the __st_import__
         # synthetic-sys branch (sys is otherwise blocked by policy).
         if _sandbox_sys is not None and module_name == "sys":
@@ -479,7 +487,7 @@ def make_gates(
 
         if _level > 0:
             # Relative import — resolve against caller's __file__
-            caller_file = sys._getframe(1).f_globals.get("__file__", "")
+            caller_file = sys._getframe(1 + _depth).f_globals.get("__file__", "")
             base_dir = posixpath.dirname(caller_file)
             for _ in range(_level - 1):
                 base_dir = posixpath.dirname(base_dir)
@@ -549,13 +557,72 @@ def make_gates(
         # the sandbox namespace.  LLMs frequently attempt this pattern to
         # import globals that are already available in the execution scope.
         if module_name in ("main", "__main__"):
-            caller_globals = sys._getframe(1).f_globals
+            caller_globals = sys._getframe(1 + _depth).f_globals
             if name in caller_globals:
                 return caller_globals[name]
 
-        lineno = _caller_lineno()
+        lineno = _caller_lineno(2 + _depth)
         loc = f" (line {lineno})" if lineno else ""
         raise ImportError(_import_error_message(module_name) + loc)
+
+    def __st_dynimport__(
+        name: str,
+        globals: Any = None,
+        locals: Any = None,
+        fromlist: Any = (),
+        level: int = 0,
+    ) -> Any:
+        """Policy-gated ``__import__`` for sandboxed code.
+
+        The rewriter redirects every source-level read of ``__import__``
+        here (see ``Rewriter.visit_Name``), so a computed import name lands
+        on the same policy check as an ``import`` statement.  This is safe
+        because the two lookups are genuinely separate in CPython: the
+        ``import`` statement resolves ``__import__`` from the frame's
+        *builtins*, where the real one stays parked for C extensions, while
+        a source-level ``__import__`` is an ordinary name load.  Gating the
+        latter therefore never touches library internals.
+
+        ``globals``/``locals`` are accepted for signature compatibility and
+        ignored -- CPython consults them only to resolve ``level > 0``,
+        which this gate declines.
+        """
+        if level:
+            lineno = _caller_lineno()
+            loc = f" (line {lineno})" if lineno else ""
+            raise ImportError(
+                "Relative __import__ (level > 0) is not supported; use a "
+                f"'from . import ...' statement instead{loc}"
+            )
+
+        if not fromlist:
+            # Bare __import__('a.b') binds the top-level package, which is
+            # exactly __st_import__'s no-alias branch.
+            return __st_import__(name, _depth=1)
+
+        # With a non-empty fromlist CPython returns the named module itself;
+        # passing the name as its own alias selects that branch.
+        mod = __st_import__(name, alias=name, _depth=1)
+        # CPython also imports each fromlist entry that turns out to be a
+        # submodule, binding it on the parent -- do the same so that
+        # __import__('PIL', fromlist=['Image']).Image resolves for packages
+        # whose __init__ doesn't eager-import its submodules.
+        #
+        # A missing or ungranted name is swallowed, as CPython swallows it:
+        # it surfaces on the attribute access that follows, which the policy
+        # gates in its own right.  Only ImportError/AttributeError, though --
+        # anything a submodule's import-time code raises propagates, and in
+        # particular StTimeout/StCancelled/StTickLimit are plain Exception
+        # subclasses (see errors.StError), so a blanket `except Exception`
+        # here would silently eat a timeout or a cancellation.
+        for entry in fromlist:
+            if not isinstance(entry, str) or entry == "*":
+                continue
+            try:
+                __st_importfrom__(name, entry, _depth=1)
+            except (ImportError, AttributeError):
+                pass
+        return mod
 
     def __st_defun__(name: str, compiled_fn: Any, ast_ref: int | str) -> Any:
         if not _wrapped_mode:
@@ -677,6 +744,7 @@ def make_gates(
             "__st_delattr__": __st_delattr__,
             "__st_import__": __st_import__,
             "__st_importfrom__": __st_importfrom__,
+            "__st_dynimport__": __st_dynimport__,
             "__st_defun__": __st_defun__,
             "__st_defclass__": __st_defclass__,
             "__st_checkpoint__": __st_checkpoint__,
