@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- **A write to a read-only filesystem from a process worker could be
+  silently lost.** The worker-side remote filesystem pushes a written
+  file to the parent only on flush or close, so a parent filesystem
+  that refuses writes (monkeyfs's `ReadOnlyFS`) refused it there. A
+  handle dropped without an explicit close is closed by the garbage
+  collector, where that refusal is swallowed: the code saw a successful
+  `open()` and `write()`, and nothing landed. In-process the same code
+  raised at `open()`. The remote filesystem now asks the parent for
+  write access at the root before opening in any write mode and raises
+  `PermissionError` at `open()` when it is denied — the same moment the
+  in-process path does.
+
 ## 0.3.3 - 2026-08-24
 
 ### Added

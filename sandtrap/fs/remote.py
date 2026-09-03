@@ -18,6 +18,7 @@ content once at ``open``; writable modes buffer locally and push on
 from __future__ import annotations
 
 import io
+import os
 from typing import Any
 
 
@@ -127,6 +128,21 @@ class RemoteFS:
             raise ValueError(f"invalid mode: {mode!r}")
         plus = "+" in base
         kind = base.replace("+", "") or "r"
+
+        if kind != "r" or plus:
+            # A written file reaches the parent only on flush or close,
+            # so a parent filesystem that refuses writes (a read-only
+            # one) refuses it there — and a handle dropped without an
+            # explicit close is closed by the garbage collector, where
+            # that refusal is swallowed and the write silently lost.
+            # Ask up front instead: a filesystem that denies write
+            # access at its root refuses every write, and that answer
+            # arrives while the caller can still see it — the moment
+            # the in-process path raises too.
+            if not self.access("/", os.W_OK):
+                raise PermissionError(
+                    f"read-only filesystem: cannot open {path!r} for writing"
+                )
 
         if kind == "x" and self.exists(path):
             raise FileExistsError(f"File exists: '{path}'")
