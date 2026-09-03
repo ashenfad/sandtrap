@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import io
 import os
+import posixpath
 from typing import Any
 
 
@@ -131,18 +132,14 @@ class RemoteFS:
 
         if kind != "r" or plus:
             # A written file reaches the parent only on flush or close,
-            # so a parent filesystem that refuses writes (a read-only
-            # one) refuses it there — and a handle dropped without an
-            # explicit close is closed by the garbage collector, where
-            # that refusal is swallowed and the write silently lost.
-            # Ask up front instead: a filesystem that denies write
-            # access at its root refuses every write, and that answer
-            # arrives while the caller can still see it — the moment
-            # the in-process path raises too.
-            if not self.access("/", os.W_OK):
-                raise PermissionError(
-                    f"read-only filesystem: cannot open {path!r} for writing"
-                )
+            # so a parent filesystem that refuses writes refuses it
+            # there — and a handle dropped without an explicit close is
+            # closed by the garbage collector, where that refusal is
+            # swallowed and the write silently lost. Ask up front
+            # instead, so the answer arrives while the caller can still
+            # see it — the moment the in-process path raises too.
+            if not self._can_write(path):
+                raise PermissionError(f"cannot open {path!r} for writing")
 
         if kind == "x" and self.exists(path):
             raise FileExistsError(f"File exists: '{path}'")
@@ -174,6 +171,25 @@ class RemoteFS:
         if kind == "a":
             f.seek(0, io.SEEK_END)
         return f
+
+    def _can_write(self, path: str) -> bool:
+        """Whether the parent filesystem would accept a write at ``path``.
+
+        Asked of the path itself when it exists, else of its nearest
+        existing ancestor — the directory the new file would land in.
+        Permissions are path-dependent on a composed filesystem (a
+        writable root with a read-only mount under a prefix), so the
+        answer has to come from the place the write would go, not from
+        the root.
+        """
+        probe = path
+        while True:
+            if self.exists(probe):
+                return bool(self.access(probe, os.W_OK))
+            parent = posixpath.dirname(probe.rstrip("/")) or "/"
+            if parent == probe:
+                return bool(self.access(probe, os.W_OK))
+            probe = parent
 
     # -- metadata (straight RPC) ---------------------------------------
 

@@ -17,9 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   collector, where that refusal is swallowed: the code saw a successful
   `open()` and `write()`, and nothing landed. In-process the same code
   raised at `open()`. The remote filesystem now asks the parent for
-  write access at the root before opening in any write mode and raises
-  `PermissionError` at `open()` when it is denied — the same moment the
-  in-process path does.
+  write access at the requested path — or at its nearest existing
+  ancestor, the directory a new file would land in — before opening
+  in any write mode, and raises `PermissionError` at `open()` when it
+  is denied — the same moment the in-process path does. The probe is
+  per path, so a writable root with a read-only mount under a prefix
+  refuses writes only under that prefix.
 
 ## 0.3.3 - 2026-08-24
 
