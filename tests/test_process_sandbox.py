@@ -859,3 +859,19 @@ def test_virtual_fs_confines_no_real_path(root):
 
 def test_isolatedfs_root_is_what_gets_confined(root):
     assert _status_for(Policy(timeout=10.0), IsolatedFS(root)).root == root
+
+
+def test_a_read_only_filesystem_refuses_a_worker_write_at_open():
+    """The refusal must arrive at open(), not at a close the garbage
+    collector performs, where it would be swallowed and the write lost
+    without a trace."""
+    from monkeyfs import ReadOnlyFS, VirtualFS
+
+    from sandtrap import Policy, sandbox
+
+    fs = ReadOnlyFS(VirtualFS({}))
+    with sandbox(Policy(timeout=10.0), isolation="process", filesystem=fs) as sb:
+        result = sb.exec("open('/scribble.txt', 'w').write('nope')\n")
+    assert result.error is not None
+    assert "read-only" in str(result.error) or "PermissionError" in str(result.error)
+    assert not fs.exists("/scribble.txt")
