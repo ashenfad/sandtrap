@@ -873,5 +873,25 @@ def test_a_read_only_filesystem_refuses_a_worker_write_at_open():
     with sandbox(Policy(timeout=10.0), isolation="process", filesystem=fs) as sb:
         result = sb.exec("open('/scribble.txt', 'w').write('nope')\n")
     assert result.error is not None
-    assert "read-only" in str(result.error) or "PermissionError" in str(result.error)
+    assert isinstance(result.error, PermissionError)
     assert not fs.exists("/scribble.txt")
+
+
+def test_write_permission_is_asked_of_the_path_not_the_root():
+    """A composed filesystem: writable root, read-only mount under a
+    prefix. The refusal must land on the mount and only there, at
+    open()."""
+    from monkeyfs import MountFS, ReadOnlyFS, VirtualFS
+
+    from sandtrap import Policy, sandbox
+
+    root = VirtualFS({})
+    root.write("/work/keep.txt", b"x")
+    fs = MountFS(root, {"/data": ReadOnlyFS(VirtualFS({}))})
+    with sandbox(Policy(timeout=10.0), isolation="process", filesystem=fs) as sb:
+        refused = sb.exec("open('/data/out.txt', 'w').write('nope')\n")
+        allowed = sb.exec("f = open('/work/out.txt', 'w')\nf.write('yes')\nf.close()\n")
+    assert refused.error is not None and "out.txt" in str(refused.error)
+    assert not fs.exists("/data/out.txt")
+    assert allowed.error is None
+    assert fs.read("/work/out.txt") == b"yes"
