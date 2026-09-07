@@ -148,6 +148,8 @@ The default mode runs in-process and shares the host's memory space. It is **not
 
 Kernel mode is **defense-in-depth against accidental or casual escape** -- a buggy (not malicious) agent that makes an unintended network call, or a tool that tries to walk outside its root, is stopped at the kernel. That is its job, and it does it well when the mechanisms are available.
 
+The sharpest form of that job is C extensions. A C library reaches the OS through syscalls rather than through the Python functions sandtrap patches, so an `open()` inside sqlite3 or a C parser never meets the VFS interception and a `fork`/`exec` inside a granted library never meets the builtins whitelist. Landlock (Linux) or Seatbelt (macOS) is the only thing keeping that C-level `open()` inside the `IsolatedFS` root, and seccomp (or Seatbelt) is the only thing stopping the process spawn. Under a cooperative threat model that is the whole of what kernel mode buys -- and it is worth buying.
+
 Kernel mode is **not, today, a boundary against code that is actively trying to escape.** Two things stand between it and that guarantee:
 
 1. **The inner layer is the Python AST sandbox, which is explicitly not adversarial-safe** (see In-process, above). Kernel restrictions only engage *after* code has broken out of the Python layer, and the whole point of the "walled garden" framing is that the Python layer is for cooperative code.
