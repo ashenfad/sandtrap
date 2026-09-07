@@ -1,12 +1,14 @@
 # Serialization
 
-In wrapped mode (the default), everything your sandbox code defines is serializable. Define a function in one turn, pickle it, restore it in the next.
+In wrapped mode, everything your sandbox code defines is serializable. Define a function in one turn, pickle it, restore it in the next.
+
+**Wrapped mode is deprecated** and will be removed in a future minor release; the default is now `mode="raw"`, which returns plain Python objects. Everything below applies only when you ask for `mode="wrapped"` explicitly.
 
 ```python
 import pickle
 from sandtrap import Policy, Sandbox
 
-sandbox = Sandbox(Policy())
+sandbox = Sandbox(Policy(), mode="wrapped")
 
 # Turn 1: define
 result = sandbox.exec("def inc(x): return x + 1")
@@ -23,13 +25,15 @@ Inactive objects passed via `namespace` are auto-activated -- no manual step nee
 ## Wrapped vs raw mode
 
 ```python
-sandbox = Sandbox(policy)                  # wrapped mode (default)
-sandbox = Sandbox(policy, mode="raw")      # raw mode
+sandbox = Sandbox(policy)                    # raw mode (default)
+sandbox = Sandbox(policy, mode="wrapped")    # wrapped mode (deprecated)
 ```
 
-**Wrapped mode** wraps sandbox-defined functions, classes, and instances in serializable containers (`StFunction`, `StClass`, `StInstance`). These store the rewritten AST so they can be pickled and recompiled later.
+**Raw mode** returns plain Python objects. They pickle only if a plain function or class of the same shape would, which for sandbox-defined code generally means not at all -- so they do not survive a process boundary or a turn boundary.
 
-**Raw mode** returns plain Python objects. Use this when you don't need serialization.
+**Wrapped mode** wraps sandbox-defined functions, classes, and instances in serializable containers (`StFunction`, `StClass`, `StInstance`). These store the rewritten AST so they can be pickled and recompiled later. Passing `mode="wrapped"` emits a `DeprecationWarning`.
+
+A stored wrapper carries the rewritten AST it was pickled with and is recompiled from it directly, so it runs under the gates of the sandtrap version that wrote it rather than the one loading it. That is the reason wrapped mode is going away.
 
 ## What gets wrapped
 

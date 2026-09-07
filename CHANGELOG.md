@@ -5,6 +5,67 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **`mode="raw"` is now the default execution mode.** `Sandbox`, `sandbox()`,
+  and `ProcessSandbox` all default to raw; wrapped mode is still there, but you
+  have to ask for it.
+
+  For a caller who relied on the old default, sandbox-defined functions,
+  classes, and instances now come back from `exec()` as plain Python objects
+  rather than `StFunction` / `StClass` / `StInstance`. They are ordinary
+  callables — nicer to hand to library code, and generics work on them — but
+  they pickle only insofar as an equivalent locally-defined function or class
+  would, which in practice means they do not cross a process boundary or a turn
+  boundary. Under `isolation="process"`/`"kernel"` they are dropped from the
+  returned namespace along with every other unpicklable value.
+
+  Pass `mode="wrapped"` to keep the old behaviour. Every known downstream
+  consumer already passes `mode="raw"` explicitly, so the flip aligns the
+  default with what the library is actually used for.
+
+### Deprecated
+
+- **Wrapped mode.** Passing `mode="wrapped"` now emits a `DeprecationWarning`
+  at construction and is scheduled for removal in a future minor release.
+  Nothing about its behaviour changed.
+
+  The wrappers pickle the *rewritten* AST and recompile it directly on
+  activation, with no second pass through the rewriter. The rewritten AST is
+  the trust boundary, so a wrapper persisted by one version of sandtrap runs
+  under that version's gates when a later version loads it: every gate added
+  after it was written is silently absent. Removing wrapped mode removes that
+  hazard along with `wrappers.py`, `__st_defun__` / `__st_defclass__`, and the
+  `_wrapped_mode` plumbing in the rewriter and gates.
+
+### Documentation
+
+- **What kernel mode is *for*, concretely.** README and `docs/security.md` now
+  say the thing the "defense-in-depth, not an adversarial boundary" framing
+  left implicit: a C extension reaches the OS by syscall, not through the
+  Python functions sandtrap patches, so Landlock/Seatbelt is the only thing
+  between sqlite3 or a C parser and the real filesystem, and seccomp is the
+  only thing stopping a granted library from spawning a process.
+
+- **In-process limits are cooperative.** `docs/sandbox.md` and `docs/policy.md`
+  now state that `timeout`, `tick_limit`, `memory_limit`, and `cancel()` are
+  all checked at checkpoints, so nothing interrupts a call already in flight: a
+  long C call or a catastrophic regex runs to completion and the timeout fires
+  at the next checkpoint after it. In-process the timeout is best-effort
+  between checkpoints; `isolation="process"` is what can kill a runaway worker.
+
+- `docs/serialization.md`, `docs/sandbox.md`, and `docs/process.md` no longer
+  describe wrapped mode as the default.
+
+### Dependencies
+
+- **`monkeyfs>=0.1.9`** (was `>=0.1.6`). 0.1.9 rebinds the remaining
+  `pathlib._NormalAccessor` captures on Python 3.10 — including an
+  `expanduser` that leaked the host home — and honours
+  `os.path.realpath(strict=True)` inside a patched block.
+
 ## 0.3.4 - 2026-09-03
 
 ### Fixed

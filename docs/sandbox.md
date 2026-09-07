@@ -15,7 +15,7 @@ sb = sandbox(policy)
 
 - `policy` -- a `Policy` instance controlling what sandboxed code can access.
 - `isolation` -- `"none"` (default), `"process"`, or `"kernel"`. See [process.md](process.md).
-- `mode` -- `"wrapped"` (default) wraps user-defined functions/classes for pickling. `"raw"` returns plain objects. See [serialization.md](serialization.md).
+- `mode` -- `"raw"` (default) returns plain objects for user-defined functions and classes. `"wrapped"` wraps them for pickling instead; it is deprecated and warns. See [serialization.md](serialization.md).
 - `filesystem` -- a `FileSystem` implementation for VFS interception (see [filesystem.md](filesystem.md)).
 - `snapshot_prints` -- when `True`, deep-copies `print()` arguments at call time and populates `result.prints`. Default `False`. Works with all isolation levels.
 - `echo` -- `"none"` (default), `"last"`, or `"all"`. REPL/notebook-style auto-display of bare top-level expressions. See [Expression echo](#expression-echo-repl-style).
@@ -220,6 +220,8 @@ assert isinstance(result.error, StCancelled)
 ```
 
 `cancel()` is safe to call from any thread. The sandbox raises `StCancelled` at the next checkpoint.
+
+Every in-process limit works this way. `timeout`, `tick_limit`, `memory_limit`, and `cancel()` are all checked at checkpoints -- loop iterations, function entries, comprehension steps -- so none of them can interrupt a call that is already running. A long C call or a catastrophic regex holds the thread until it returns, and the timeout fires at the next checkpoint after that: in-process it is best-effort between checkpoints, not a deadline. `isolation="process"` is what can actually kill a runaway worker.
 
 ## Reactivation
 

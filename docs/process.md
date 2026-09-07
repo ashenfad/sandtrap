@@ -424,4 +424,4 @@ start its own broker.
 
 Namespaces are sent to and from the worker via `multiprocessing.Pipe` (pickle). Non-picklable values (lambdas, locks, etc.) are silently dropped from both input and output namespaces. A `RuntimeWarning` is emitted for each dropped input key.
 
-`StFunction`, `StClass`, and `StInstance` wrappers are picklable and survive the process boundary. `exec()` returns active wrappers regardless of isolation level -- the same contract as in-process execution.
+Under the default `mode="raw"`, sandbox-defined functions and classes are plain objects and pickle no better than any other locally-defined function, so they do not come back from the worker. Under the deprecated `mode="wrapped"`, `StFunction`, `StClass`, and `StInstance` wrappers are picklable and survive the process boundary; `exec()` returns them active regardless of isolation level -- the same contract as in-process execution.

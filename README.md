@@ -99,6 +99,8 @@ and what it asks of you:
 
 Kernel mode is **defense-in-depth** — a second layer that contains accidental or casual escape (a buggy agent's stray network call, a walk outside the root) under the cooperative-code Python sandbox. It is **not** a boundary against code actively trying to escape: the inner Python layer isn't adversarial-safe, and the worker→host IPC uses `pickle`. See the [security model](docs/security.md#threat-model) for the full picture and the [roadmap](docs/roadmap.md) for hardening plans.
 
+The concrete job it does is C extensions. A C library reaches the OS through syscalls, not through the Python functions sandtrap patches, so an `open()` inside sqlite3 or a C parser never meets the VFS interception — Landlock or Seatbelt is the only thing between it and the real filesystem, and seccomp is the only thing stopping a granted library from spawning a process. That is worth having under cooperative code, and it is still not an adversarial boundary.
+
 If the platform can't apply the requested kernel restrictions (missing `sandtrap[kernel]` packages, Landlock-less kernel, unsupported OS), `isolation="kernel"` **fails closed** — it raises `IsolationUnavailable` rather than silently running with no protection. Pass `allow_degraded=True` to proceed anyway; inspect `result.isolation` to see exactly what took effect.
 
 ## Part of the agex stack
