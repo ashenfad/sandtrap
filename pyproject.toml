@@ -62,6 +62,12 @@ ignore = ["E731"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+filterwarnings = [
+    # The suite still exercises wrapped mode in full, so its own
+    # deprecation notice is expected here rather than news. Tests that
+    # assert the warning use pytest.warns, which ignores this filter.
+    'ignore:mode="wrapped" is deprecated:DeprecationWarning',
+]
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]

@@ -27,6 +27,28 @@ def test_raw_mode_creates_regular_function():
     assert callable(result.namespace["f"])
 
 
+def test_default_mode_is_raw():
+    """No ``mode`` argument means raw: plain functions, no wrappers."""
+    sandbox = Sandbox(Policy())
+    result = sandbox.exec("def f(x): return x + 1")
+    assert result.error is None
+    assert sandbox.mode == "raw"
+    assert not isinstance(result.namespace["f"], StFunction)
+    assert callable(result.namespace["f"])
+    assert result.namespace["f"](1) == 2
+
+
+def test_wrapped_mode_warns():
+    with pytest.warns(DeprecationWarning, match="deprecated"):
+        Sandbox(Policy(), mode="wrapped")
+
+
+def test_raw_mode_does_not_warn(recwarn):
+    Sandbox(Policy(), mode="raw")
+    Sandbox(Policy())
+    assert [w for w in recwarn.list if issubclass(w.category, DeprecationWarning)] == []
+
+
 def test_sbfunction_callable():
     policy = Policy()
     sandbox = Sandbox(policy, mode="wrapped")

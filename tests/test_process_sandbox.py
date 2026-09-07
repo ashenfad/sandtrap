@@ -92,6 +92,19 @@ def psandbox(root):
         yield ps
 
 
+@pytest.fixture
+def wrapped_psandbox(root):
+    """A worker in wrapped mode, for the tests about wrapper reactivation.
+
+    Raw mode returns plain functions and classes, which do not survive
+    the worker's namespace filter; only the wrappers cross.
+    """
+    with ProcessSandbox(
+        Policy(timeout=10.0), filesystem=IsolatedFS(root), mode="wrapped"
+    ) as ps:
+        yield ps
+
+
 # ------------------------------------------------------------------
 # Basic execution
 # ------------------------------------------------------------------
@@ -702,18 +715,30 @@ def test_mode_raw(root):
 # ------------------------------------------------------------------
 
 
-def test_stfunction_reactivated(psandbox):
+def test_wrapped_mode_warns(root):
+    with pytest.warns(DeprecationWarning, match="deprecated"):
+        ProcessSandbox(
+            Policy(timeout=10.0), filesystem=IsolatedFS(root), mode="wrapped"
+        )
+
+
+def test_raw_mode_does_not_warn(root, recwarn):
+    ProcessSandbox(Policy(timeout=10.0), filesystem=IsolatedFS(root))
+    assert [w for w in recwarn.list if issubclass(w.category, DeprecationWarning)] == []
+
+
+def test_stfunction_reactivated(wrapped_psandbox):
     """Sandbox-defined functions are reactivated after crossing the process boundary."""
-    result = psandbox.exec("def double(n):\n    return n * 2")
+    result = wrapped_psandbox.exec("def double(n):\n    return n * 2")
     assert result.error is None
     fn = result.namespace["double"]
     assert callable(fn)
     assert fn(21) == 42
 
 
-def test_stclass_reactivated(psandbox):
+def test_stclass_reactivated(wrapped_psandbox):
     """Sandbox-defined classes are reactivated and constructable."""
-    result = psandbox.exec(
+    result = wrapped_psandbox.exec(
         "class Doubler:\n    def run(self, n):\n        return n * 2"
     )
     assert result.error is None
@@ -722,9 +747,9 @@ def test_stclass_reactivated(psandbox):
     assert obj.run(21) == 42
 
 
-def test_stfunction_with_closure(psandbox):
+def test_stfunction_with_closure(wrapped_psandbox):
     """Functions with closure variables are reactivated correctly."""
-    result = psandbox.exec("factor = 3\ndef scale(n):\n    return n * factor")
+    result = wrapped_psandbox.exec("factor = 3\ndef scale(n):\n    return n * factor")
     assert result.error is None
     fn = result.namespace["scale"]
     assert fn(10) == 30

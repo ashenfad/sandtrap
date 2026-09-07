@@ -419,7 +419,7 @@ def test_relative_import_nonexistent_name():
 
 def test_vfs_function_is_sbfunction_in_wrapped_mode():
     """VFS module functions are StFunction in wrapped mode."""
-    sandbox, fs = _make_sandbox()
+    sandbox, fs = _make_sandbox(mode="wrapped")
     fs.write("/helpers.py", b"def double(x): return x * 2")
 
     result = sandbox.exec("""\
@@ -448,7 +448,7 @@ result = double(5)
 
 def test_vfs_class_is_sbclass_in_wrapped_mode():
     """VFS module classes are StClass in wrapped mode."""
-    sandbox, fs = _make_sandbox()
+    sandbox, fs = _make_sandbox(mode="wrapped")
     fs.write(
         "/models.py",
         b"""\
@@ -471,7 +471,7 @@ result = p.x + p.y
 
 def test_vfs_function_pickle_roundtrip():
     """VFS module StFunction survives pickle round-trip."""
-    sandbox, fs = _make_sandbox(policy=Policy(tick_limit=10_000))
+    sandbox, fs = _make_sandbox(policy=Policy(tick_limit=10_000), mode="wrapped")
     fs.write("/helpers.py", b"def double(x): return x * 2")
 
     result = sandbox.exec("from helpers import double")
