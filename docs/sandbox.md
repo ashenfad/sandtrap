@@ -221,7 +221,7 @@ assert isinstance(result.error, StCancelled)
 
 `cancel()` is safe to call from any thread. The sandbox raises `StCancelled` at the next checkpoint.
 
-Every in-process limit works this way. `timeout`, `tick_limit`, `memory_limit`, and `cancel()` are all checked at checkpoints -- loop iterations, function entries, comprehension steps -- so none of them can interrupt a call that is already running. A long C call or a catastrophic regex holds the thread until it returns, and the timeout fires at the next checkpoint after that: in-process it is best-effort between checkpoints, not a deadline. `isolation="process"` is what can actually kill a runaway worker.
+The other in-process limits work the same way. `timeout`, `tick_limit`, and `cancel()` are checked only at checkpoints -- loop iterations, function entries, comprehension steps -- so none of them can interrupt a call that is already running. A long C call or a catastrophic regex holds the thread until it returns, and the timeout fires at the next checkpoint after that: in-process it is best-effort between checkpoints, not a deadline. `memory_limit` is the one exception, and only on Linux: there it also installs an `RLIMIT_AS` address-space cap, so the kernel can refuse an allocation and raise `MemoryError` inside a C call without waiting for a checkpoint; on macOS and Windows it is checkpoint-only like the rest (see [Memory limits](security.md#memory-limits)). `isolation="process"` is what can actually kill a runaway worker.
 
 ## Reactivation
 
