@@ -24,7 +24,7 @@ policy = Policy(
 
 For agent workloads, a generous `timeout` (safety net) plus a tighter `tick_limit` (abuse prevention) is recommended.
 
-Both are checked at checkpoints, and so is `sandbox.cancel()`. In-process that makes them cooperative: nothing interrupts a call while it is running, so a long C call (a `pandas` merge over a huge frame) or a catastrophic regex holds the thread until it returns and the timeout fires only at the next checkpoint after that. Treat an in-process `timeout` as best-effort between checkpoints; `isolation="process"` is what puts the code in a worker the host can actually kill. `memory_limit` is checkpoint-checked too, but on Linux it additionally installs an `RLIMIT_AS` cap the kernel enforces mid-call (see [Memory limits](../docs/security.md#memory-limits)); on macOS and Windows it is checkpoint-only.
+Both are checked at checkpoints, and so is `sandbox.cancel()`. In-process that makes them cooperative: nothing interrupts a call while it is running, so a long C call (a `pandas` merge over a huge frame) or a catastrophic regex holds the thread until it returns and the timeout fires only at the next checkpoint after that. Treat an in-process `timeout` as best-effort between checkpoints; `isolation="process"` is what puts the code in a worker the host can actually kill. `memory_limit` is checkpoint-checked too, but on Linux it additionally installs an `RLIMIT_AS` cap the kernel enforces mid-call (see [Memory limits](security.md#memory-limits)); on macOS and Windows it is checkpoint-only.
 
 ## Registering functions
 
