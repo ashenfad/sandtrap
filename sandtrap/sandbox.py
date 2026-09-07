@@ -6,9 +6,11 @@ import builtins as _builtins
 import copy
 import itertools
 import linecache
+import os
 import sys
 import threading
 import time
+import warnings
 from collections.abc import Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass, field
@@ -57,6 +59,41 @@ def _validate_echo(echo: Any) -> None:
         raise ValueError(
             f"Invalid echo option: {echo!r}. Expected one of {_ECHO_OPTIONS}."
         )
+
+
+_WRAPPED_MODE_DEPRECATION = (
+    'mode="wrapped" is deprecated and will be removed in a future minor '
+    'release. Use the default mode="raw", which returns plain Python '
+    "objects (functions, classes, instances) instead of StFunction / "
+    "StClass / StInstance wrappers."
+)
+
+_PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__)) + os.sep
+
+
+def _warn_if_wrapped_mode(mode: Any) -> None:
+    """Warn once per construction when a caller asks for wrapped mode.
+
+    The warning is attributed to the nearest frame outside sandtrap, so
+    it points at the construction site and the default
+    ``DeprecationWarning`` filter judges it by the caller's module
+    rather than by sandtrap's own. Sandboxes are built both directly
+    and through :func:`sandtrap.sandbox`, which is one frame deeper.
+    """
+    if mode != "wrapped":
+        return
+    # stacklevel 2 is this function's immediate caller; each sandtrap
+    # frame above it costs one more level.
+    stacklevel = 2
+    frame: Any = sys._getframe(1)
+    while frame is not None and frame.f_code.co_filename.startswith(_PACKAGE_DIR):
+        frame = frame.f_back
+        stacklevel += 1
+    warnings.warn(
+        _WRAPPED_MODE_DEPRECATION,
+        DeprecationWarning,
+        stacklevel=stacklevel,
+    )
 
 
 class IsolationUnavailable(RuntimeError):
@@ -189,11 +226,12 @@ class Sandbox:
         self,
         policy: Policy,
         *,
-        mode: Literal["wrapped", "raw"] = "wrapped",
+        mode: Literal["wrapped", "raw"] = "raw",
         filesystem: FileSystem | None = None,
         snapshot_prints: bool = False,
         echo: Literal["none", "last", "all"] = "none",
     ) -> None:
+        _warn_if_wrapped_mode(mode)
         self.policy = policy
         self.mode = mode
         self.filesystem = filesystem

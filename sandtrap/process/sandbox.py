@@ -22,6 +22,7 @@ from ..sandbox import (
     IsolationStatus,
     IsolationUnavailable,
     _validate_echo,
+    _warn_if_wrapped_mode,
 )
 from .protocol import (
     ExecMsg,
@@ -529,7 +530,8 @@ class ProcessSandbox:
         of truth. Optional — when ``None``, sandboxed code has no
         file I/O.
     mode:
-        ``"wrapped"`` (default) or ``"raw"``.  Same as :class:`Sandbox`.
+        ``"raw"`` (default) or ``"wrapped"``.  Same as :class:`Sandbox`,
+        including that ``"wrapped"`` is deprecated and warns.
     isolation:
         ``"auto"`` applies platform-appropriate kernel sandboxing;
         ``"none"`` skips it.
@@ -601,7 +603,7 @@ class ProcessSandbox:
         policy: Policy,
         *,
         filesystem: Any | None = None,
-        mode: Literal["wrapped", "raw"] = "wrapped",
+        mode: Literal["wrapped", "raw"] = "raw",
         isolation: Literal["auto", "none"] = "auto",
         snapshot_prints: bool = False,
         rpc_handlers: Mapping[str, RpcHandler] | None = None,
@@ -611,6 +613,7 @@ class ProcessSandbox:
         start_method: Literal["fork", "spawn", "forkserver"] | None = None,
         preload_grants: bool = False,
     ) -> None:
+        _warn_if_wrapped_mode(mode)
         # None means "whatever is safest here" — forkserver on POSIX. Validate
         # rather than defer: an unavailable method is a construction mistake,
         # and discovering it inside a worker start would report as a worker

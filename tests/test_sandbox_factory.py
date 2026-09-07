@@ -9,6 +9,7 @@ from monkeyfs import IsolatedFS, VirtualFS
 from sandtrap import Policy, StPolicyNotPortable, sandbox
 from sandtrap.process.sandbox import ProcessSandbox
 from sandtrap.sandbox import Sandbox
+from sandtrap.wrappers import StFunction
 
 
 @pytest.fixture
@@ -293,6 +294,25 @@ print('also good')
 # ------------------------------------------------------------------
 # mode parameter
 # ------------------------------------------------------------------
+
+
+def test_factory_default_mode_is_raw():
+    """``sandbox()`` with no ``mode`` returns plain functions."""
+    with sandbox(Policy(timeout=5.0)) as sb:
+        result = sb.exec("def f(x): return x + 1")
+        assert result.error is None
+        assert not isinstance(result.namespace["f"], StFunction)
+        assert result.namespace["f"](1) == 2
+
+
+def test_factory_wrapped_mode_warns():
+    with pytest.warns(DeprecationWarning, match="deprecated"):
+        sandbox(Policy(timeout=5.0), mode="wrapped")
+
+
+def test_factory_raw_mode_does_not_warn(recwarn):
+    sandbox(Policy(timeout=5.0), mode="raw")
+    assert [w for w in recwarn.list if issubclass(w.category, DeprecationWarning)] == []
 
 
 def test_mode_raw_none():

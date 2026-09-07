@@ -16,7 +16,7 @@ def sandbox(
     policy: Policy,
     *,
     isolation: Literal["none", "process", "kernel"] = "none",
-    mode: Literal["wrapped", "raw"] = "wrapped",
+    mode: Literal["wrapped", "raw"] = "raw",
     filesystem: Any | None = None,
     snapshot_prints: bool = False,
     rpc_handlers: Mapping[str, Callable[[str, tuple, dict], Any]] | None = None,
@@ -38,7 +38,11 @@ def sandbox(
         restrictions).
         ``"kernel"`` -- a worker + seccomp/Landlock/Seatbelt.
     mode:
-        ``"wrapped"`` (default) or ``"raw"``.
+        ``"raw"`` (default) returns plain Python objects for
+        sandbox-defined functions, classes, and instances.
+        ``"wrapped"`` returns picklable ``StFunction`` / ``StClass`` /
+        ``StInstance`` containers instead; it is deprecated and warns,
+        and will be removed in a future minor release.
     filesystem:
         A ``monkeyfs.FileSystem`` implementation (e.g., ``IsolatedFS``,
         ``VirtualFS``).  When an ``IsolatedFS`` is provided with
