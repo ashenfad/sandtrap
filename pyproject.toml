@@ -24,7 +24,10 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "monkeyfs>=0.1.6,<0.2.0",
+    # 0.1.9: the remaining `pathlib._NormalAccessor` captures on 3.10 are
+    # rebound — including an `expanduser` that leaked the host home — and
+    # `os.path.realpath(strict=True)` is honoured inside a patched block.
+    "monkeyfs>=0.1.9,<0.2.0",
 ]
 
 [project.urls]
