@@ -1,8 +1,11 @@
 """Tests for VFS module imports."""
 
 import pickle
+from contextlib import contextmanager
 
-from sandtrap import Policy, Sandbox, VirtualFS
+import pytest
+
+from sandtrap import IsolationUnavailable, Policy, Sandbox, VirtualFS, sandbox
 from sandtrap.wrappers import ModuleRef, StClass, StFunction
 
 
@@ -893,3 +896,107 @@ def test_dynamic_import_fromlist_propagates_a_vfs_submodule_failure():
     result = sandbox.exec("m = __import__('pkg', fromlist=['broken'])")
     assert isinstance(result.error, ImportError)
     assert "totally_not_granted" in str(result.error)
+
+
+# ------------------------------------------------------------------
+# A module's execution namespace IS its __dict__
+# ------------------------------------------------------------------
+
+
+@contextmanager
+def _vfs_sandbox(isolation, files, policy=None):
+    """A sandbox at *isolation* over a VirtualFS holding *files*."""
+    fs = VirtualFS({})
+    for path, source in files.items():
+        fs.write(path, source.encode())
+    try:
+        sb = sandbox(policy or Policy(timeout=30.0), isolation=isolation, filesystem=fs)
+    except IsolationUnavailable as e:
+        pytest.skip(f"kernel isolation unavailable: {e}")
+    with sb as active:
+        yield active
+
+
+ISOLATIONS = ("none", "process", "kernel")
+
+
+@pytest.mark.parametrize("isolation", ISOLATIONS)
+def test_module_attribute_set_by_caller_is_what_the_module_reads(isolation):
+    """Setting a module attribute changes what the module's own code sees."""
+    files = {"/h.py": "LIMIT = 10\n\ndef get():\n    return LIMIT\n"}
+    with _vfs_sandbox(isolation, files) as sb:
+        result = sb.exec("""\
+import h
+h.LIMIT = 99
+read_back = h.LIMIT
+from_inside = h.get()
+""")
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert result.namespace["read_back"] == 99
+    assert result.namespace["from_inside"] == 99
+
+
+@pytest.mark.parametrize("isolation", ISOLATIONS)
+def test_patch_object_on_a_module_is_what_the_module_calls(isolation):
+    """``patch.object`` on a module function reaches the module's own calls."""
+    import unittest.mock
+
+    policy = Policy(timeout=30.0)
+    policy.module(unittest.mock)
+    files = {
+        "/h.py": "def fetch():\n    return 'real'\n\ndef call_fetch():\n    return fetch()\n"
+    }
+    with _vfs_sandbox(isolation, files, policy=policy) as sb:
+        result = sb.exec("""\
+from unittest.mock import patch
+import h
+
+def fake():
+    return 'fake'
+
+with patch.object(h, 'fetch', fake):
+    patched = h.call_fetch()
+restored = h.call_fetch()
+""")
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert result.namespace["patched"] == "fake"
+    assert result.namespace["restored"] == "real"
+
+
+@pytest.mark.parametrize("isolation", ISOLATIONS)
+def test_a_module_whose_body_raises_leaves_no_half_module(isolation):
+    """A failed module body is not cached, so the next import fails the same way."""
+    files = {"/broken.py": "OK = 1\nraise ValueError('boom')\n"}
+    with _vfs_sandbox(isolation, files) as sb:
+        result = sb.exec("""\
+first = 'clean'
+second = 'clean'
+try:
+    import broken
+except ValueError:
+    first = 'raised'
+try:
+    import broken
+except ValueError:
+    second = 'raised'
+""")
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert result.namespace["first"] == "raised"
+    assert result.namespace["second"] == "raised"
+
+
+@pytest.mark.parametrize("isolation", ISOLATIONS)
+def test_a_module_imported_twice_is_one_object(isolation):
+    """Two imports of one module name bind the same module object."""
+    files = {"/h.py": "STATE = 0\n\ndef get():\n    return STATE\n"}
+    with _vfs_sandbox(isolation, files) as sb:
+        result = sb.exec("""\
+import h
+import h as also_h
+h.STATE = 7
+same = also_h.STATE
+from_inside = also_h.get()
+""")
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert result.namespace["same"] == 7
+    assert result.namespace["from_inside"] == 7

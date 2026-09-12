@@ -674,3 +674,56 @@ def test_dynamic_import_fromlist_dummy_idiom_still_tolerated(tmp_path, monkeypat
     result = sandbox.exec("m = __import__('lazypkg', fromlist=['dummy'])")
     assert result.error is None, f"unexpected error: {result.error}"
     assert result.namespace["m"] is pkg
+
+
+# ------------------------------------------------------------------
+# Sandbox internals are not importable
+# ------------------------------------------------------------------
+
+
+def test_from_main_import_builtins_is_refused():
+    """``__builtins__`` holds the real ``__import__`` and must not be importable."""
+    sandbox = Sandbox(Policy())
+    result = sandbox.exec("from main import __builtins__ as b")
+    assert isinstance(result.error, ImportError), f"leaked: {result.error!r}"
+    assert "__builtins__" in str(result.error)
+
+
+def test_from_vfs_module_import_builtins_is_refused():
+    """A workspace module runs on the same builtins and hides them the same way."""
+    from sandtrap import VirtualFS
+
+    fs = VirtualFS({})
+    fs.write("/h.py", b"VALUE = 1\n")
+    sandbox = Sandbox(Policy(), filesystem=fs)
+
+    result = sandbox.exec("from h import __builtins__ as b")
+    assert isinstance(result.error, ImportError), f"leaked: {result.error!r}"
+    assert "__builtins__" in str(result.error)
+
+
+def test_from_vfs_module_import_a_gate_is_refused():
+    """The gates a workspace module runs on are not part of its surface."""
+    from sandtrap import VirtualFS
+
+    fs = VirtualFS({})
+    fs.write("/h.py", b"VALUE = 1\n")
+    sandbox = Sandbox(Policy(), filesystem=fs)
+
+    result = sandbox.exec("from h import __st_getattr__ as g")
+    assert isinstance(result.error, ImportError), f"leaked: {result.error!r}"
+
+
+def test_dir_of_a_vfs_module_hides_sandbox_internals():
+    """A workspace module's surface is what it defines, not what it runs on."""
+    from sandtrap import VirtualFS
+
+    fs = VirtualFS({})
+    fs.write("/h.py", b"VALUE = 1\n\ndef get():\n    return VALUE\n")
+    sandbox = Sandbox(Policy(), filesystem=fs)
+
+    result = sandbox.exec("import h\nnames = dir(h)")
+    assert result.error is None, f"unexpected error: {result.error}"
+    names = result.namespace["names"]
+    assert "VALUE" in names and "get" in names
+    assert not [n for n in names if n.startswith("__st_") or n == "__builtins__"]

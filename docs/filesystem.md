@@ -77,6 +77,30 @@ result = double(5)
 assert result.namespace["result"] == 10
 ```
 
+A VFS module's execution namespace is its `__dict__`, so it behaves like any
+imported Python module: setting an attribute on it changes what its own code
+reads, and `unittest.mock.patch.object` on one of its functions is what the
+module itself calls.
+
+```python
+fs.write("/h.py", b"LIMIT = 10\n\ndef get():\n    return LIMIT\n")
+
+result = sandbox.exec("""
+import h
+h.LIMIT = 99
+inside = h.get()
+""")
+assert result.namespace["inside"] == 99
+```
+
+A module body that raises leaves nothing importable behind: the module is
+dropped, and the next import of that name runs the body again from scratch.
+
+The gates and builtins a VFS module runs on live in the same `__dict__` and
+are not part of its surface -- `__builtins__` and the `__st_*` gates are
+refused as bare names, as attributes, and as `from <module> import` targets,
+and `dir()` does not list them.
+
 ### Relative imports
 
 VFS modules support relative imports:
