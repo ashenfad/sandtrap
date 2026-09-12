@@ -83,6 +83,12 @@ class ExecMsg:
     stdin: Any | None = None
     argv: list[str] | None = None
     echo: str | None = None  # per-exec override; None = sandbox default
+    modules: Mapping[str, Mapping[str, Any]] | None = None
+    """Modules the embedder provided for this execution, name → attributes.
+
+    Rides the same pipe as the namespace and is filtered for picklability
+    the same way, so a live parent-side object reaches the worker as an
+    ``RpcProxyMarker`` here exactly as it would as a namespace entry."""
 
 
 @dataclass

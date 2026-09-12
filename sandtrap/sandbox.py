@@ -34,7 +34,7 @@ from .builtins import (
 )
 from .errors import StTimeout, StValidationError, strip_internal_frames
 from .fs import FileSystem, patch
-from .gates import make_gates, wrap_privileged
+from .gates import _ExecModule, make_gates, wrap_privileged
 from .net.context import deny_network
 from .net.patch import install as install_net
 from .policy import Policy
@@ -59,6 +59,43 @@ def _validate_echo(echo: Any) -> None:
         raise ValueError(
             f"Invalid echo option: {echo!r}. Expected one of {_ECHO_OPTIONS}."
         )
+
+
+def _validate_modules(
+    policy: Policy, modules: "Mapping[str, Mapping[str, Any]] | None"
+) -> None:
+    """Reject per-exec module names that cannot mean what they say.
+
+    A name the sandbox already resolves elsewhere would be shadowed or
+    ignored depending on which gate ran first, and either way the
+    embedder's mapping would not be what ``import <name>`` returns.
+    Say so at the call rather than let the code find out.
+    """
+    if not modules:
+        return
+    for name, attributes in modules.items():
+        if not isinstance(name, str) or not name.isidentifier():
+            raise ValueError(
+                f"Invalid module name {name!r}: a module provided to exec() "
+                "must be named by a plain identifier (dotted packages are "
+                "not supported)."
+            )
+        if name == "sys":
+            raise ValueError(
+                "Cannot provide a module named 'sys': the sandbox's own "
+                "synthetic sys owns that name. Pass stdin/argv to exec() for "
+                "sys.stdin / sys.argv, or pick another name."
+            )
+        if name in policy.modules:
+            raise ValueError(
+                f"Cannot provide a module named {name!r}: the policy already "
+                "grants a module under that name."
+            )
+        if not isinstance(attributes, Mapping):
+            raise ValueError(
+                f"Module {name!r} must map attribute names to values, not "
+                f"{type(attributes).__name__}."
+            )
 
 
 _WRAPPED_MODE_DEPRECATION = (
@@ -370,6 +407,7 @@ class Sandbox:
         prints_list: list[tuple[Any, ...]] | None,
         sandbox_sys: Any = None,
         echo: str | None = None,
+        modules: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Build the execution namespace with builtins, gates, and registered items.
 
@@ -378,6 +416,18 @@ class Sandbox:
         """
         ns: dict[str, Any] = dict(namespace) if namespace else {}
         injected: dict[str, Any] = {}
+
+        # Modules the embedder handed to this execution. Built here, where
+        # the attribute values are whatever a namespace entry would be at
+        # this point — under worker isolation, live proxies rather than the
+        # markers that crossed the pipe. Registering them on the gates makes
+        # them importable from top-level code and from workspace modules
+        # alike; they are not bound as bare names, so they never appear in
+        # the result namespace.
+        if modules:
+            exec_modules = gates["__st_exec_modules__"]
+            for mod_name, attributes in modules.items():
+                exec_modules[mod_name] = _ExecModule(mod_name, attributes)
 
         ns["__builtins__"] = make_safe_builtins(
             gates["__st_getattr__"],
@@ -600,6 +650,7 @@ class Sandbox:
         namespace: Mapping[str, Any] | None,
         stdin: Any = None,
         argv: "list[str] | None" = None,
+        modules: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> tuple[
         Any,
         str,
@@ -658,7 +709,13 @@ class Sandbox:
         # the rewriter carries this execution's effective echo — using
         # it here keeps the display transform and display fn in lockstep
         ns, injected = self._build_namespace(
-            namespace, gates, stdout_buf, prints_list, sandbox_sys, echo=rewriter._echo
+            namespace,
+            gates,
+            stdout_buf,
+            prints_list,
+            sandbox_sys,
+            echo=rewriter._echo,
+            modules=modules,
         )
         self._auto_activate(ns, gates)
 
@@ -679,11 +736,22 @@ class Sandbox:
         """Post-execution: attach refs, build result namespace, clean up."""
         self._attach_sandbox_refs(ns, gates)
 
+        # A module the embedder provided lasts exactly as long as the
+        # execution it was provided for: dropping it here is what keeps a
+        # pooled worker from carrying one into the next exec, and what
+        # keeps a callback that outlives the exec from importing it.
+        gates["__st_exec_modules__"].clear()
+
+        # A module the embedder provided is filtered out by type rather
+        # than by name: `import host as h` binds it under a name the
+        # embedder never chose, and handing back a module that no longer
+        # resolves would be worse than not handing it back at all.
         result_ns = {
             k: v
             for k, v in ns.items()
             if k not in _INTERNAL_KEYS
             and not k.startswith("__st_")
+            and not isinstance(v, _ExecModule)
             and not (k in injected and v is injected[k])
         }
 
@@ -715,11 +783,23 @@ class Sandbox:
         source: str,
         *,
         namespace: Mapping[str, Any] | None = None,
+        modules: Mapping[str, Mapping[str, Any]] | None = None,
         stdin: "str | Any | None" = None,
         argv: "list[str] | None" = None,
         echo: 'Literal["none", "last", "all"] | None' = None,
     ) -> ExecResult:
         """Execute source code synchronously in the sandbox.
+
+        ``modules`` hands this execution one or more modules of the
+        embedder's own making: ``{"host": {"db": db, "VERSION": 3}}``
+        makes ``import host``, ``from host import db`` and ``host.db``
+        resolve for this call, at the top level and inside a workspace
+        module alike. The module exists for the call and is dropped when
+        it ends, so a later call with different attributes sees only its
+        own. Every name the mapping carries is readable — the embedder
+        chose the contents — and none of them is writable, so a provided
+        module cannot become a channel between executions. A name the
+        policy already grants, or ``sys``, raises :class:`ValueError`.
 
         ``echo`` overrides the sandbox's construction-time echo mode
         for this call only (``None`` keeps it) — one sandbox can serve
@@ -740,13 +820,16 @@ class Sandbox:
         """
         if echo is not None:
             _validate_echo(echo)
+        _validate_modules(self.policy, modules)
         prepared = self._parse_and_rewrite(source, echo=echo)
         if isinstance(prepared, ExecResult):
             return prepared
         tree, rewriter = prepared
 
         code, filename, gates, ns, injected, stdout_buf, stderr_buf, prints_list = (
-            self._compile_and_setup(tree, rewriter, source, namespace, stdin, argv)
+            self._compile_and_setup(
+                tree, rewriter, source, namespace, stdin, argv, modules
+            )
         )
 
         error = None
@@ -795,14 +878,16 @@ class Sandbox:
         source: str,
         *,
         namespace: Mapping[str, Any] | None = None,
+        modules: Mapping[str, Mapping[str, Any]] | None = None,
         stdin: "str | Any | None" = None,
         argv: "list[str] | None" = None,
         echo: 'Literal["none", "last", "all"] | None' = None,
     ) -> ExecResult:
         """Execute source code asynchronously in the sandbox. See
-        :meth:`exec` for ``stdin``/``argv``/``echo``."""
+        :meth:`exec` for ``modules``/``stdin``/``argv``/``echo``."""
         if echo is not None:
             _validate_echo(echo)
+        _validate_modules(self.policy, modules)
         prepared = self._parse_and_rewrite(source, echo=echo)
         if isinstance(prepared, ExecResult):
             return prepared
@@ -876,7 +961,9 @@ class Sandbox:
         tree.body = [wrapper]
 
         code, filename, gates, ns, injected, stdout_buf, stderr_buf, prints_list = (
-            self._compile_and_setup(tree, rewriter, source, namespace, stdin, argv)
+            self._compile_and_setup(
+                tree, rewriter, source, namespace, stdin, argv, modules
+            )
         )
         ns["__st_locals__"] = _builtins.locals
         ns["__st_local_capture__"] = {}

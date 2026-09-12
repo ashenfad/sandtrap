@@ -22,6 +22,7 @@ from ..sandbox import (
     IsolationStatus,
     IsolationUnavailable,
     _validate_echo,
+    _validate_modules,
     _warn_if_wrapped_mode,
 )
 from .protocol import (
@@ -924,11 +925,19 @@ class ProcessSandbox:
         source: str,
         *,
         namespace: Mapping[str, Any] | None = None,
+        modules: Mapping[str, Mapping[str, Any]] | None = None,
         stdin: str | Any | None = None,
         argv: list[str] | None = None,
         echo: Literal["none", "last", "all"] | None = None,
     ) -> ExecResult:
         """Execute source code in the sandboxed subprocess.
+
+        ``modules`` hands this execution modules of the embedder's own
+        making — see :meth:`sandtrap.Sandbox.exec`. The mapping crosses
+        the pipe with the namespace and through the same picklability
+        filter, so a live parent-side object goes in it as an
+        :class:`~sandtrap.RpcProxyMarker` and the worker's code reaches
+        the real object through the proxy.
 
         ``echo`` overrides the worker sandbox's echo mode for this
         call only (``None`` keeps the construction-time default).
@@ -938,6 +947,7 @@ class ProcessSandbox:
         a crash costs the crashing turn, not the sandbox."""
         if echo is not None:
             _validate_echo(echo)  # fail here, not as worker-error noise
+        _validate_modules(self._policy, modules)  # ditto
         if not self._started:
             raise RuntimeError(
                 "Worker process is not running. "
@@ -956,8 +966,29 @@ class ProcessSandbox:
                         RuntimeWarning,
                         stacklevel=2,
                     )
+        safe_modules: dict[str, dict[str, Any]] | None = None
+        if modules is not None:
+            safe_modules = {}
+            for mod_name, attributes in modules.items():
+                safe_attrs = filter_namespace(attributes) or {}
+                for k in attributes:
+                    if k not in safe_attrs:
+                        warnings.warn(
+                            f"Module attribute {mod_name}.{k} skipped: value is "
+                            "not picklable",
+                            RuntimeWarning,
+                            stacklevel=2,
+                        )
+                safe_modules[mod_name] = safe_attrs
         self._conn.send(
-            ExecMsg(source=source, namespace=safe_ns, stdin=stdin, argv=argv, echo=echo)
+            ExecMsg(
+                source=source,
+                namespace=safe_ns,
+                stdin=stdin,
+                argv=argv,
+                echo=echo,
+                modules=safe_modules,
+            )
         )
         return self._await_result()
 
