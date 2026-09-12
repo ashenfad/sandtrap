@@ -1128,18 +1128,29 @@ class ProcessSandbox:
         source: str,
         *,
         namespace: Mapping[str, Any] | None = None,
+        modules: Mapping[str, Mapping[str, Any]] | None = None,
         stdin: str | Any | None = None,
         argv: list[str] | None = None,
         echo: Literal["none", "last", "all"] | None = None,
     ) -> ExecResult:
-        """Execute source code asynchronously in the sandboxed subprocess."""
+        """Execute source code asynchronously in the sandboxed subprocess.
+
+        Takes what :meth:`exec` takes, ``modules`` included -- every
+        isolation level answers to one API, so a caller can move between
+        them by changing the ``isolation`` argument and nothing else."""
         if echo is not None:
             _validate_echo(echo)  # fail on the calling task, not in the executor
+        _validate_modules(self._policy, modules)  # ditto
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             None,
             lambda: self.exec(
-                source, namespace=namespace, stdin=stdin, argv=argv, echo=echo
+                source,
+                namespace=namespace,
+                modules=modules,
+                stdin=stdin,
+                argv=argv,
+                echo=echo,
             ),
         )
 
