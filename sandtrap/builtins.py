@@ -690,13 +690,20 @@ def make_safe_dir() -> Any:
 
     With no arguments, returns sorted names from the caller's scope with
     sandbox internals filtered out.  With an argument, delegates to the
-    real ``dir(obj)``.
+    real ``dir(obj)`` minus the sandbox's own machinery: a module the
+    sandbox executed runs on gates and builtins that live in its
+    ``__dict__``, and listing those as part of the module's surface
+    would be noise pointing at names no caller may touch.
     """
     _real_dir = dir
 
     def _safe_dir(obj: Any = _SENTINEL) -> list[str]:
         if obj is not _SENTINEL:
-            return _real_dir(obj)
+            return [
+                k
+                for k in _real_dir(obj)
+                if not k.startswith("__st_") and k != "__builtins__"
+            ]
         frame = sys._getframe(1)
         return sorted(k for k in frame.f_locals if not _is_internal_name(k))
 

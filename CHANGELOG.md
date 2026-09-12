@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- **A workspace module's namespace is its `__dict__`.** A module imported from
+  the virtual filesystem used to run in a *copy* of its module dict, with the
+  results assigned back afterwards. Its functions closed over the copy while
+  callers held the module, so the two drifted silently: `h.LIMIT = 99` read
+  back as 99 while `h.get()` still saw 10, and
+  `unittest.mock.patch.object(h, "fetch", fake)` read back the fake while the
+  module kept calling the real `fetch`. No error, no warning — a test that
+  patched a module-level name passed and proved nothing.
+
+  A module now executes into its own `__dict__`, so an attribute set or
+  patched on the module is what the module's own code sees. A module body that
+  raises still leaves nothing importable behind: the module is dropped, and the
+  next import of that name runs the body from scratch.
+
+### Security
+
+- **Sandbox internals are no longer importable.** `from main import
+  __builtins__ as b` used to hand sandboxed code the frozen builtins mapping,
+  whose `__import__` is the real one (parked there so C extensions can load
+  their transitive dependencies) — `b["__import__"]("os")` was an escape.
+  `__builtins__` and the `__st_*` gates are now refused as `from <module>
+  import` targets, alongside the rewriter's existing refusal to read them as
+  bare names and the attribute gate's refusal to read them as attributes.
+  `dir()` no longer lists them either.
+
 ## 0.3.5 - 2026-09-07
 
 ### Changed

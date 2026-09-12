@@ -89,14 +89,35 @@ class _VFSLoader:
         self._root = "" if root == "/" else root.rstrip("/")
 
     def _compile_and_exec(self, mod: Any, source: str, module_name: str) -> None:
-        """Parse, rewrite, compile, and execute VFS source into a module."""
+        """Parse, rewrite, compile, and execute VFS source into a module.
+
+        A module's execution namespace IS its ``__dict__``.  The module's
+        own functions and the caller holding the module object therefore
+        read and write one dict: setting ``mod.LIMIT`` changes what
+        ``mod.get()`` reads, and ``patch.object(mod, "fetch", fake)``
+        is what ``mod`` itself calls.  Executing into a copy and
+        assigning the results back would make the module a facade over a
+        snapshot, where both of those silently do nothing.
+
+        Sharing the dict also means a body that raises leaves the module
+        half-populated, so a failed module must never stay importable:
+        the callers drop it from the cache before re-raising, and the
+        next import builds a fresh module object and runs the body
+        again.
+
+        The gates and builtins the module runs on live in that same dict
+        and are unreachable from sandboxed code: the rewriter refuses
+        ``__builtins__`` and ``__st_*`` as source-level names, the
+        attribute gate refuses them as attributes, and the import gate
+        refuses them as ``from <module> import`` targets.
+        """
         tree = ast.parse(source)
         rewriter = Rewriter(wrapped_mode=self._wrapped_mode)
         tree = rewriter.visit(tree)
         ast.fix_missing_locations(tree)
         code = compile(tree, f"<sandtrap:vfs:{module_name}>", "exec")
 
-        ns = dict(mod.__dict__)
+        ns = mod.__dict__
         ns["__builtins__"] = make_safe_builtins(
             self._gates["__st_getattr__"],
             checkpoint=self._gates["__st_checkpoint__"],
@@ -145,11 +166,6 @@ class _VFSLoader:
             ns["__st_defclass__"] = _vfs_defclass
 
         exec(code, ns)  # noqa: S102
-
-        # Update module dict (strip internal keys)
-        for k, v in ns.items():
-            if k != "__builtins__" and not k.startswith("__st_"):
-                setattr(mod, k, v)
 
     def find_module_file(self, top: str, max_dirs: int = 200) -> str | None:
         """Bounded BFS for ``<top>.py`` anywhere on the VFS — powers the
@@ -468,7 +484,11 @@ def make_gates(
             caller_globals = sys._getframe(1 + _depth).f_globals
             proxy = types.ModuleType(module_name)
             proxy.__dict__.update(
-                {k: v for k, v in caller_globals.items() if not k.startswith("__st_")}
+                {
+                    k: v
+                    for k, v in caller_globals.items()
+                    if not k.startswith("__st_") and k != "__builtins__"
+                }
             )
             return proxy
 
@@ -479,6 +499,19 @@ def make_gates(
     def __st_importfrom__(
         module_name: str, name: str, *, _level: int = 0, _depth: int = 0
     ) -> Any:
+        # Sandbox internals are never importable. `__builtins__` holds the
+        # real `__import__` (parked there for C extensions), and the
+        # `__st_*` gates are the enforcement machinery itself; both live in
+        # the globals of every module the sandbox runs, so a from-import
+        # that reached them would hand user code the keys to the sandbox.
+        # Reading either as a bare name is refused by the rewriter and as
+        # an attribute by the attribute gate; this is the third door.
+        if name == "__builtins__" or name.startswith("__st_"):
+            raise ImportError(
+                f"cannot import name '{name}' from '{module_name}': "
+                "sandbox internals are not importable"
+            )
+
         # `from sys import stdin, argv, ...` — mirror the __st_import__
         # synthetic-sys branch (sys is otherwise blocked by policy).
         if _sandbox_sys is not None and module_name == "sys":
