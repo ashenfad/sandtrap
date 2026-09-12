@@ -65,6 +65,49 @@ x = 42
 """))
 ```
 
+### Per-exec modules
+
+`namespace` hands code bare names. `modules` hands it whole modules, for one
+call: each entry maps a module name to the attributes that module has.
+
+```python
+result = sb.exec("""
+import host
+from host import db
+
+rows = db.query("select 1")
+print(host.VERSION)
+""", modules={"host": {"db": db, "VERSION": 3}})
+```
+
+`import host`, `from host import db`, and `host.db` all resolve, at the top
+level and inside a [VFS module](filesystem.md#vfs-imports) -- workspace code
+imported during the call sees the same modules the top-level code does.
+
+The rules:
+
+- **It lasts exactly as long as the call.** The next `exec()` gets whatever
+  `modules` *it* passes and nothing else, so a pooled worker never serves one
+  call's module to the next, and `import host` with no `modules` is an
+  `ImportError`.
+- **Every name you put there is readable**, including underscore-prefixed
+  ones. The policy's include/exclude filters describe what sandboxed code may
+  reach on a module you *granted*; you wrote this mapping out by hand.
+- **Sandboxed code cannot write to it.** `host.db = ...`, `host.new = ...`,
+  and `del host.db` all raise `AttributeError` -- a writable per-exec module
+  would be a channel from one execution to the next.
+- **It is import-only.** The module is not bound as a bare name and does not
+  come back in `result.namespace`.
+- **The name must be free.** A name the policy already grants a module under,
+  or `sys`, raises `ValueError` at the call. Names are plain identifiers;
+  dotted packages are not supported.
+
+Under `isolation="process"` / `"kernel"` the mapping crosses to the worker with
+the namespace, through the same picklability filter: plain data goes by value,
+and a live parent-side object goes as an
+[`RpcProxyMarker`](serialization.md#cross-process-resources-via-rpc-process--kernel-isolation) that the worker turns into
+a proxy onto the real object.
+
 ## ExecResult
 
 Both `exec()` and `aexec()` return an `ExecResult`:

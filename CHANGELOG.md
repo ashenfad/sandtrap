@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **Per-exec modules.** `exec()` and `aexec()` take `modules=` alongside
+  `namespace=`: each entry names a module and maps its attributes, and the
+  module exists for that one call.
+
+  ```python
+  sb.exec("""
+  import host
+  from host import db
+  rows = db.query("select 1")
+  """, modules={"host": {"db": db, "VERSION": 3}})
+  ```
+
+  `import host`, `from host import db`, and `host.db` resolve at the top level
+  and inside a workspace module imported during the call. The module is dropped
+  when the execution ends, so a pooled worker never serves one call's module to
+  the next and `import host` without `modules` stays an `ImportError`. Every
+  name the embedder put there is readable — including underscore-prefixed ones,
+  since the policy's member filters describe a *granted* module, not a mapping
+  written out by hand — and none is writable, so a provided module cannot
+  become a channel between executions. A name the policy already grants a
+  module under, or `sys`, raises `ValueError` at the call.
+
+  Under `isolation="process"` / `"kernel"` the mapping crosses to the worker
+  with the namespace and through the same picklability filter: plain data goes
+  by value, and an `RpcProxyMarker` becomes a live proxy onto the parent's
+  object before the module is built, so `host.obj.method()` reaches the real
+  object.
+
 ### Fixed
 
 - **A workspace module's namespace is its `__dict__`.** A module imported from

@@ -43,6 +43,26 @@ print(result.error)        # None
 print(result.ticks)        # 2 (fn calls: sum + print)
 ```
 
+### Handing code a module
+
+`namespace` gives code bare names; `modules` gives it whole modules, for one
+call only:
+
+```python
+with sandbox(policy) as sb:
+    result = sb.exec("""
+import host
+from host import db
+
+rows = db.query("select 1")
+""", modules={"host": {"db": db, "VERSION": 3}})
+```
+
+The module resolves for that `exec()` and is gone when it returns, so the next
+call sees only the modules it passes. Sandboxed code can read every name you
+put there and write none of them. See
+[per-exec modules](docs/sandbox.md#per-exec-modules).
+
 ### In a worker process
 
 ```python

@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 import types
+from collections.abc import Mapping
 from contextlib import ExitStack
 from typing import Any, cast
 
@@ -61,6 +62,41 @@ def wrap_privileged(
             return fn(*args, **kwargs)
 
     return wrapper
+
+
+class _ExecModule(types.ModuleType):
+    """A module the embedder handed to a single execution.
+
+    The embedder chose the contents, so every name it was given is
+    readable -- the policy's member filters describe what sandboxed code
+    may reach on a *registered* module, and have nothing to say about a
+    mapping the embedder wrote out by hand. Nothing else on the object is
+    readable, and nothing at all is writable: a per-exec module that
+    sandboxed code could write to would be a channel from one execution
+    to the next, which is exactly what per-exec means to rule out.
+    """
+
+    __slots__ = ("_st_exposed",)
+
+    def __init__(self, name: str, attributes: Mapping[str, Any]) -> None:
+        super().__init__(name)
+        self.__dict__.update(attributes)
+        object.__setattr__(self, "_st_exposed", frozenset(attributes))
+
+    def _st_refuse_write(self, attr: str) -> "AttributeError":
+        return AttributeError(
+            f"Cannot set attribute '{attr}' on module '{self.__name__}': "
+            "modules provided for this execution are read-only"
+        )
+
+    def __setattr__(self, attr: str, value: Any) -> None:
+        raise self._st_refuse_write(attr)
+
+    def __delattr__(self, attr: str) -> None:
+        raise self._st_refuse_write(attr)
+
+    def __dir__(self) -> list[str]:
+        return sorted(self._st_exposed)
 
 
 class _VFSLoader:
@@ -315,6 +351,14 @@ def make_gates(
     # VFS module compilation can inject the same gates.
     gates: dict[str, Any] = {}
 
+    # Modules the embedder handed to this execution, by name. Filled in
+    # once the namespace is built (the attribute values are materialized
+    # there, so under worker isolation they are live proxies rather than
+    # markers) and emptied when the execution ends. Importable from
+    # top-level code and from workspace modules alike, because both run
+    # on these gates.
+    exec_modules: dict[str, _ExecModule] = {}
+
     # VFS module loader (holds its own cache; reads gates dict by
     # reference). getattr: policies pickled by older versions may lack
     # module_root.
@@ -401,6 +445,17 @@ def make_gates(
 
     def __st_getattr__(obj: Any, attr: str) -> Any:
         obj = _unwrap(obj)
+        if isinstance(obj, _ExecModule):
+            # The module's surface is exactly the mapping the embedder
+            # wrote, so the policy's member filters have nothing to say
+            # about it and anything else simply is not there.
+            if attr in obj._st_exposed:
+                return getattr(obj, attr)
+            lineno = _caller_lineno()
+            loc = f" (line {lineno})" if lineno else ""
+            raise AttributeError(
+                f"module '{obj.__name__}' has no attribute '{attr}'{loc}"
+            )
         if not policy.is_attr_allowed(obj, attr):
             lineno = _caller_lineno()
             loc = f" (line {lineno})" if lineno else ""
@@ -431,6 +486,8 @@ def make_gates(
 
     def __st_setattr__(obj: Any, attr: str, value: Any) -> None:
         obj = _unwrap(obj)
+        if isinstance(obj, _ExecModule):
+            raise obj._st_refuse_write(attr)
         if not policy.is_attr_allowed(obj, attr):
             lineno = _caller_lineno()
             loc = f" (line {lineno})" if lineno else ""
@@ -441,6 +498,8 @@ def make_gates(
 
     def __st_delattr__(obj: Any, attr: str) -> None:
         obj = _unwrap(obj)
+        if isinstance(obj, _ExecModule):
+            raise obj._st_refuse_write(attr)
         if not policy.is_attr_allowed(obj, attr):
             lineno = _caller_lineno()
             loc = f" (line {lineno})" if lineno else ""
@@ -461,6 +520,14 @@ def make_gates(
         # rather than being blocked. Safe by construction (see SandboxSys).
         if _sandbox_sys is not None and module_name == "sys":
             return _sandbox_sys
+
+        # Modules the embedder handed to this execution resolve ahead of
+        # the policy allowlist. A name that collides with a grant is
+        # refused when the execution starts, so the order settles only
+        # which gate reports a name neither side owns.
+        exec_mod = exec_modules.get(module_name)
+        if exec_mod is not None:
+            return exec_mod
 
         # Try policy-registered modules first
         if policy.is_import_allowed(module_name):
@@ -518,6 +585,12 @@ def make_gates(
             if hasattr(_sandbox_sys, name):
                 return getattr(_sandbox_sys, name)
             raise ImportError(f"cannot import name '{name}' from 'sys'")
+
+        exec_mod = exec_modules.get(module_name)
+        if exec_mod is not None:
+            if name in exec_mod._st_exposed:
+                return getattr(exec_mod, name)
+            raise ImportError(f"cannot import name '{name}' from '{module_name}'")
 
         if _level > 0:
             # Relative import — resolve against caller's __file__
@@ -837,6 +910,7 @@ def make_gates(
             "__st_checkpoint__": __st_checkpoint__,
             "__st_capture_context__": __st_capture_context__,
             "__st_vfs__": vfs,
+            "__st_exec_modules__": exec_modules,
         }
     )
     return gates

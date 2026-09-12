@@ -321,9 +321,21 @@ def worker_main(
                     if msg.namespace is not None
                     else None
                 )
+                # A provided module's attributes get the same treatment as
+                # namespace entries, so a host object reaches the module as
+                # a live proxy rather than as the marker that crossed.
+                exec_modules = (
+                    {
+                        mod_name: _substitute_proxy_markers(attributes, conn)
+                        for mod_name, attributes in msg.modules.items()
+                    }
+                    if msg.modules is not None
+                    else None
+                )
                 result = sandbox.exec(
                     msg.source,
                     namespace=ns,
+                    modules=exec_modules,
                     stdin=msg.stdin,
                     argv=msg.argv,
                     echo=msg.echo,
