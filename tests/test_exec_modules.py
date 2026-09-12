@@ -302,3 +302,32 @@ def test_an_absent_attribute_names_the_module(isolation):
     assert isinstance(result.error, AttributeError), f"resolved: {result.error!r}"
     assert "host" in str(result.error)
     assert "nope" in str(result.error)
+
+
+@pytest.mark.parametrize("isolation", ISOLATIONS)
+def test_module_type_machinery_is_not_readable(isolation):
+    """A per-exec module's surface is the mapping, not the module type."""
+    with _sandbox(isolation) as sb:
+        for expr in (
+            "host.__dict__",
+            "host.__getattribute__",
+            "host.__class__",
+            "getattr(host, '__dict__')",
+        ):
+            result = sb.exec(f"import host\nx = {expr}", modules={"host": {"db": "pg"}})
+            assert isinstance(result.error, AttributeError), (
+                f"{expr} leaked: {result.error!r}"
+            )
+
+
+@pytest.mark.parametrize("isolation", ISOLATIONS)
+def test_from_import_of_module_type_machinery_is_refused(isolation):
+    """The import gate refuses what the attribute gate refuses."""
+    with _sandbox(isolation) as sb:
+        for name in ("__getattribute__", "__dict__", "__class__"):
+            result = sb.exec(
+                f"from host import {name} as x", modules={"host": {"db": "pg"}}
+            )
+            assert isinstance(result.error, ImportError), (
+                f"{name} leaked: {result.error!r}"
+            )

@@ -96,10 +96,15 @@ assert result.namespace["inside"] == 99
 A module body that raises leaves nothing importable behind: the module is
 dropped, and the next import of that name runs the body again from scratch.
 
-The gates and builtins a VFS module runs on live in the same `__dict__` and
-are not part of its surface -- `__builtins__` and the `__st_*` gates are
-refused as bare names, as attributes, and as `from <module> import` targets,
-and `dir()` does not list them.
+A VFS module exports what its body defined, and nothing else. The gates and
+builtins it runs on live in the same `__dict__`, so `__builtins__` and the
+`__st_*` gates are refused as bare names, as attributes, and as
+`from <module> import` targets, and `dir()` does not list them. Nor does a
+from-import reach the *module type* -- `from h import __getattribute__` and
+`from h import __dict__` are refused, since either one answers for the whole
+dict. No dunder is importable from a workspace module, including one the body
+assigned: `h.__version__` is not readable as an attribute either, so a module
+that wants to publish a version names it `VERSION`.
 
 ### Relative imports
 
