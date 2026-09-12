@@ -39,6 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`aexec()` takes `modules` under worker isolation too.** `ProcessSandbox`
+  accepted the keyword on `exec()` but not on `aexec()`, so the documented
+  call worked under `isolation="none"` and raised `TypeError` under
+  `"process"` / `"kernel"`.
+
 - **A workspace module's namespace is its `__dict__`.** A module imported from
   the virtual filesystem used to run in a *copy* of its module dict, with the
   results assigned back afterwards. Its functions closed over the copy while

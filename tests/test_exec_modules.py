@@ -283,10 +283,12 @@ def test_an_unpicklable_attribute_is_dropped_with_a_warning(isolation):
 # ------------------------------------------------------------------
 
 
-def test_aexec_takes_modules_too():
+@pytest.mark.parametrize("isolation", ISOLATIONS)
+def test_aexec_takes_modules_too(isolation):
+    """Every isolation level shares one API."""
     import asyncio
 
-    with _sandbox("none") as sb:
+    with _sandbox(isolation) as sb:
         result = asyncio.run(
             sb.aexec("import host\nwhich = host.db\n", modules={"host": {"db": "pg"}})
         )
