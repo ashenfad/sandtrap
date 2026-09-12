@@ -43,6 +43,9 @@ class _SafeFormatter(_string_mod.Formatter):
 
 _safe_formatter = _SafeFormatter()
 
+# Distinguishes "the module has no such export" from "its value is None".
+_MISSING = object()
+
 
 def wrap_privileged(
     fn: Any,
@@ -62,6 +65,27 @@ def wrap_privileged(
             return fn(*args, **kwargs)
 
     return wrapper
+
+
+def _module_export(mod: Any, name: str) -> Any:
+    """The value a module's body bound to *name*, or ``_MISSING``.
+
+    Resolution goes through the module's own ``__dict__``, never
+    ``getattr``: ``getattr`` walks the type, so it answers for names the
+    module never defined -- ``__getattribute__`` (which reads any
+    attribute, including the module dict the sandbox's gates live in),
+    ``__dict__`` (that dict itself), ``__class__``, and the rest of the
+    module type's surface.
+
+    Dunders are refused whatever their source. An implementation dunder
+    is type machinery wearing a module's name, and a dunder a module
+    *body* assigned is a name the attribute gate already refuses to
+    read, so honouring it here would only make the two spellings
+    disagree about the same name.
+    """
+    if name.startswith("__") and name.endswith("__"):
+        return _MISSING
+    return mod.__dict__.get(name, _MISSING)
 
 
 class _ExecModule(types.ModuleType):
@@ -450,7 +474,11 @@ def make_gates(
             # wrote, so the policy's member filters have nothing to say
             # about it and anything else simply is not there.
             if attr in obj._st_exposed:
-                return getattr(obj, attr)
+                # Straight out of the instance dict, so a mapping key that
+                # collides with the module type's own surface (`__dict__`,
+                # `__class__`) yields the embedder's value rather than the
+                # machinery `getattr` would reach past it for.
+                return obj.__dict__[attr]
             lineno = _caller_lineno()
             loc = f" (line {lineno})" if lineno else ""
             raise AttributeError(
@@ -566,13 +594,16 @@ def make_gates(
     def __st_importfrom__(
         module_name: str, name: str, *, _level: int = 0, _depth: int = 0
     ) -> Any:
-        # Sandbox internals are never importable. `__builtins__` holds the
-        # real `__import__` (parked there for C extensions), and the
-        # `__st_*` gates are the enforcement machinery itself; both live in
-        # the globals of every module the sandbox runs, so a from-import
-        # that reached them would hand user code the keys to the sandbox.
-        # Reading either as a bare name is refused by the rewriter and as
-        # an attribute by the attribute gate; this is the third door.
+        # Sandbox internals are never importable from anything, a granted
+        # module included. `__builtins__` holds the real `__import__`
+        # (parked there for C extensions) and the `__st_*` gates are the
+        # enforcement machinery itself; both live in the globals of every
+        # module the sandbox runs, so a from-import that reached them
+        # would hand user code the keys to the sandbox. Reading either as
+        # a bare name is refused by the rewriter and as an attribute by
+        # the attribute gate; this is the third door. Sandbox-run modules
+        # (workspace modules and the `main` proxy) go further and export
+        # no dunder at all -- see _module_export.
         if name == "__builtins__" or name.startswith("__st_"):
             raise ImportError(
                 f"cannot import name '{name}' from '{module_name}': "
@@ -588,8 +619,11 @@ def make_gates(
 
         exec_mod = exec_modules.get(module_name)
         if exec_mod is not None:
+            # Straight out of the instance dict: the exposed set is the
+            # mapping the embedder wrote, and `getattr` would answer for
+            # the module type's own names on top of it.
             if name in exec_mod._st_exposed:
-                return getattr(exec_mod, name)
+                return exec_mod.__dict__[name]
             raise ImportError(f"cannot import name '{name}' from '{module_name}'")
 
         if _level > 0:
@@ -620,8 +654,9 @@ def make_gates(
                 if not module_name:
                     # from . import bar → return the module itself
                     return mod
-                if hasattr(mod, name):
-                    return getattr(mod, name)
+                value = _module_export(mod, name)
+                if value is not _MISSING:
+                    return value
                 raise ImportError(f"cannot import name '{name}' from '{abs_module}'")
             raise ImportError(
                 f"No module named '{abs_module}' (resolved from relative import)"
@@ -647,8 +682,9 @@ def make_gates(
         # Try VFS modules
         mod = vfs.resolve_module(module_name)
         if mod is not None:
-            if hasattr(mod, name):
-                return getattr(mod, name)
+            value = _module_export(mod, name)
+            if value is not _MISSING:
+                return value
             # name might be a sub-module (from pkg import sub)
             sub = vfs.resolve_module(module_name + "." + name)
             if sub is not None:
@@ -665,8 +701,9 @@ def make_gates(
         # import globals that are already available in the execution scope.
         if module_name in ("main", "__main__"):
             caller_globals = sys._getframe(1 + _depth).f_globals
-            if name in caller_globals:
-                return caller_globals[name]
+            if not (name.startswith("__") and name.endswith("__")):
+                if name in caller_globals:
+                    return caller_globals[name]
 
         lineno = _caller_lineno(2 + _depth)
         loc = f" (line {lineno})" if lineno else ""

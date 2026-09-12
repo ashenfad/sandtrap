@@ -64,6 +64,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bare names and the attribute gate's refusal to read them as attributes.
   `dir()` no longer lists them either.
 
+- **A module exports what its body defined.** A from-import on a workspace
+  module resolved through `getattr`, which walks the module *type*, so
+  `from h import __getattribute__ as get` handed back a reader for any
+  attribute — `get("__builtins__")["__import__"]("os")` was an escape — and
+  `from h import __dict__ as d` reached the execution namespace, gates
+  included. Names now resolve against the module's own `__dict__`, and no
+  dunder is importable from a module the sandbox ran (a workspace module or
+  the `main` proxy), including one the body assigned: the attribute gate
+  already refuses to read `h.__version__`, and the two spellings of a name
+  should not disagree about it. Per-exec modules resolve the same way, out of
+  the mapping the embedder wrote.
+
 ## 0.3.5 - 2026-09-07
 
 ### Changed

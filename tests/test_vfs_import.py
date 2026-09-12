@@ -1000,3 +1000,91 @@ from_inside = also_h.get()
     assert result.error is None, f"unexpected error: {result.error}"
     assert result.namespace["same"] == 7
     assert result.namespace["from_inside"] == 7
+
+
+# ------------------------------------------------------------------
+# A module exports what its body defined, and nothing else
+# ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("isolation", ISOLATIONS)
+def test_from_import_of_getattribute_is_refused(isolation):
+    """``__getattribute__`` walks the type, and its first stop is the
+    module dict the sandbox's own gates and builtins live in."""
+    files = {"/h.py": "VALUE = 1\n"}
+    with _vfs_sandbox(isolation, files) as sb:
+        result = sb.exec("""\
+from h import __getattribute__ as get
+leaked = get('__builtins__')['__import__']('os').getcwd()
+""")
+    assert isinstance(result.error, ImportError), f"leaked: {result.error!r}"
+    assert "__getattribute__" in str(result.error)
+
+
+@pytest.mark.parametrize("isolation", ISOLATIONS)
+def test_from_import_of_dunder_dict_is_refused(isolation):
+    """The module dict is the execution namespace, gates included."""
+    files = {"/h.py": "VALUE = 1\n"}
+    with _vfs_sandbox(isolation, files) as sb:
+        result = sb.exec("from h import __dict__ as d")
+    assert isinstance(result.error, ImportError), f"leaked: {result.error!r}"
+    assert "__dict__" in str(result.error)
+
+
+@pytest.mark.parametrize("isolation", ISOLATIONS)
+def test_from_import_of_a_body_assigned_dunder_is_refused(isolation):
+    """A module body cannot re-export a name under a dunder spelling."""
+    files = {"/h.py": "__version__ = '1.2'\n__getattr__ = 'not a hook'\n"}
+    with _vfs_sandbox(isolation, files) as sb:
+        version = sb.exec("from h import __version__ as v")
+        hook = sb.exec("from h import __getattr__ as g")
+    assert isinstance(version.error, ImportError), f"leaked: {version.error!r}"
+    assert isinstance(hook.error, ImportError), f"leaked: {hook.error!r}"
+
+
+@pytest.mark.parametrize("isolation", ISOLATIONS)
+def test_from_import_of_a_defined_name_still_works(isolation):
+    """The refusal is about dunders, not about from-imports."""
+    files = {"/h.py": "VALUE = 7\n\ndef get():\n    return VALUE\n"}
+    with _vfs_sandbox(isolation, files) as sb:
+        result = sb.exec("from h import VALUE, get\nboth = (VALUE, get())")
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert result.namespace["both"] == (7, 7)
+
+
+@pytest.mark.parametrize("isolation", ISOLATIONS)
+def test_relative_from_import_of_getattribute_is_refused(isolation):
+    """The relative-import path resolves names the same way."""
+    files = {
+        "/pkg/helper.py": "VALUE = 1\n",
+        "/pkg/entry.py": "from .helper import __getattribute__ as get\n",
+    }
+    with _vfs_sandbox(isolation, files) as sb:
+        result = sb.exec("import pkg.entry")
+    assert isinstance(result.error, ImportError), f"leaked: {result.error!r}"
+
+
+@pytest.mark.parametrize("isolation", ISOLATIONS)
+def test_from_main_import_of_getattribute_is_refused(isolation):
+    """The `main` proxy resolves from the exec namespace, same rule."""
+    with _vfs_sandbox(isolation, {}) as sb:
+        result = sb.exec("from main import __getattribute__ as get")
+    assert isinstance(result.error, ImportError), f"leaked: {result.error!r}"
+
+
+@pytest.mark.parametrize("isolation", ISOLATIONS)
+def test_module_type_machinery_is_not_readable_as_an_attribute(isolation):
+    """The attribute gate refuses what the import gate refuses."""
+    files = {"/h.py": "VALUE = 1\n"}
+    with _vfs_sandbox(isolation, files) as sb:
+        for expr in (
+            "h.__dict__",
+            "h.__getattribute__",
+            "h.__class__",
+            "getattr(h, '__dict__')",
+            "getattr(h, '__getattribute__')",
+        ):
+            result = sb.exec(f"import h\nx = {expr}")
+            assert isinstance(result.error, AttributeError), (
+                f"{expr} leaked: {result.error!r}"
+            )
