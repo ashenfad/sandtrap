@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Introspection dunders are readable by default.** `__name__`,
+  `__qualname__`, `__module__`, and `__doc__` join
+  `DEFAULT_ALLOWED_DUNDERS`, so the idiom `type(e).__name__ == "HttpError"`
+  works without a policy change. They read only, and read only a string:
+  a class body, a function attribute, or a module dict can bind any object
+  under one of those names, so the gate refuses a value that is not a `str`
+  (or `None` for a missing docstring), and assigning or deleting them stays
+  blocked. A registration's `include` / `exclude` filters no longer hide
+  them either -- the filters select members, while these four name the
+  registered class or module itself. The object-graph dunders are
+  untouched: `__class__`, `__dict__`, `__bases__`, `__mro__`,
+  `__subclasses__`, and `__globals__` still raise, and `type(obj)` is still
+  the way to reach a class.
+
 ## 0.3.6 - 2026-09-11
 
 ### Added
