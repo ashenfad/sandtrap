@@ -214,6 +214,10 @@ so nothing needs to serialize — at the cost of the deadlock hazard described i
 
 Defaults: `include="*"` (everything), `exclude="_*"` (private attributes hidden).
 
+`__name__`, `__qualname__`, `__module__`, and `__doc__` are exempt from both:
+they name the registered class or module itself rather than selecting a member
+of it, so `Widget.__name__` reads even under `include=("ping",)`.
+
 Patterns **without** a dot match the bare member name. Patterns
 **with** a dot match owner-qualified names:
 
