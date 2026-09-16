@@ -16,7 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a class body, a function attribute, or a module dict can bind any object
   under one of those names, so the gate refuses a value that is not a `str`
   (or `None` for a missing docstring), and assigning or deleting them stays
-  blocked. A registration's `include` / `exclude` filters no longer hide
+  blocked. The read is also resolved statically, from an object's `__dict__`
+  or a builtin type's own slot, so a metaclass property, a module
+  `__getattr__`, or a `__getattribute__` never runs to answer one -- granting
+  the name grants no side effect. A registration's `include` / `exclude` filters no longer hide
   them either -- the filters select members, while these four name the
   registered class or module itself. The object-graph dunders are
   untouched: `__class__`, `__dict__`, `__bases__`, `__mro__`,

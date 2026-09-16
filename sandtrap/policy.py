@@ -367,10 +367,12 @@ BLOCKED_INTERNAL_ATTRS = frozenset(
 # back no other object, which is what separates them from __class__,
 # __dict__, __globals__, and the rest of the traversal surface -- type(obj)
 # is the sanctioned way to reach a class, so type(e).__name__ needs none of
-# those.  Nothing in Python enforces the string, though: a class body, a
-# function attribute, or a module dict can bind any object under these
-# names, so the attribute gate returns the value only when it is a str (or
-# None for a missing docstring) and refuses the read otherwise.
+# those.  Nothing in Python ties these names to a string, though, and
+# nothing stops a host object from computing them: a class body or module
+# dict can bind any object under them, and a metaclass property or a module
+# __getattr__ can run arbitrary code to answer.  So the attribute gate
+# resolves them statically and hands back only a stored or header-level
+# string (None as well, for a docstring a class does not have).
 INTROSPECTION_DUNDERS = frozenset(
     {
         "__name__",
@@ -741,7 +743,10 @@ class Policy:
                 # class; the introspection dunders describe the registration
                 # itself and reach nothing inside it, so they read the same
                 # there as on any other object rather than having to survive
-                # an include list (or the default "_*" exclude).
+                # an include list (or the default "_*" exclude). Allowing the
+                # name here is not yet a read: the attribute gate resolves
+                # these four statically and refuses any answer that would
+                # take running host code to produce.
                 if attr in INTROSPECTION_DUNDERS:
                     return True
                 quals = _qualified_names(obj, attr)

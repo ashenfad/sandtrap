@@ -46,6 +46,83 @@ _safe_formatter = _SafeFormatter()
 # Distinguishes "the module has no such export" from "its value is None".
 _MISSING = object()
 
+# Returned when an introspection dunder cannot be resolved without running
+# host code. It is neither a str nor None, so it fails the gate's value
+# check like any other unacceptable answer.
+_REFUSED = object()
+
+# Types whose C-level slots answer an introspection dunder out of the
+# object's header rather than out of a method the host wrote. `method` is
+# deliberately absent: `bound.__name__` and `bound.__doc__` are answered by
+# C code that calls getattr on the wrapped callable, and MethodType binds
+# any callable, so the read is unwrapped to that callable first instead.
+_INTROSPECTION_SLOT_OWNERS = (
+    type,
+    types.FunctionType,
+    types.BuiltinFunctionType,
+    types.MethodDescriptorType,
+    types.ModuleType,
+    property,
+    classmethod,
+    staticmethod,
+)
+
+
+def _static_introspection_value(obj: Any, attr: str) -> Any:
+    """The value of an introspection dunder, or ``_REFUSED``.
+
+    The four names sandboxed code may read (``__name__``,
+    ``__qualname__``, ``__module__``, ``__doc__``) are resolved without
+    executing anything the host wrote. A registered class can answer any
+    of them through a metaclass property, a module through PEP 562
+    ``__getattr__``, an instance through ``__getattribute__`` -- plain
+    ``getattr`` would run that code, and a policy that grants a name
+    read would be granting a side effect. So the lookup goes through
+    ``inspect.getattr_static``, which walks ``__dict__``s and invokes no
+    descriptor, and the result is accepted from only two places: a value
+    stored directly in an instance, class, or module ``__dict__``, or a
+    C-level slot on one of the builtin types that keeps these names in
+    the object header. A Python-level descriptor under one of these
+    names is refused unread.
+    """
+    if type(obj) is types.MethodType:
+        # Take the wrapped callable out of the method's own slot and read
+        # the name off that, so an exotic callable's own attribute code
+        # is subject to the same rules as everything else here.
+        try:
+            obj = types.MethodType.__dict__["__func__"].__get__(obj, types.MethodType)
+        except Exception:
+            return _REFUSED
+
+    try:
+        found = inspect.getattr_static(obj, attr)
+    except Exception:
+        return _REFUSED
+
+    # Stored value: getattr_static hands back whatever the __dict__ holds.
+    if found is None or type(found) is str:
+        return found
+
+    kind = type(found)
+    if not (
+        kind is types.GetSetDescriptorType
+        or kind is types.MemberDescriptorType
+        or kind is types.WrapperDescriptorType
+    ):
+        return _REFUSED
+    try:
+        owner = found.__objclass__
+    except Exception:
+        return _REFUSED
+    # Identity, never `in`: a container test compares, and comparing types
+    # can land in a metaclass __eq__ that the host wrote.
+    if not any(owner is allowed for allowed in _INTROSPECTION_SLOT_OWNERS):
+        return _REFUSED
+    try:
+        return found.__get__(obj, type(obj))
+    except Exception:
+        return _REFUSED
+
 
 def wrap_privileged(
     fn: Any,
@@ -507,25 +584,23 @@ def make_gates(
 
                 return safe_format_map
 
-        value = getattr(obj, attr)
         # The introspection dunders are readable for the string they
-        # describe the object with, and for nothing else. A class body, a
-        # function attribute, or a module dict can bind any object under
-        # one of those names (`__module__` and `__doc__` take anything,
-        # and a metaclass property can answer `__name__` with whatever it
-        # likes), and handing that object back would turn a name read into
-        # an object grant. An exact str -- a str subclass carries its own
-        # attribute surface -- or None for a missing docstring.
-        if (
-            attr in INTROSPECTION_DUNDERS
-            and type(value) is not str
-            and value is not None
-        ):
+        # describe the object with, and for nothing else. Resolution is
+        # static, so no attribute code the host wrote runs on the way to
+        # the answer, and the answer counts only if it is an exact str --
+        # a str subclass carries an attribute surface of its own -- or
+        # None for a missing docstring.
+        if attr in INTROSPECTION_DUNDERS:
+            value = _static_introspection_value(obj, attr)
+            if type(value) is str or value is None:
+                return value
             lineno = _caller_lineno()
             loc = f" (line {lineno})" if lineno else ""
             raise AttributeError(
                 f"Attribute '{attr}' is not accessible on '{type(obj).__name__}'{loc}"
             )
+
+        value = getattr(obj, attr)
         if callable(value):
             reg = policy._find_registration_for(obj)
             return _maybe_wrap_privileged(value, reg, attr)
