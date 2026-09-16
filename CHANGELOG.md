@@ -15,8 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   works without a policy change. They read only, and read only a string:
   a class body, a function attribute, or a module dict can bind any object
   under one of those names, so the gate refuses a value that is not a `str`
-  (or `None` for a missing docstring), and assigning or deleting them stays
-  blocked. The read is also resolved statically, from an object's `__dict__`
+  -- `__doc__` may also answer `None`, which is what an object with no
+  docstring has, while the other three are strings or they raise -- and
+  assigning or deleting them stays blocked. The read is also resolved statically, from an object's `__dict__`
   or a builtin type's own slot, so a metaclass property, a module
   `__getattr__`, or a `__getattribute__` never runs to answer one -- granting
   the name grants no side effect. A registration's `include` / `exclude` filters no longer hide

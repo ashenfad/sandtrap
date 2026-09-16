@@ -372,6 +372,27 @@ def test_exec_module_dunder_is_the_embedders_mapping():
     assert "has no attribute '__name__'" in str(result.error)
 
 
+def test_only_doc_may_answer_none():
+    """A name, a qualified name, and a module are strings or they raise."""
+
+    class Quiet:
+        __module__ = None
+
+    policy = Policy()
+    policy.cls(Quiet, name="Quiet")
+    sandbox = Sandbox(policy)
+
+    result = sandbox.exec("x = Quiet.__module__")
+    assert isinstance(result.error, AttributeError)
+    assert "'__module__' is not accessible" in str(result.error)
+
+    # The same None is the ordinary answer for a class with no docstring.
+    result = sandbox.exec("doc = Quiet.__doc__\nname = Quiet.__name__")
+    assert result.error is None
+    assert result.namespace["doc"] is None
+    assert result.namespace["name"] == "Quiet"
+
+
 @pytest.mark.parametrize("stmt", ["fn.__doc__ = 'x'", "del fn.__doc__"])
 def test_introspection_dunders_are_read_only(sandbox, stmt):
     """Reading a name is granted; renaming or re-documenting is not."""
