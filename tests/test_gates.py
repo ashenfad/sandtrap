@@ -2,12 +2,18 @@
 
 import pytest
 
-from sandtrap import Policy, Sandbox
+from sandtrap import Policy, Sandbox, VirtualFS
 
 
 @pytest.fixture
 def sandbox():
     return Sandbox(Policy())
+
+
+def _make_gates_sandbox():
+    """A sandbox with a VirtualFS, for workspace-module reads."""
+    fs = VirtualFS({})
+    return Sandbox(Policy(), filesystem=fs), fs
 
 
 def test_attr_read(sandbox):
@@ -270,6 +276,100 @@ def test_introspection_dunder_refuses_non_string_value():
         result = sandbox.exec(f"x = Sneaky.{attr}")
         assert isinstance(result.error, AttributeError), attr
         assert f"Attribute '{attr}' is not accessible" in str(result.error)
+
+
+def test_introspection_dunder_does_not_run_a_metaclass_property():
+    """A name a host class computes is refused, and the code never runs."""
+    fired = []
+
+    class Meta(type):
+        @property
+        def __name__(cls):
+            fired.append("__name__")
+            return "Spoofed"
+
+    class Widget(metaclass=Meta):
+        """widget doc"""
+
+    policy = Policy()
+    policy.cls(Widget, name="Widget")
+    sandbox = Sandbox(policy)
+    sandbox.exec("x = 1")  # build the namespace before watching for the call
+    fired.clear()
+
+    result = sandbox.exec("x = Widget.__name__")
+    assert isinstance(result.error, AttributeError)
+    assert "'__name__' is not accessible" in str(result.error)
+    assert fired == []
+
+    # The names that class does not compute still read.
+    result = sandbox.exec("doc = Widget.__doc__\nqualname = Widget.__qualname__")
+    assert result.error is None
+    assert result.namespace["doc"] == "widget doc"
+    assert result.namespace["qualname"].endswith("Widget")
+    assert fired == []
+
+
+def test_introspection_dunder_does_not_run_a_module_getattr():
+    """A module's PEP 562 __getattr__ is not a source of these names."""
+    sandbox, fs = _make_gates_sandbox()
+    fs.write(
+        "/helpers.py",
+        b'def __getattr__(name):\n    raise RuntimeError("module __getattr__ ran")\n',
+    )
+
+    result = sandbox.exec("import helpers\nx = helpers.__qualname__")
+    assert isinstance(result.error, AttributeError)
+    assert "'__qualname__' is not accessible" in str(result.error)
+
+    # __name__ and __doc__ live in the module's own dict, so they read.
+    result = sandbox.exec(
+        "import helpers\nname = helpers.__name__\ndoc = helpers.__doc__"
+    )
+    assert result.error is None
+    assert result.namespace["name"] == "helpers"
+    assert result.namespace["doc"] is None
+
+
+def test_introspection_dunder_does_not_run_getattribute():
+    """__getattribute__ does not get to answer for these names either."""
+    fired = []
+
+    class Sneaky:
+        def __getattribute__(self, name):
+            if name in ("__name__", "__qualname__", "__module__", "__doc__"):
+                fired.append(name)
+                return "leaked"
+            return object.__getattribute__(self, name)
+
+    policy = Policy()
+    policy.cls(Sneaky)
+    sandbox = Sandbox(policy)
+    result = sandbox.exec(
+        "doc = obj.__doc__\nmodule = obj.__module__",
+        namespace={"obj": Sneaky()},
+    )
+    assert result.error is None
+    assert result.namespace["doc"] is None
+    assert result.namespace["module"] == __name__
+    assert fired == []
+
+
+def test_exec_module_dunder_is_the_embedders_mapping():
+    """A per-exec module's surface is the mapping, gate rules included."""
+    sandbox = Sandbox(Policy())
+    result = sandbox.exec(
+        "import host\nname = host.__name__",
+        modules={"host": {"__name__": "shipped"}},
+    )
+    assert result.error is None
+    assert result.namespace["name"] == "shipped"
+
+    result = sandbox.exec(
+        "import host\nname = host.__name__", modules={"host": {"db": 1}}
+    )
+    assert isinstance(result.error, AttributeError)
+    assert "has no attribute '__name__'" in str(result.error)
 
 
 @pytest.mark.parametrize("stmt", ["fn.__doc__ = 'x'", "del fn.__doc__"])

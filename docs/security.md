@@ -95,7 +95,7 @@ the import set is not.
 ## What's blocked
 
 - **Arbitrary imports** -- only policy-registered modules and VFS files, whether via an `import` statement or `__import__`
-- **Private attributes** -- `_name` and `__dunder__` (except allowed dunders) blocked by default. The allowed set is the operator, container, and context protocols plus the read-only introspection names `__name__`, `__qualname__`, `__module__`, and `__doc__`, which answer with a string or not at all. `__class__`, `__dict__`, `__bases__`, `__mro__`, `__subclasses__`, and `__globals__` are not in it
+- **Private attributes** -- `_name` and `__dunder__` (except allowed dunders) blocked by default. The allowed set is the operator, container, and context protocols plus the read-only introspection names `__name__`, `__qualname__`, `__module__`, and `__doc__`, which answer with a string or not at all. Those four resolve statically -- a value stored in an object's `__dict__`, or a builtin type's own C-level slot -- so a metaclass property, a module `__getattr__`, or a `__getattribute__` never runs to produce one, and a value that is not a string is refused rather than returned. `__class__`, `__dict__`, `__bases__`, `__mro__`, `__subclasses__`, and `__globals__` are not in it
 - **Network I/O** -- socket operations blocked unless `allow_network=True`
 - **File I/O** -- routes through VFS when filesystem provided, otherwise `open` unavailable
 - **`type(name, bases, dict)`** -- three-arg form blocked (prevents dynamic class creation outside the rewriter)

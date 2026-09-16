@@ -216,7 +216,12 @@ Defaults: `include="*"` (everything), `exclude="_*"` (private attributes hidden)
 
 `__name__`, `__qualname__`, `__module__`, and `__doc__` are exempt from both:
 they name the registered class or module itself rather than selecting a member
-of it, so `Widget.__name__` reads even under `include=("ping",)`.
+of it, so `Widget.__name__` reads even under `include=("ping",)`. The exemption
+grants the *name*, not a call into your code: the read is resolved statically
+and refused unless the answer is a string your object already stores or one a
+builtin type keeps in its own slot, so a registered class that computes
+`__name__` through a metaclass property answers nothing and the property is
+never invoked.
 
 Patterns **without** a dot match the bare member name. Patterns
 **with** a dot match owner-qualified names:
