@@ -221,7 +221,9 @@ grants the *name*, not a call into your code: the read is resolved statically
 and refused unless the answer is a string your object already stores or one a
 builtin type keeps in its own slot, so a registered class that computes
 `__name__` through a metaclass property answers nothing and the property is
-never invoked.
+never invoked. `__doc__` may also answer `None`, which is what an object with
+no docstring has; `__name__`, `__qualname__`, and `__module__` are strings or
+they raise.
 
 Patterns **without** a dot match the bare member name. Patterns
 **with** a dot match owner-qualified names:

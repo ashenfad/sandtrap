@@ -588,11 +588,13 @@ def make_gates(
         # describe the object with, and for nothing else. Resolution is
         # static, so no attribute code the host wrote runs on the way to
         # the answer, and the answer counts only if it is an exact str --
-        # a str subclass carries an attribute surface of its own -- or
-        # None for a missing docstring.
+        # a str subclass carries an attribute surface of its own. None
+        # passes for `__doc__` alone, where it is the ordinary answer for
+        # an object with no docstring; a name, a qualified name, and a
+        # module are strings or they are nothing.
         if attr in INTROSPECTION_DUNDERS:
             value = _static_introspection_value(obj, attr)
-            if type(value) is str or value is None:
+            if type(value) is str or (value is None and attr == "__doc__"):
                 return value
             lineno = _caller_lineno()
             loc = f" (line {lineno})" if lineno else ""

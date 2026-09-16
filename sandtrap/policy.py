@@ -372,7 +372,8 @@ BLOCKED_INTERNAL_ATTRS = frozenset(
 # dict can bind any object under them, and a metaclass property or a module
 # __getattr__ can run arbitrary code to answer.  So the attribute gate
 # resolves them statically and hands back only a stored or header-level
-# string (None as well, for a docstring a class does not have).
+# string -- plus None for __doc__, which is what an object without a
+# docstring has, and which the other three never answer with.
 INTROSPECTION_DUNDERS = frozenset(
     {
         "__name__",
