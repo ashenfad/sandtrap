@@ -157,6 +157,133 @@ s = ml.__str__()
     assert result.namespace["s"] == "[1, 2, 3]"
 
 
+def test_introspection_dunders_on_sandbox_definitions(sandbox):
+    """__name__, __qualname__, __module__ and __doc__ read as strings."""
+    result = sandbox.exec("""\
+class Boom(Exception):
+    \"\"\"boom doc\"\"\"
+
+def helper():
+    pass
+
+try:
+    raise Boom("x")
+except Exception as e:
+    exc_name = type(e).__name__
+
+qualname = Boom.__qualname__
+module = helper.__module__
+doc = Boom.__doc__
+instance_doc = Boom("y").__doc__
+""")
+    assert result.error is None
+    assert result.namespace["exc_name"] == "Boom"
+    assert result.namespace["qualname"] == "Boom"
+    assert isinstance(result.namespace["module"], str)
+    assert result.namespace["doc"] == "boom doc"
+    assert result.namespace["instance_doc"] == "boom doc"
+
+
+def test_introspection_dunders_on_builtin_exception(sandbox):
+    """type(e).__name__ names a builtin exception class."""
+    result = sandbox.exec("""\
+try:
+    1 / 0
+except Exception as e:
+    name = type(e).__name__
+    qualname = type(e).__qualname__
+    doc_is_str = isinstance(type(e).__doc__, str)
+""")
+    assert result.error is None
+    assert result.namespace["name"] == "ZeroDivisionError"
+    assert result.namespace["qualname"] == "ZeroDivisionError"
+    assert result.namespace["doc_is_str"] is True
+
+
+def test_introspection_dunders_on_registered_class():
+    """A registration's member filters don't hide the names describing it."""
+
+    class Widget:
+        """widget doc"""
+
+        def ping(self):
+            return "pong"
+
+    policy = Policy()
+    policy.cls(Widget, include=("ping",))
+    sandbox = Sandbox(policy)
+    result = sandbox.exec(
+        """\
+name = Widget.__name__
+doc = Widget.__doc__
+module = Widget.__module__
+instance_name = type(obj).__name__
+""",
+        namespace={"obj": Widget()},
+    )
+    assert result.error is None
+    assert result.namespace["name"] == "Widget"
+    assert result.namespace["doc"] == "widget doc"
+    assert isinstance(result.namespace["module"], str)
+    assert result.namespace["instance_name"] == "Widget"
+
+
+@pytest.mark.parametrize(
+    "expr",
+    [
+        "fn.__class__",
+        "fn.__globals__",
+        "Thing.__dict__",
+        "Thing.__class__",
+        "int.__subclasses__",
+        "fn.__code__",
+        "Thing.__bases__",
+        "Thing.__mro__",
+    ],
+)
+def test_object_graph_dunders_stay_blocked(sandbox, expr):
+    """The traversal dunders raise AttributeError."""
+    result = sandbox.exec(f"""\
+class Thing:
+    pass
+
+def fn():
+    pass
+
+x = {expr}
+""")
+    assert isinstance(result.error, AttributeError)
+    assert "is not accessible" in str(result.error)
+
+
+def test_introspection_dunder_refuses_non_string_value():
+    """A name bound to an object rather than a string is not a name read."""
+
+    class Sneaky:
+        __doc__ = object()
+        __module__ = object()
+
+    policy = Policy()
+    policy.cls(Sneaky)
+    sandbox = Sandbox(policy)
+    for attr in ("__doc__", "__module__"):
+        result = sandbox.exec(f"x = Sneaky.{attr}")
+        assert isinstance(result.error, AttributeError), attr
+        assert f"Attribute '{attr}' is not accessible" in str(result.error)
+
+
+@pytest.mark.parametrize("stmt", ["fn.__doc__ = 'x'", "del fn.__doc__"])
+def test_introspection_dunders_are_read_only(sandbox, stmt):
+    """Reading a name is granted; renaming or re-documenting is not."""
+    result = sandbox.exec(f"""\
+def fn():
+    pass
+
+{stmt}
+""")
+    assert isinstance(result.error, AttributeError)
+
+
 def test_fstring_with_attr(sandbox):
     """f-string accessing obj.attr goes through gate."""
     result = sandbox.exec("""\

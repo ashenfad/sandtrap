@@ -136,6 +136,41 @@ def test_attr_allowed_dunders():
     assert policy.is_attr_allowed(None, "__subclasses__") is False
 
 
+def test_attr_allowed_introspection_dunders():
+    policy = Policy()
+    for attr in ("__name__", "__qualname__", "__module__", "__doc__"):
+        assert policy.is_attr_allowed(None, attr) is True, attr
+    for attr in (
+        "__class__",
+        "__dict__",
+        "__bases__",
+        "__mro__",
+        "__subclasses__",
+        "__globals__",
+        "__closure__",
+        "__self__",
+        "__func__",
+        "__wrapped__",
+    ):
+        assert policy.is_attr_allowed(None, attr) is False, attr
+
+
+def test_attr_allowed_introspection_dunders_on_registered_class():
+    """Member filters select members; these four name the class itself."""
+
+    class Widget:
+        def ping(self):
+            return "pong"
+
+    policy = Policy()
+    policy.cls(Widget, include=("ping",))
+    for attr in ("__name__", "__qualname__", "__module__", "__doc__"):
+        assert policy.is_attr_allowed(Widget, attr) is True, attr
+        assert policy.is_attr_allowed(Widget(), attr) is True, attr
+    assert policy.is_attr_allowed(Widget, "__dict__") is False
+    assert policy.is_attr_allowed(Widget, "__class__") is False
+
+
 def test_attr_allowed_private():
     policy = Policy()
     assert policy.is_attr_allowed(None, "_private") is False

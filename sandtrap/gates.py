@@ -19,7 +19,7 @@ from .builtins import _FrozenBuiltins, make_safe_builtins
 from .errors import StCancelled, StTickLimit, StTimeout
 from .fs import current_fs, suspend
 from .net.context import allow_network, network_allowed
-from .policy import Policy
+from .policy import INTROSPECTION_DUNDERS, Policy
 from .resource_limits import get_rss_bytes
 from .rewriter import Rewriter
 from .wrappers import StClass, StFunction, StInstance
@@ -79,9 +79,10 @@ def _module_export(mod: Any, name: str) -> Any:
 
     Dunders are refused whatever their source. An implementation dunder
     is type machinery wearing a module's name, and a dunder a module
-    *body* assigned is a name the attribute gate already refuses to
-    read, so honouring it here would only make the two spellings
-    disagree about the same name.
+    *body* assigned is a name an import would bind into the caller's
+    namespace as though the module had exported it. The introspection
+    dunders a module does answer for describe the module rather than
+    export anything, and ``mod.__doc__`` is how to read those.
     """
     if name.startswith("__") and name.endswith("__"):
         return _MISSING
@@ -507,6 +508,24 @@ def make_gates(
                 return safe_format_map
 
         value = getattr(obj, attr)
+        # The introspection dunders are readable for the string they
+        # describe the object with, and for nothing else. A class body, a
+        # function attribute, or a module dict can bind any object under
+        # one of those names (`__module__` and `__doc__` take anything,
+        # and a metaclass property can answer `__name__` with whatever it
+        # likes), and handing that object back would turn a name read into
+        # an object grant. An exact str -- a str subclass carries its own
+        # attribute surface -- or None for a missing docstring.
+        if (
+            attr in INTROSPECTION_DUNDERS
+            and type(value) is not str
+            and value is not None
+        ):
+            lineno = _caller_lineno()
+            loc = f" (line {lineno})" if lineno else ""
+            raise AttributeError(
+                f"Attribute '{attr}' is not accessible on '{type(obj).__name__}'{loc}"
+            )
         if callable(value):
             reg = policy._find_registration_for(obj)
             return _maybe_wrap_privileged(value, reg, attr)
@@ -516,7 +535,10 @@ def make_gates(
         obj = _unwrap(obj)
         if isinstance(obj, _ExecModule):
             raise obj._st_refuse_write(attr)
-        if not policy.is_attr_allowed(obj, attr):
+        # The introspection dunders are readable, not writable: renaming or
+        # re-documenting an object the sandbox was merely handed is a write
+        # to host state, and the read is what sandboxed code asked for.
+        if attr in INTROSPECTION_DUNDERS or not policy.is_attr_allowed(obj, attr):
             lineno = _caller_lineno()
             loc = f" (line {lineno})" if lineno else ""
             raise AttributeError(
@@ -528,7 +550,7 @@ def make_gates(
         obj = _unwrap(obj)
         if isinstance(obj, _ExecModule):
             raise obj._st_refuse_write(attr)
-        if not policy.is_attr_allowed(obj, attr):
+        if attr in INTROSPECTION_DUNDERS or not policy.is_attr_allowed(obj, attr):
             lineno = _caller_lineno()
             loc = f" (line {lineno})" if lineno else ""
             raise AttributeError(

@@ -362,8 +362,26 @@ BLOCKED_INTERNAL_ATTRS = frozenset(
     }
 )
 
+# Read-only descriptions of an object: what it is called, where it was
+# defined, what its docstring says.  Each answers with a string and hands
+# back no other object, which is what separates them from __class__,
+# __dict__, __globals__, and the rest of the traversal surface -- type(obj)
+# is the sanctioned way to reach a class, so type(e).__name__ needs none of
+# those.  Nothing in Python enforces the string, though: a class body, a
+# function attribute, or a module dict can bind any object under these
+# names, so the attribute gate returns the value only when it is a str (or
+# None for a missing docstring) and refuses the read otherwise.
+INTROSPECTION_DUNDERS = frozenset(
+    {
+        "__name__",
+        "__qualname__",
+        "__module__",
+        "__doc__",
+    }
+)
+
 # Default dunders accessible in sandboxed code
-DEFAULT_ALLOWED_DUNDERS = frozenset(
+DEFAULT_ALLOWED_DUNDERS = INTROSPECTION_DUNDERS | frozenset(
     {
         "__init__",
         "__str__",
@@ -719,6 +737,13 @@ class Policy:
             # Check include/exclude — against the bare attribute name and
             # its owner-qualified forms (dotted patterns).
             if hasattr(reg, "_include_pred"):
+                # Member filters pick members out of a registered module or
+                # class; the introspection dunders describe the registration
+                # itself and reach nothing inside it, so they read the same
+                # there as on any other object rather than having to survive
+                # an include list (or the default "_*" exclude).
+                if attr in INTROSPECTION_DUNDERS:
+                    return True
                 quals = _qualified_names(obj, attr)
                 if not (
                     reg._include_pred(attr)
