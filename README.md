@@ -123,6 +123,8 @@ The concrete job it does is C extensions. A C library reaches the OS through sys
 
 If the platform can't apply the requested kernel restrictions (missing `sandtrap[kernel]` packages, Landlock-less kernel, unsupported OS), `isolation="kernel"` **fails closed** — it raises `IsolationUnavailable` rather than silently running with no protection. Pass `allow_degraded=True` to proceed anyway; inspect `result.isolation` to see exactly what took effect.
 
+One thing no isolation level scopes: sandtrap's filesystem, network, and stdout patches are installed into the **host process** on first use and never uninstalled. They fall through to the originals when no sandbox is executing, but their blast radius is the whole process — see [Process-global patches](docs/security.md#process-global-patches).
+
 ## Part of the agex stack
 
 sandtrap powers sandboxed code execution in [agex](https://github.com/ashenfad/agex), where AI agents write and execute Python directly against host libraries. Filesystem interception is provided by [monkeyfs](https://github.com/ashenfad/monkeyfs).

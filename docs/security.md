@@ -10,6 +10,8 @@ Source code goes through five stages:
 4. **Compile** -- the rewritten AST is compiled to bytecode
 5. **Execute** -- bytecode runs with restricted `__builtins__` and gate functions in the namespace
 
+Interception itself is not scoped to the sandbox. Filesystem and network interception, the stdout/stderr router, and the contextvar propagation that carries a sandbox's context into threads are patched into the **host process** on first use and are never uninstalled -- they dispatch through a `ContextVar`, so they fall through to the originals whenever no sandbox is executing. Nothing there is scoped to one sandbox or one execution, so a bug in a fall-through path reaches code that never asked for a sandbox at all. See [Process-global patches](#process-global-patches) for what is patched.
+
 ## Gate functions
 
 The rewriter injects calls to these internal functions:
