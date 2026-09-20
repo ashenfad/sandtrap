@@ -125,7 +125,7 @@ with sandbox(Policy(timeout=10.0), isolation="process", filesystem=fs) as sb:
 
 Non-`IsolatedFS` filesystems are **bridged over the RPC channel**: the parent keeps the real instance and registers an internal handler; the worker sees a `RemoteFS` stub whose every operation is a synchronous RPC. The parent's filesystem stays the single source of truth — worker writes land in it, `chdir` moves its cwd, and a worker crash loses nothing already written. (Fork-inheriting an in-memory fs would hand the worker a divergent copy whose writes silently vanish.)
 
-File handles are whole-blob buffered, matching monkeyfs semantics: read modes fetch content once at `open`; writable modes buffer locally and push on `flush`/`close`. Seeks, iteration, and partial reads are local and cost no round-trips.
+A plain binary read (`open(path, "rb")`) is a lazy stream: nothing is fetched at `open`, and the reader's own seeks decide which byte ranges cross the channel, in 64 KiB blocks, so seeking to the end of a large file and reading a little costs one small round-trip rather than the file. Because nothing is snapshotted, a file the parent rewrites while a worker holds it open is seen half-and-half, as it would be through a real file descriptor. Text reads and every write, append and update mode are whole-blob buffered: they fetch the content once at `open`, keep seeks and iteration local, and push the whole file back on `flush`/`close`, which is what the protocol's whole-file `write` can express.
 
 When using a non-`IsolatedFS` filesystem, no kernel-level filesystem restriction is applied (there's no host path to restrict). Seccomp and network isolation still apply.
 
