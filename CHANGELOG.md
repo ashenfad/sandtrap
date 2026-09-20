@@ -47,6 +47,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backend does in 0.2.0; a custom one whose `read()` still takes `(self, path)`
   raises `TypeError` the first time a worker opens a file in binary mode.
 
+### Fixed
+
+- **`pillow` is declared in the `test` extra.** The two import tests that
+  resolve a lazy submodule through `PIL` silently skipped on a clean install,
+  because nothing asked for the package they need.
+
 ## 0.3.7 - 2026-09-16
 
 ### Added

@@ -47,6 +47,9 @@ test = [
     "pytest",
     "pytest-asyncio",
     "pandas",
+    # Two import tests exercise lazy submodule resolution against PIL, the
+    # canonical namespace-package-style layout; undeclared, they skip.
+    "pillow",
 ]
 # Kernel mode on LINUX only: seccomp + Landlock bindings. macOS needs nothing
 # (Seatbelt ships with the OS), and isolation="process" needs nothing anywhere
