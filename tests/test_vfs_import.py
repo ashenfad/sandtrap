@@ -1,5 +1,6 @@
 """Tests for VFS module imports."""
 
+import pickle
 import types
 from contextlib import contextmanager
 
@@ -1054,3 +1055,28 @@ def test_module_type_machinery_is_not_readable_as_an_attribute(isolation):
             assert isinstance(result.error, AttributeError), (
                 f"{expr} leaked: {result.error!r}"
             )
+
+
+def test_a_module_ref_pickled_under_the_old_path_still_loads():
+    """A namespace persisted by an earlier release names the class as
+    ``sandtrap.wrappers.ModuleRef``. Protocol 0 spells the module path
+    as text with no length prefix, so the old path can be substituted
+    into a fresh pickle to stand in for one written back then."""
+    fresh = pickle.dumps(ModuleRef("helpers", file="/helpers.py"), protocol=0)
+    assert b"sandtrap.sandbox" in fresh
+    old = fresh.replace(b"sandtrap.sandbox", b"sandtrap.wrappers")
+
+    ref = pickle.loads(old)
+
+    assert type(ref) is ModuleRef
+    assert ref.name == "helpers"
+    assert ref.file == "/helpers.py"
+
+
+def test_the_old_path_holds_nothing_but_module_ref():
+    """Wrapped mode did not survive under the alias."""
+    import sandtrap.wrappers as old_path
+
+    assert old_path.__all__ == ["ModuleRef"]
+    for gone in ("StFunction", "StClass", "StInstance", "activate_value"):
+        assert not hasattr(old_path, gone)
