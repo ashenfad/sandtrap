@@ -16,7 +16,11 @@ import pytest
 from monkeyfs import IsolatedFS, VirtualFS, current_fs
 
 from sandtrap import IsolationUnavailable, Policy, sandbox
-from sandtrap.process.protocol import ExecMsg, filter_namespace
+from sandtrap.process.protocol import (
+    ExecMsg,
+    filter_namespace,
+    partition_namespace,
+)
 from sandtrap.process.sandbox import ProcessSandbox
 
 
@@ -786,6 +790,19 @@ def test_filter_namespace_empty_dict():
     assert filter_namespace({}) == {}
 
 
+def test_partition_namespace_names_what_it_dropped():
+    """The dropped names come back in the order they appeared."""
+    ns = {"x": 1, "fn": lambda: None, "y": "hello", "gen": (i for i in range(3))}
+    filtered, dropped = partition_namespace(ns)
+    assert filtered == {"x": 1, "y": "hello"}
+    assert dropped == ("fn", "gen")
+
+
+def test_partition_namespace_none():
+    """None has no entries to keep and none to report."""
+    assert partition_namespace(None) == (None, ())
+
+
 # ------------------------------------------------------------------
 # VirtualFS
 # ------------------------------------------------------------------
@@ -967,3 +984,54 @@ def test_process_sandbox_still_starts_on_a_working_platform():
         result = sb.exec("x = 6 * 7")
     assert result.error is None
     assert result.namespace["x"] == 42
+
+
+# ------------------------------------------------------------------
+# ExecResult.dropped
+# ------------------------------------------------------------------
+
+
+def test_worker_result_names_the_values_it_could_not_pickle():
+    """A value that can't cross the boundary leaves its name behind, so
+    the caller can explain the variable that isn't in the namespace."""
+    with sandbox(Policy(timeout=10.0), isolation="process") as sb:
+        result = sb.exec("kept = 7\nfn = lambda x: x\ngen = (i for i in range(3))\n")
+
+    assert result.error is None
+    assert set(result.dropped) == {"fn", "gen"}
+    assert "fn" not in result.namespace
+    assert "gen" not in result.namespace
+    assert result.namespace["kept"] == 7
+
+
+def test_worker_result_names_a_dropped_open_file():
+    """An open file handle is the everyday case."""
+    fs = VirtualFS({})
+    fs.write("/data.txt", b"hello")
+
+    with sandbox(Policy(timeout=10.0), isolation="process", filesystem=fs) as sb:
+        result = sb.exec("handle = open('/data.txt')\ntext = handle.read()\n")
+
+    assert result.error is None
+    assert result.dropped == ("handle",)
+    assert result.namespace["text"] == "hello"
+
+
+def test_worker_result_drops_nothing_when_everything_pickles():
+    """No loss, no names."""
+    with sandbox(Policy(timeout=10.0), isolation="process") as sb:
+        result = sb.exec("x = [1, 2, 3]\ny = 'ok'\n")
+
+    assert result.error is None
+    assert result.dropped == ()
+
+
+def test_in_process_drops_nothing():
+    """In-process execution returns the live namespace, so there is
+    nothing to drop and nothing to report."""
+    with sandbox(Policy(timeout=10.0), isolation="none") as sb:
+        result = sb.exec("fn = lambda x: x + 1\n")
+
+    assert result.error is None
+    assert result.dropped == ()
+    assert result.namespace["fn"](1) == 2

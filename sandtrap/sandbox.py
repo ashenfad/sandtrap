@@ -256,6 +256,13 @@ class ExecResult:
     process/kernel sandboxes; ``None`` for in-process execution.  Lets
     the host confirm what restrictions are in force rather than trusting
     the requested level was achievable — see :class:`IsolationStatus`."""
+    dropped: tuple[str, ...] = ()
+    """Names the execution bound that are missing from ``namespace``
+    because they could not be pickled out of a process worker (an open
+    file, a lambda, a generator).  A caller that finds a variable gone
+    can say *which* one and why, rather than reading the absence as a
+    bug.  Always empty for in-process execution, which returns the live
+    namespace and drops nothing."""
 
 
 class Sandbox:
