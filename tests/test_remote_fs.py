@@ -165,3 +165,45 @@ def test_replace_crosses_the_boundary(fs, sb):
     r = sb.exec("import os\nos.replace('/old.txt', '/new.txt')")
     assert r.error is None, r.error
     assert fs.exists("/new.txt") and not fs.exists("/old.txt")
+
+
+class _CountingFS:
+    """A filesystem that records every read asked of it.
+
+    Wraps a real one and forwards everything else untouched, so a test
+    can see the ranges the bridge actually requested rather than the
+    bytes a worker ended up with.
+    """
+
+    def __init__(self, fs):
+        self._fs = fs
+        self.reads: list[tuple[str, int, int]] = []
+
+    def read(self, path, offset=0, size=-1):
+        self.reads.append((path, offset, size))
+        return self._fs.read(path, offset, size)
+
+    def __getattr__(self, name):
+        return getattr(self._fs, name)
+
+
+def test_a_ranged_read_crosses_the_boundary_as_a_range():
+    """A worker asking for 50 bytes in the middle of a megabyte must
+    cost the parent one 50-byte read, not a whole file it then slices."""
+    import monkeyfs
+
+    payload = bytes(range(256)) * 4096  # 1 MiB
+    fs = _CountingFS(VirtualFS({}))
+    fs.write("/blob.bin", payload)
+    fs.reads.clear()
+
+    policy = Policy(timeout=15.0)
+    policy.module(monkeyfs, recursive=True)
+    with sandbox(policy, isolation="process", filesystem=fs) as sb:
+        r = sb.exec(
+            "from monkeyfs import current_fs\n"
+            "chunk = current_fs.get().read('/blob.bin', 500_000, 50)\n"
+        )
+    assert r.error is None, r.error
+    assert r.namespace["chunk"] == payload[500_000:500_050]
+    assert fs.reads == [("/blob.bin", 500_000, 50)]

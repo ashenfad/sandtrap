@@ -73,18 +73,29 @@ _FS_METHODS = frozenset(
 def fs_rpc_handler(fs: Any):
     """Parent-side RPC handler wrapping a real filesystem.
 
-    Content moves as whole blobs (``read``/``write`` in bytes);
+    A read carries a byte range and a write carries a whole blob;
     metadata operations dispatch by allowlisted name. Prefers the
     filesystem's own ``read``/``write`` conveniences (monkeyfs
     implementations have them) and falls back to ``open``.
     """
 
-    def _read(path: str) -> bytes:
+    def _read(path: str, offset: int = 0, size: int = -1) -> bytes:
+        """Read a byte range, as the backend protocol defines one.
+
+        ``offset`` counts from the start of the file and a negative one
+        is an error rather than a wrap; a negative ``size`` reads to the
+        end. The wrapped filesystem is asked for exactly that range, so
+        a worker that seeks into a large file moves the bytes it seeks
+        to and no others.
+        """
         read = getattr(fs, "read", None)
         if callable(read):
-            return bytes(read(path))
+            return bytes(read(path, offset, size))
+        if offset < 0:
+            raise ValueError(f"negative read offset: {offset}")
         with fs.open(path, "rb") as f:
-            return f.read()
+            f.seek(offset)
+            return f.read(size if size >= 0 else -1)
 
     def _write(path: str, data: bytes) -> None:
         write = getattr(fs, "write", None)
@@ -114,8 +125,15 @@ class RemoteFS:
 
     # -- content -----------------------------------------------------
 
-    def read(self, path: str) -> bytes:
-        return self._proxy._call("read", path)
+    def read(self, path: str, offset: int = 0, size: int = -1) -> bytes:
+        """Read a byte range of ``path`` from the parent's filesystem.
+
+        The range crosses the channel as a range: only the bytes asked
+        for come back, so a reader seeking inside a large file does not
+        pay for the rest of it. The filesystem the embedder handed the
+        sandbox has to accept both arguments.
+        """
+        return self._proxy._call("read", path, offset, size)
 
     def write(self, path: str, data: Any) -> None:
         if isinstance(data, str):
