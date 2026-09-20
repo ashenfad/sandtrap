@@ -216,33 +216,11 @@ def identity(x):
     assert fn(42) == 42
 
 
-# -- Wrapped mode unaffected --------------------------------------------------
-
-
-def test_wrapped_mode_not_affected():
-    """Wrapped mode should continue to use StFunction, not context capture."""
-    vfs = _make_vfs()
-    policy = Policy(timeout=5.0)
-    sb = Sandbox(policy, mode="wrapped", filesystem=vfs)
-
-    result = sb.exec("""\
-def identity(x):
-    return x
-""")
-    assert result.error is None
-
-    fn = result.namespace["identity"]
-    # In wrapped mode, functions are StFunction instances
-    from sandtrap.wrappers import StFunction
-
-    assert isinstance(fn, StFunction)
-
-
 # -- Timeout not bypassed during exec ----------------------------------------
 
 
 def test_loop_calling_functions_still_times_out():
-    """A loop calling wrapped functions during exec should still timeout."""
+    """A loop calling context-captured functions still times out."""
     vfs = _make_vfs()
     policy = Policy(timeout=0.5)
     sb = Sandbox(policy, mode="raw", filesystem=vfs)

@@ -1,12 +1,12 @@
 """Tests for VFS module imports."""
 
-import pickle
+import types
 from contextlib import contextmanager
 
 import pytest
 
 from sandtrap import IsolationUnavailable, Policy, Sandbox, VirtualFS, sandbox
-from sandtrap.wrappers import ModuleRef, StClass, StFunction
+from sandtrap.wrappers import ModuleRef
 
 
 def _make_sandbox(**kwargs):
@@ -416,13 +416,13 @@ def test_relative_import_nonexistent_name():
 
 
 # ------------------------------------------------------------------
-# VFS wrapped mode wrapping
+# VFS module definitions
 # ------------------------------------------------------------------
 
 
-def test_vfs_function_is_sbfunction_in_wrapped_mode():
-    """VFS module functions are StFunction in wrapped mode."""
-    sandbox, fs = _make_sandbox(mode="wrapped")
+def test_vfs_function_is_a_plain_function():
+    """A function imported from a VFS module is an ordinary function."""
+    sandbox, fs = _make_sandbox()
     fs.write("/helpers.py", b"def double(x): return x * 2")
 
     result = sandbox.exec("""\
@@ -431,27 +431,12 @@ result = double(5)
 """)
     assert result.error is None
     assert result.namespace["result"] == 10
-    assert isinstance(result.namespace["double"], StFunction)
+    assert type(result.namespace["double"]) is types.FunctionType
 
 
-def test_vfs_function_is_regular_in_raw_mode():
-    """VFS module functions are regular functions in raw mode."""
-    sandbox, fs = _make_sandbox(mode="raw")
-    fs.write("/helpers.py", b"def double(x): return x * 2")
-
-    result = sandbox.exec("""\
-from helpers import double
-result = double(5)
-""")
-    assert result.error is None
-    assert result.namespace["result"] == 10
-    assert not isinstance(result.namespace["double"], StFunction)
-    assert callable(result.namespace["double"])
-
-
-def test_vfs_class_is_sbclass_in_wrapped_mode():
-    """VFS module classes are StClass in wrapped mode."""
-    sandbox, fs = _make_sandbox(mode="wrapped")
+def test_vfs_class_is_a_plain_class():
+    """A class imported from a VFS module is an ordinary class."""
+    sandbox, fs = _make_sandbox()
     fs.write(
         "/models.py",
         b"""\
@@ -469,26 +454,7 @@ result = p.x + p.y
 """)
     assert result.error is None
     assert result.namespace["result"] == 7
-    assert isinstance(result.namespace["Point"], StClass)
-
-
-def test_vfs_function_pickle_roundtrip():
-    """VFS module StFunction survives pickle round-trip."""
-    sandbox, fs = _make_sandbox(policy=Policy(tick_limit=10_000), mode="wrapped")
-    fs.write("/helpers.py", b"def double(x): return x * 2")
-
-    result = sandbox.exec("from helpers import double")
-    assert result.error is None
-    double = result.namespace["double"]
-
-    # Pickle and restore
-    data = pickle.dumps(double)
-    restored = pickle.loads(data)
-    assert isinstance(restored, StFunction)
-
-    # Activate and call
-    sandbox.activate(restored)
-    assert restored(21) == 42
+    assert isinstance(result.namespace["Point"], type)
 
 
 def test_vfs_module_getattr_gated():
