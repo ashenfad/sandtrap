@@ -1,24 +1,12 @@
 """AST rewriter: validates and transforms Python AST for sandboxed execution."""
 
 import ast
-import copy
 import sys
-from collections.abc import Sequence
 from typing import TypeVar, cast
 
 from .errors import StValidationError
 
 _N = TypeVar("_N", bound=ast.AST)
-
-
-def _extract_names(nodes: Sequence[ast.AST]) -> set[str]:
-    """Extract all non-internal Name.id references from AST nodes."""
-    names: set[str] = set()
-    for node in nodes:
-        for child in ast.walk(node):
-            if isinstance(child, ast.Name) and not child.id.startswith("__st_"):
-                names.add(child.id)
-    return names
 
 
 # Names that cannot be assigned to, deleted, or declared global/nonlocal.
@@ -48,15 +36,10 @@ class Rewriter(ast.NodeTransformer):
     in generic_visit.
     """
 
-    def __init__(self, *, wrapped_mode: bool = False, echo: str = "none") -> None:
+    def __init__(self, *, echo: str = "none") -> None:
         super().__init__()
         self._tmp_counter = 0
-        self._wrapped_mode = wrapped_mode
         self._echo = echo
-        self._func_asts: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
-        self._class_asts: list[ast.ClassDef] = []
-        self._class_depth = 0
-        self._func_depth = 0
 
     def _new_tmp(self) -> str:
         name = f"__st_tmp_{self._tmp_counter}"
@@ -477,60 +460,14 @@ class Rewriter(ast.NodeTransformer):
         return node
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST | list[ast.stmt]:
-        self._func_depth += 1
-        try:
-            node = self._prepend_checkpoint(node)
-        finally:
-            self._func_depth -= 1
-        if self._wrapped_mode:
-            if self._class_depth > 0:
-                return node  # Wrapped mode: StClass handles methods
-            return self._wrap_defun(node)
+        node = self._prepend_checkpoint(node)
         return self._wrap_context_capture(node)
 
     def visit_AsyncFunctionDef(
         self, node: ast.AsyncFunctionDef
     ) -> ast.AST | list[ast.stmt]:
-        self._func_depth += 1
-        try:
-            node = self._prepend_checkpoint(node)
-        finally:
-            self._func_depth -= 1
-        if self._wrapped_mode:
-            if self._class_depth > 0:
-                return node  # Wrapped mode: StClass handles methods
-            return self._wrap_defun(node)
+        node = self._prepend_checkpoint(node)
         return self._wrap_context_capture(node)
-
-    def _wrap_defun(
-        self, node: ast.FunctionDef | ast.AsyncFunctionDef
-    ) -> list[ast.stmt]:
-        """Wrap a function def with __st_defun__ for wrapped mode."""
-        if self._func_depth > 0:
-            # Inner function: embed source string (survives cross-turn activation)
-            ast_ref = ast.Constant(value=ast.unparse(node))
-        else:
-            # Top-level function: index into _func_asts
-            idx = len(self._func_asts)
-            self._func_asts.append(copy.deepcopy(node))
-            ast_ref = ast.Constant(value=idx)
-
-        # name = __st_defun__(name, name_ref, ast_ref)
-        wrap_call = ast.Call(
-            func=ast.Name(id="__st_defun__", ctx=ast.Load()),
-            args=[
-                ast.Constant(value=node.name),
-                ast.Name(id=node.name, ctx=ast.Load()),
-                ast_ref,
-            ],
-            keywords=[],
-        )
-        wrap_assign = ast.Assign(
-            targets=[ast.Name(id=node.name, ctx=ast.Store())],
-            value=wrap_call,
-        )
-        ast.copy_location(wrap_assign, node)
-        return [node, wrap_assign]
 
     def visit_ClassDef(self, node: ast.ClassDef) -> ast.AST | list[ast.stmt]:
         # Reject __del__ — prevent pointers to the real runtime and
@@ -543,52 +480,12 @@ class Rewriter(ast.NodeTransformer):
                         lineno=item.lineno,
                         col=item.col_offset,
                     )
-        self._class_depth += 1
-        try:
-            node = cast(ast.ClassDef, self._recurse(node))
-        finally:
-            self._class_depth -= 1
-        if not self._wrapped_mode or self._class_depth > 0:
-            return node
-        return self._wrap_defclass(node)
-
-    def _wrap_defclass(self, node: ast.ClassDef) -> list[ast.stmt]:
-        """Wrap a class def with __st_defclass__ for wrapped mode."""
-        idx = len(self._class_asts)
-        self._class_asts.append(copy.deepcopy(node))
-
-        # Capture decorator and base class name references for freezing.
-        # These values must be available when recompiling from AST.
-        ref_names = _extract_names(node.decorator_list + node.bases)
-
-        keywords = [
-            ast.keyword(
-                arg=name,
-                value=ast.Name(id=name, ctx=ast.Load()),
-            )
-            for name in sorted(ref_names)
-        ]
-
-        wrap_call = ast.Call(
-            func=ast.Name(id="__st_defclass__", ctx=ast.Load()),
-            args=[
-                ast.Constant(value=node.name),
-                ast.Name(id=node.name, ctx=ast.Load()),
-                ast.Constant(value=idx),
-            ],
-            keywords=keywords,
-        )
-        wrap_assign = ast.Assign(
-            targets=[ast.Name(id=node.name, ctx=ast.Store())],
-            value=wrap_call,
-        )
-        ast.copy_location(wrap_assign, node)
-        return [node, wrap_assign]
+        return cast(ast.ClassDef, self._recurse(node))
 
     def _wrap_context_capture(
         self, node: ast.FunctionDef | ast.AsyncFunctionDef
     ) -> list[ast.stmt]:
-        """Wrap a function def with __st_capture_context__ for raw mode.
+        """Wrap a function def with __st_capture_context__.
 
         Captures sandbox ContextVars (filesystem, network) at definition time
         so that callbacks fired outside sb.exec() retain isolation.
@@ -633,8 +530,6 @@ class Rewriter(ast.NodeTransformer):
 
     def visit_Lambda(self, node: ast.Lambda) -> ast.AST:
         node = self._recurse(node)
-        if self._wrapped_mode:
-            return node
         return ast.Call(
             func=ast.Name(id="__st_capture_context__", ctx=ast.Load()),
             args=[node],

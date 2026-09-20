@@ -708,16 +708,20 @@ def test_mode_raw(root):
 # ------------------------------------------------------------------
 
 
-def test_wrapped_mode_warns(root):
-    with pytest.warns(DeprecationWarning, match="deprecated"):
+def test_wrapped_mode_raises(root):
+    with pytest.raises(ValueError, match="removed in 0.4.0"):
         ProcessSandbox(
             Policy(timeout=10.0), filesystem=IsolatedFS(root), mode="wrapped"
         )
 
 
-def test_raw_mode_does_not_warn(root, recwarn):
-    ProcessSandbox(Policy(timeout=10.0), filesystem=IsolatedFS(root))
-    assert [w for w in recwarn.list if issubclass(w.category, DeprecationWarning)] == []
+def test_raw_mode_is_accepted(root):
+    with ProcessSandbox(
+        Policy(timeout=10.0), filesystem=IsolatedFS(root), mode="raw"
+    ) as ps:
+        result = ps.exec("x = 2 + 3")
+        assert result.error is None
+        assert result.namespace["x"] == 5
 
 
 # ------------------------------------------------------------------

@@ -7,7 +7,6 @@ import pickle
 import signal
 import traceback
 import uuid
-import warnings
 from multiprocessing.connection import Connection
 from typing import Any, Callable, Literal, Mapping
 
@@ -209,7 +208,7 @@ def worker_main(
     conn: Connection,
     policy: Any,
     filesystem: Any | None,
-    mode: Literal["wrapped", "raw"],
+    mode: Literal["raw"],
     isolation: Literal["auto", "none"],
     snapshot_prints: bool = False,
     echo: Literal["none", "last", "all"] = "none",
@@ -276,18 +275,13 @@ def worker_main(
             allow_host_fs=policy.needs_host_fs(),
         )
 
-        with warnings.catch_warnings():
-            # The host warned about mode="wrapped" when it built the
-            # ProcessSandbox. This construction is the worker's internal
-            # copy of that decision, not a second one the embedder made.
-            warnings.simplefilter("ignore", DeprecationWarning)
-            sandbox = Sandbox(
-                policy,
-                mode=mode,
-                filesystem=filesystem,
-                snapshot_prints=snapshot_prints,
-                echo=echo,
-            )
+        sandbox = Sandbox(
+            policy,
+            mode=mode,
+            filesystem=filesystem,
+            snapshot_prints=snapshot_prints,
+            echo=echo,
+        )
 
         # Install SIGUSR1 handler for cancel — single reader on the pipe,
         # no race conditions.

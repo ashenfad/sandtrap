@@ -6,11 +6,9 @@ import builtins as _builtins
 import copy
 import itertools
 import linecache
-import os
 import sys
 import threading
 import time
-import warnings
 from collections.abc import Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass, field
@@ -40,7 +38,6 @@ from .net.patch import install as install_net
 from .policy import Policy
 from .resource_limits import get_rss_bytes, memory_limit_context
 from .rewriter import Rewriter
-from .wrappers import ModuleRef, StClass, StFunction, StInstance, activate_value
 
 _exec_counter = itertools.count(1)
 _INTERNAL_KEYS = {"__builtins__", "__name__"}
@@ -98,39 +95,41 @@ def _validate_modules(
             )
 
 
-_WRAPPED_MODE_DEPRECATION = (
-    'mode="wrapped" is deprecated and will be removed in a future minor '
-    'release. Use the default mode="raw", which returns plain Python '
-    "objects (functions, classes, instances) instead of StFunction / "
-    "StClass / StInstance wrappers."
+_WRAPPED_MODE_REMOVED = (
+    'mode="wrapped" was removed in 0.4.0. The only mode is "raw" (the '
+    "default), which returns plain Python objects for sandbox-defined "
+    "functions, classes, and instances. Code meant to be reused across "
+    "turns belongs in an importable module rather than in a persisted "
+    "wrapper."
 )
 
-_PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__)) + os.sep
+
+def _validate_mode(mode: Any) -> None:
+    """Reject any ``mode`` but ``"raw"`` at construction."""
+    if mode != "raw":
+        if mode == "wrapped":
+            raise ValueError(_WRAPPED_MODE_REMOVED)
+        raise ValueError(f'Invalid mode: {mode!r}. The only mode is "raw".')
 
 
-def _warn_if_wrapped_mode(mode: Any) -> None:
-    """Warn once per construction when a caller asks for wrapped mode.
+class ModuleRef:
+    """Pickleable stand-in for a module in a persisted namespace.
 
-    The warning is attributed to the nearest frame outside sandtrap, so
-    it points at the construction site and the default
-    ``DeprecationWarning`` filter judges it by the caller's module
-    rather than by sandtrap's own. Sandboxes are built both directly
-    and through :func:`sandtrap.sandbox`, which is one frame deeper.
+    A module object can't be pickled, so an embedder that stores the
+    namespace between turns stores this instead and hands it back in the
+    next execution's ``namespace``.  ``Sandbox`` re-imports it through
+    the import gate, which means the policy in force at that moment
+    decides whether the import is allowed.  Works for filesystem modules
+    and policy-registered ones alike, including aliased imports such as
+    ``import math as m``.
     """
-    if mode != "wrapped":
-        return
-    # stacklevel 2 is this function's immediate caller; each sandtrap
-    # frame above it costs one more level.
-    stacklevel = 2
-    frame: Any = sys._getframe(1)
-    while frame is not None and frame.f_code.co_filename.startswith(_PACKAGE_DIR):
-        frame = frame.f_back
-        stacklevel += 1
-    warnings.warn(
-        _WRAPPED_MODE_DEPRECATION,
-        DeprecationWarning,
-        stacklevel=stacklevel,
-    )
+
+    def __init__(self, name: str, file: str | None = None) -> None:
+        self.name = name
+        self.file = file
+
+    def __repr__(self) -> str:
+        return f"<ModuleRef '{self.name}'>"
 
 
 class IsolationUnavailable(RuntimeError):
@@ -276,20 +275,20 @@ class Sandbox:
         self,
         policy: Policy,
         *,
-        mode: Literal["wrapped", "raw"] = "raw",
+        mode: Literal["raw"] = "raw",
         filesystem: FileSystem | None = None,
         snapshot_prints: bool = False,
         echo: Literal["none", "last", "all"] = "none",
     ) -> None:
-        _warn_if_wrapped_mode(mode)
+        _validate_mode(mode)
         self.policy = policy
         self.mode = mode
         self.filesystem = filesystem
         self.snapshot_prints = snapshot_prints
         # REPL-style auto-display of top-level expression statements.
         # Fixed at construction: the setting changes the compiled AST,
-        # so making it mutable would require invalidating any cached
-        # compilations (e.g. StClass._compiled_cls in raw mode).
+        # so a mutable one would leave already-compiled code disagreeing
+        # with the display function.
         _validate_echo(echo)
         self.echo = echo
         self._cancel_flag = threading.Event()
@@ -317,75 +316,35 @@ class Sandbox:
         """
         self._cancel_flag.set()
 
-    def _auto_activate(
+    def _resolve_module_refs(
         self,
         ns: dict[str, Any],
         gates: dict[str, Any],
     ) -> None:
-        """Auto-activate any inactive StFunction/StClass/StInstance in namespace.
+        """Turn any :class:`ModuleRef` in the namespace back into a module.
 
-        Walks top-level namespace entries and activates wrappers in place.
-        Host-side container objects (e.g. agex's ``Cache``) that hold
-        their own sandbox-defined values can opt into activation by
-        implementing
-        ``__sandtrap_activate__(activate_value, gates, sandbox, namespace)``
-        — the hook receives the activator function plus the current
-        ``gates`` / ``sandbox`` / top-level ``namespace`` so the
-        container can walk its contents and activate them with full
-        late-binding resolution.  Hook exceptions are swallowed so a
-        misbehaving container doesn't break ``exec``.
-
-        The hook is **not** invoked on sandbox-defined wrappers
-        (``StFunction``/``StClass``/``StInstance``) or ``ModuleRef``.
-        Sandbox-defined code is untrusted; allowing it to receive the
-        live ``gates`` dict would be a sandbox escape (the hook body
-        could mutate gates to bypass policy on later operations).
-        Hook callers must therefore be host-side containers defined by
-        the embedder, not values produced by sandboxed code.
+        A module object cannot be carried from one execution to the next
+        by an embedder that persists the namespace, so a host that keeps
+        state between turns stores the reference instead and hands it
+        back here. Resolution goes through the import gate, so the
+        policy decides all over again whether the module is importable.
         """
         import_gate = gates.get("__st_import__")
+        if import_gate is None:
+            return
         for k, v in list(ns.items()):
-            activate_value(v, gates, sandbox=self, namespace=ns)
-            if isinstance(v, ModuleRef) and import_gate is not None:
-                try:
-                    top = v.name.split(".")[0]
-                    if k == top:
-                        # Bare dotted import (import pkg.mod) — return top-level package
-                        ns[k] = import_gate(v.name)
-                    else:
-                        # Aliased import (import pkg.mod as m) — return leaf module
-                        ns[k] = import_gate(v.name, alias=k)
-                except Exception:
-                    pass  # VFS file may no longer exist
-            # Skip sandbox-defined wrappers — they're untrusted, and
-            # invoking a hook on them would hand the live gates dict
-            # to sandboxed code.  Only host-side containers may opt in.
-            if isinstance(v, (StFunction, StClass, StInstance, ModuleRef)):
+            if not isinstance(v, ModuleRef):
                 continue
-            hook = getattr(v, "__sandtrap_activate__", None)
-            if callable(hook):
-                try:
-                    hook(activate_value, gates, self, ns)
-                except Exception:
-                    pass  # container hook is best-effort; never break exec
-
-    def _attach_sandbox_refs(
-        self,
-        ns: dict[str, Any],
-        gates: dict[str, Any],
-    ) -> None:
-        """Attach sandbox/gates refs to wrappers that don't have them yet.
-
-        Functions and classes created during exec() need these refs so
-        that direct calls from host code get full sandbox protections.
-        """
-        for v in ns.values():
-            if isinstance(v, StFunction) and v._sandbox is None:
-                v._sandbox = self
-                v._gates = gates
-            elif isinstance(v, StClass) and v._sandbox is None:
-                v._sandbox = self
-                v._gates = gates
+            try:
+                top = v.name.split(".")[0]
+                if k == top:
+                    # Bare dotted import (import pkg.mod) — return top-level package
+                    ns[k] = import_gate(v.name)
+                else:
+                    # Aliased import (import pkg.mod as m) — return leaf module
+                    ns[k] = import_gate(v.name, alias=k)
+            except Exception:
+                pass  # VFS file may no longer exist
 
     def _call_in_context(
         self,
@@ -645,9 +604,8 @@ class Sandbox:
         except SyntaxError as e:
             return ExecResult(error=e)
 
-        wrapped_mode = self.mode == "wrapped"
         effective_echo = self.echo if echo is None else echo
-        rewriter = Rewriter(wrapped_mode=wrapped_mode, echo=effective_echo)
+        rewriter = Rewriter(echo=effective_echo)
         try:
             tree = rewriter.visit(tree)
         except StValidationError as e:
@@ -694,7 +652,6 @@ class Sandbox:
 
         code = compile(tree, filename, "exec")
 
-        wrapped_mode = self.mode == "wrapped"
         self._cancel_flag.clear()
         mem_limit_bytes, start_rss = self._memory_params()
         # Buffers first: the synthetic sys's stdout/stderr route to them,
@@ -710,9 +667,6 @@ class Sandbox:
             self.policy,
             _start_time=time.monotonic(),
             _cancel_flag=self._cancel_flag,
-            _func_asts=rewriter._func_asts if wrapped_mode else None,
-            _class_asts=rewriter._class_asts if wrapped_mode else None,
-            _wrapped_mode=wrapped_mode,
             _memory_limit_bytes=mem_limit_bytes,
             _start_rss=start_rss,
             _filesystem=self.filesystem,
@@ -730,7 +684,7 @@ class Sandbox:
             echo=rewriter._echo,
             modules=modules,
         )
-        self._auto_activate(ns, gates)
+        self._resolve_module_refs(ns, gates)
 
         return code, filename, gates, ns, injected, stdout_buf, stderr_buf, prints_list
 
@@ -746,9 +700,7 @@ class Sandbox:
         error: BaseException | None,
         extra_locals: dict[str, Any] | None = None,
     ) -> ExecResult:
-        """Post-execution: attach refs, build result namespace, clean up."""
-        self._attach_sandbox_refs(ns, gates)
-
+        """Post-execution: build the result namespace and clean up."""
         # A module the embedder provided lasts exactly as long as the
         # execution it was provided for: dropping it here is what keeps a
         # pooled worker from carrying one into the next exec, and what
@@ -865,26 +817,6 @@ class Sandbox:
         return self._build_result(
             ns, injected, gates, stdout_buf, stderr_buf, prints_list, filename, error
         )
-
-    def activate(
-        self,
-        obj: Any,
-        *,
-        namespace: dict[str, Any] | None = None,
-    ) -> None:
-        """Activate an unpickled StFunction/StClass/StInstance."""
-        gates = make_gates(self.policy)
-        if isinstance(obj, StFunction):
-            obj.activate(gates, sandbox=self, namespace=namespace)
-        elif isinstance(obj, StClass):
-            obj.activate(gates, sandbox=self, namespace=namespace)
-        elif isinstance(obj, StInstance):
-            sb_class = object.__getattribute__(obj, "_st_class")
-            if sb_class._compiled_cls is None:
-                sb_class.activate(gates, sandbox=self, namespace=namespace)
-            obj.activate(gates=gates, sandbox=self, namespace=namespace)
-        else:
-            raise TypeError(f"Cannot activate {type(obj).__name__}")
 
     async def aexec(
         self,

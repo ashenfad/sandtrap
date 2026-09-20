@@ -13,7 +13,7 @@ import time
 import types
 from collections.abc import Mapping
 from contextlib import ExitStack
-from typing import Any, cast
+from typing import Any
 
 from .builtins import _FrozenBuiltins, make_safe_builtins
 from .errors import StCancelled, StTickLimit, StTimeout
@@ -22,7 +22,6 @@ from .net.context import allow_network, network_allowed
 from .policy import INTROSPECTION_DUNDERS, Policy
 from .resource_limits import get_rss_bytes
 from .rewriter import Rewriter
-from .wrappers import StClass, StFunction, StInstance
 
 
 class _SafeFormatter(_string_mod.Formatter):
@@ -211,12 +210,10 @@ class _VFSLoader:
     def __init__(
         self,
         filesystem: Any,
-        wrapped_mode: bool,
         gates: dict[str, Any],
         root: str = "/",
     ) -> None:
         self._filesystem = filesystem
-        self._wrapped_mode = wrapped_mode
         self._gates = gates
         self._cache: dict[str, Any] = {}
         self._print_fn: Any = None
@@ -250,7 +247,7 @@ class _VFSLoader:
         refuses them as ``from <module> import`` targets.
         """
         tree = ast.parse(source)
-        rewriter = Rewriter(wrapped_mode=self._wrapped_mode)
+        rewriter = Rewriter()
         tree = rewriter.visit(tree)
         ast.fix_missing_locations(tree)
         code = compile(tree, f"<sandtrap:vfs:{module_name}>", "exec")
@@ -274,34 +271,6 @@ class _VFSLoader:
             ns["__builtins__"]["open"] = _builtins.open
         ns["__builtins__"] = _FrozenBuiltins(ns["__builtins__"])
         ns.update(self._gates)
-
-        # Override defun/defclass gates with VFS-specific ones that
-        # reference this rewriter's AST lists (not the main code's)
-        if self._wrapped_mode and rewriter._func_asts:
-            vfs_func_asts = rewriter._func_asts
-
-            def _vfs_defun(name: str, compiled_fn: Any, ast_ref: int | str) -> Any:
-                if isinstance(ast_ref, str):
-                    func_ast = cast(ast.FunctionDef, ast.parse(ast_ref).body[0])
-                else:
-                    func_ast = vfs_func_asts[ast_ref]
-                return StFunction(name, compiled_fn, func_ast)
-
-            ns["__st_defun__"] = _vfs_defun
-
-        if self._wrapped_mode and rewriter._class_asts:
-            vfs_class_asts = rewriter._class_asts
-            getattr_gate = self._gates["__st_getattr__"]
-
-            def _vfs_defclass(
-                name: str, compiled_cls: Any, ast_idx: int, **frozen_refs: Any
-            ) -> Any:
-                cls_ast = vfs_class_asts[ast_idx]
-                sb_cls = StClass(name, compiled_cls, cls_ast, frozen_refs=frozen_refs)
-                sb_cls._st_getattr_gate = getattr_gate
-                return sb_cls
-
-            ns["__st_defclass__"] = _vfs_defclass
 
         exec(code, ns)  # noqa: S102
 
@@ -436,9 +405,6 @@ def make_gates(
     *,
     _start_time: float | None = None,
     _cancel_flag: threading.Event | None = None,
-    _func_asts: list | None = None,
-    _class_asts: list | None = None,
-    _wrapped_mode: bool = False,
     _memory_limit_bytes: int | None = None,
     _start_rss: int | None = None,
     _filesystem: Any = None,
@@ -466,18 +432,9 @@ def make_gates(
     # module_root.
     vfs = _VFSLoader(
         _filesystem,
-        _wrapped_mode,
         gates,
         root=getattr(policy, "module_root", "/"),
     )
-
-    def _unwrap(obj: Any) -> Any:
-        """Unwrap StInstance to access the real underlying instance."""
-        if isinstance(obj, StInstance):
-            real = object.__getattribute__(obj, "_st_instance")
-            if real is not None:
-                return real
-        return obj
 
     def _caller_lineno(depth: int = 2) -> int | None:
         """Get the line number of the sandboxed code that triggered a gate."""
@@ -546,7 +503,6 @@ def make_gates(
         return value
 
     def __st_getattr__(obj: Any, attr: str) -> Any:
-        obj = _unwrap(obj)
         if isinstance(obj, _ExecModule):
             # The module's surface is exactly the mapping the embedder
             # wrote, so the policy's member filters have nothing to say
@@ -609,7 +565,6 @@ def make_gates(
         return value
 
     def __st_setattr__(obj: Any, attr: str, value: Any) -> None:
-        obj = _unwrap(obj)
         if isinstance(obj, _ExecModule):
             raise obj._st_refuse_write(attr)
         # The introspection dunders are readable, not writable: renaming or
@@ -624,7 +579,6 @@ def make_gates(
         setattr(obj, attr, value)
 
     def __st_delattr__(obj: Any, attr: str) -> None:
-        obj = _unwrap(obj)
         if isinstance(obj, _ExecModule):
             raise obj._st_refuse_write(attr)
         if attr in INTROSPECTION_DUNDERS or not policy.is_attr_allowed(obj, attr):
@@ -920,30 +874,6 @@ def make_gates(
             __st_importfrom__(name, entry, _depth=1)
         return mod
 
-    def __st_defun__(name: str, compiled_fn: Any, ast_ref: int | str) -> Any:
-        if not _wrapped_mode:
-            return compiled_fn
-
-        if isinstance(ast_ref, str):
-            # Inner function: ast_ref is source string embedded by rewriter
-            func_ast = cast(ast.FunctionDef, ast.parse(ast_ref).body[0])
-        else:
-            if _func_asts is None:
-                return compiled_fn
-            func_ast = _func_asts[ast_ref]
-        return StFunction(name, compiled_fn, func_ast)
-
-    def __st_defclass__(
-        name: str, compiled_cls: Any, ast_idx: int, **frozen_refs: Any
-    ) -> Any:
-        if not _wrapped_mode or _class_asts is None:
-            return compiled_cls
-
-        class_ast = _class_asts[ast_idx]
-        sb_cls = StClass(name, compiled_cls, class_ast, frozen_refs=frozen_refs)
-        sb_cls._st_getattr_gate = __st_getattr__
-        return sb_cls
-
     # Mutable boxes so checkpoint state can be reset for direct calls
     _tick_counter = [0]
     _start_time_box = [_start_time]
@@ -1041,8 +971,6 @@ def make_gates(
             "__st_import__": __st_import__,
             "__st_importfrom__": __st_importfrom__,
             "__st_dynimport__": __st_dynimport__,
-            "__st_defun__": __st_defun__,
-            "__st_defclass__": __st_defclass__,
             "__st_checkpoint__": __st_checkpoint__,
             "__st_capture_context__": __st_capture_context__,
             "__st_vfs__": vfs,

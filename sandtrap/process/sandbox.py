@@ -24,8 +24,8 @@ from ..sandbox import (
     IsolationStatus,
     IsolationUnavailable,
     _validate_echo,
+    _validate_mode,
     _validate_modules,
-    _warn_if_wrapped_mode,
 )
 from .protocol import (
     ExecMsg,
@@ -573,8 +573,8 @@ class ProcessSandbox:
         of truth. Optional — when ``None``, sandboxed code has no
         file I/O.
     mode:
-        ``"raw"`` (default) or ``"wrapped"``.  Same as :class:`Sandbox`,
-        including that ``"wrapped"`` is deprecated and warns.
+        ``"raw"``, the default and the only accepted value.  Same as
+        :class:`Sandbox`.
     isolation:
         ``"auto"`` applies platform-appropriate kernel sandboxing;
         ``"none"`` skips it.
@@ -646,7 +646,7 @@ class ProcessSandbox:
         policy: Policy,
         *,
         filesystem: Any | None = None,
-        mode: Literal["wrapped", "raw"] = "raw",
+        mode: Literal["raw"] = "raw",
         isolation: Literal["auto", "none"] = "auto",
         snapshot_prints: bool = False,
         rpc_handlers: Mapping[str, RpcHandler] | None = None,
@@ -656,7 +656,7 @@ class ProcessSandbox:
         start_method: Literal["fork", "spawn", "forkserver"] | None = None,
         preload_grants: bool = False,
     ) -> None:
-        _warn_if_wrapped_mode(mode)
+        _validate_mode(mode)
         # None means "whatever is safest here" — forkserver on POSIX. Validate
         # rather than defer: an unavailable method is a construction mistake,
         # and discovering it inside a worker start would report as a worker
@@ -920,52 +920,6 @@ class ProcessSandbox:
         self._cleanup()
 
     # ------------------------------------------------------------------
-    # Reactivation
-    # ------------------------------------------------------------------
-
-    def _reactivate_namespace(self, result: ExecResult) -> ExecResult:
-        """Reactivate St* wrappers that crossed the process boundary.
-
-        Namespace values and error payloads (e.g. TaskSuccess.result)
-        containing StFunction/StClass/StInstance arrive inactive after
-        deserialization.  This rebuilds gates from the policy and
-        reactivates them so they're callable on the parent side.
-        """
-        from ..gates import make_gates
-        from ..wrappers import StClass, StFunction, StInstance, activate_value
-
-        st_types = (StFunction, StClass, StInstance)
-
-        def _find_st_objects(value):
-            """Yield St* objects from a value, walking one level into containers."""
-            if isinstance(value, st_types):
-                yield value
-            elif isinstance(value, (list, tuple)):
-                for item in value:
-                    if isinstance(item, st_types):
-                        yield item
-            elif isinstance(value, dict):
-                for v in value.values():
-                    if isinstance(v, st_types):
-                        yield v
-
-        # Collect all St* objects from namespace and error payload
-        sources = list(result.namespace.values())
-        if hasattr(result.error, "result"):
-            sources.append(result.error.result)
-
-        found = [obj for src in sources for obj in _find_st_objects(src)]
-        if not found:
-            return result
-
-        gates = make_gates(self._policy)
-        ns = result.namespace
-        for obj in found:
-            activate_value(obj, gates, namespace=ns)
-
-        return result
-
-    # ------------------------------------------------------------------
     # Execution
     # ------------------------------------------------------------------
 
@@ -1095,7 +1049,7 @@ class ProcessSandbox:
                     isolation=self._isolation_status,
                     dropped=msg.dropped,
                 )
-                return self._reactivate_namespace(result)
+                return result
             if isinstance(msg, WorkerErrorMsg):
                 return ExecResult(error=RuntimeError(f"Worker error:\n{msg.message}"))
             if isinstance(msg, RpcCallMsg):
@@ -1219,7 +1173,7 @@ def _worker_entry(
     parent_connections: tuple[multiprocessing.connection.Connection, ...],
     policy: Policy,
     filesystem: Any | None,
-    mode: Literal["wrapped", "raw"],
+    mode: Literal["raw"],
     isolation: Literal["auto", "none"],
     snapshot_prints: bool = False,
     echo: Literal["none", "last", "all"] = "none",
