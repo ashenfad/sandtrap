@@ -183,6 +183,8 @@ with sandbox(Policy(), isolation="kernel", allow_degraded=True) as sb:
 
 Either way, the Python-level policy enforcement in `Sandbox` is always active regardless of kernel availability. The fail-closed default only governs whether a *missing kernel layer* is treated as an error.
 
+`IsolationUnavailable` also covers the coarser case: a platform whose OS refuses a worker process at all. `multiprocessing` imports everywhere, but some builds ship primitives that raise as soon as they are used -- under emscripten/Pyodide `multiprocessing.Pipe()` reaches `socket.socketpair()` and gets `OSError: [Errno 138] Not supported`. When creating the pipe or starting the worker raises `OSError`, `isolation="process"` and `isolation="kernel"` raise `IsolationUnavailable` naming the platform and that error, with the `OSError` attached as `__cause__`, rather than letting the raw errno out of construction. `isolation="none"` is the fallback there -- it runs in-process and needs no worker.
+
 #### Inspecting what was applied
 
 Every `ExecResult` from a process/kernel sandbox carries an `isolation: IsolationStatus`:

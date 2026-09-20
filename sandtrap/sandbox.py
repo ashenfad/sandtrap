@@ -134,13 +134,19 @@ def _warn_if_wrapped_mode(mode: Any) -> None:
 
 
 class IsolationUnavailable(RuntimeError):
-    """Raised when ``isolation="kernel"`` is requested but the platform
-    can't apply the kernel-level mechanisms it depends on, and the caller
-    hasn't opted into degradation with ``allow_degraded=True``.
+    """Raised when the isolation a caller asked for cannot be provided
+    on this platform.
 
-    Fails loud instead of silently running user code with no kernel
-    restrictions.  Surfaces when the worker is spawned (entering the
-    context manager / first ``exec``), before any user code runs.
+    Two shapes reach it, both at worker startup (entering the context
+    manager / first ``exec``), before any user code runs:
+
+    - ``isolation="kernel"`` was requested and the platform can't apply
+      the kernel-level mechanisms it depends on, and the caller hasn't
+      opted into degradation with ``allow_degraded=True``.  Fails loud
+      instead of silently running user code with no kernel restrictions.
+    - The OS refuses a worker process at all — ``multiprocessing``
+      raising ``OSError`` when the pipe or the process is created.  The
+      underlying error is attached as ``__cause__``.
     """
 
 

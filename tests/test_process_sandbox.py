@@ -1,10 +1,12 @@
 """Tests for ProcessSandbox — subprocess-backed execution."""
 
+import errno
 import multiprocessing
 import os
 import signal
 import socket
 import stat
+import sys
 import threading
 import time
 import warnings
@@ -13,7 +15,7 @@ from unittest.mock import patch
 import pytest
 from monkeyfs import IsolatedFS, VirtualFS, current_fs
 
-from sandtrap import Policy
+from sandtrap import IsolationUnavailable, Policy, sandbox
 from sandtrap.process.protocol import ExecMsg, filter_namespace
 from sandtrap.process.sandbox import ProcessSandbox
 
@@ -920,3 +922,48 @@ def test_write_permission_is_asked_of_the_path_not_the_root():
     assert not fs.exists("/data/out.txt")
     assert allowed.error is None
     assert fs.read("/work/out.txt") == b"yes"
+
+
+# ------------------------------------------------------------------
+# A platform that refuses worker processes
+# ------------------------------------------------------------------
+
+
+def _refuse(*args, **kwargs):
+    """Stand in for an OS primitive that is present but never works."""
+    raise OSError(errno.ENOTSUP, "Not supported")
+
+
+def test_pipe_refused_raises_isolation_unavailable(monkeypatch):
+    """An OS that won't create the parent<->worker pipe is told about
+    as unavailable isolation, not as a raw OSError out of construction."""
+    monkeypatch.setattr(multiprocessing, "Pipe", _refuse)
+
+    with pytest.raises(IsolationUnavailable) as caught:
+        with sandbox(Policy(timeout=10.0), isolation="process"):
+            pass
+
+    assert sys.platform in str(caught.value)
+    assert "Not supported" in str(caught.value)
+    assert isinstance(caught.value.__cause__, OSError)
+    assert caught.value.__cause__.errno == errno.ENOTSUP
+
+
+def test_worker_spawn_refused_raises_isolation_unavailable(monkeypatch):
+    """Same answer when the pipe works but the process will not start."""
+    monkeypatch.setattr(multiprocessing.process.BaseProcess, "start", _refuse)
+
+    with pytest.raises(IsolationUnavailable) as caught:
+        with sandbox(Policy(timeout=10.0), isolation="process"):
+            pass
+
+    assert isinstance(caught.value.__cause__, OSError)
+    assert caught.value.__cause__.errno == errno.ENOTSUP
+
+
+def test_process_sandbox_still_starts_on_a_working_platform():
+    """The conversion is narrow: an OS that can spawn a worker does."""
+    with sandbox(Policy(timeout=10.0), isolation="process") as sb:
+        result = sb.exec("x = 6 * 7")
+    assert result.error is None
+    assert result.namespace["x"] == 42

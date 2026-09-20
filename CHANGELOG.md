@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A platform that refuses worker processes now says so as
+  `IsolationUnavailable`.** `sandbox(..., isolation="process")` raised whatever
+  `multiprocessing` raised out of construction: under emscripten/Pyodide,
+  `multiprocessing.Pipe()` reaches `socket.socketpair()` and the caller got a
+  bare `OSError: [Errno 138] Not supported` from inside sandtrap's worker
+  startup, which reads as a sandtrap bug rather than as "this platform has no
+  process isolation". An `OSError` from creating the pipe or starting the
+  worker is now `IsolationUnavailable` naming the platform and the underlying
+  error, with the `OSError` kept as `__cause__` -- the same answer a kernel
+  mechanism the platform can't provide already gets. The trigger is the
+  failure, not a platform check, so any OS that refuses gets the same honest
+  answer. Only the startup calls convert; an `OSError` raised by sandboxed code
+  is still that code's error.
+
 - **A binary read out of a process worker is lazy, and the filesystem bridge
   forwards the byte range.** The `monkeyfs<0.2.0` cap is lifted to
   `monkeyfs>=0.2.0,<0.3.0`, whose backend protocol reads
