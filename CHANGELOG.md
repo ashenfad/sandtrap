@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **A binary read out of a process worker is lazy, and the filesystem bridge
+  forwards the byte range.** The `monkeyfs<0.2.0` cap is lifted to
+  `monkeyfs>=0.2.0,<0.3.0`, whose backend protocol reads
+  `read(path, offset=0, size=-1)`. `RemoteFS.read()` sends both arguments over
+  the RPC channel and the parent-side handler asks the wrapped filesystem for
+  exactly that range, and `open(path, "rb")` hands back a stream that fetches
+  64 KiB blocks through it instead of an `io.BytesIO` over the whole file.
+  What the old shape cost: `pd.read_parquet(path, columns=[...])` gives pyarrow
+  a file object, pyarrow reads the footer and the two column chunks it needs --
+  2 of 20 columns is 8% of the file -- and under `isolation="process"` the
+  other 92% had already crossed the channel before it asked for the first
+  range, because the proxy materialized the file at `open()`. A reader seeking
+  to a parquet footer now costs one 64 KiB RPC rather than the file, and the
+  length behind `seek(0, 2)` comes from `stat()`, so seeking to the end fetches
+  nothing. A reader that wants the whole file still gets it in one call.
+  Text reads and every write, append and update mode are unchanged: they
+  materialize and push the whole blob on close, which is what the protocol's
+  whole-file `write()` can express, and a read-only parent still refuses a
+  write at `open()` rather than at a garbage-collected close where the refusal
+  would be swallowed and the write lost. **For embedders:** the filesystem
+  handed to a process sandbox must accept `offset` and `size`. Every monkeyfs
+  backend does in 0.2.0; a custom one whose `read()` still takes `(self, path)`
+  raises `TypeError` the first time a worker opens a file in binary mode.
+
 ## 0.3.7 - 2026-09-16
 
 ### Added
