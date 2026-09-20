@@ -21,6 +21,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contract is otherwise unchanged -- the same values are dropped as before, and
   the field has a default, so nothing that builds or reads an `ExecResult`
   needs to know about it.
+### Removed
+
+- **Wrapped mode, deprecated since 0.3.5.** `sandtrap/wrappers.py` is gone --
+  `StFunction`, `StClass`, `StInstance`, and `activate_value` with it -- along
+  with the rewriter transforms that wrapped every `def` and `class`, the
+  `__st_defun__` / `__st_defclass__` gates, the namespace auto-activation and
+  its `__sandtrap_activate__` container hook, `Sandbox.activate()`, and the
+  worker-side reactivation of wrappers crossing the process boundary. A `def`
+  or `class` in sandboxed code compiles to a plain function or class, which is
+  what raw mode already did.
+
+  `mode="wrapped"` now raises `ValueError`. The parameter itself stays on
+  `sandbox()` and both sandbox constructors, typed `Literal["raw"]`, so a
+  caller passing `mode="raw"` explicitly -- which is every known downstream
+  consumer -- is unaffected and needs no edit. It is kept for compatibility
+  rather than because a second mode is coming; it may go in a later release.
+
+  Nobody downstream had used wrapped mode since agex moved to raw, and what it
+  left behind was a latent hazard rather than a feature. A persisted wrapper
+  carried the rewritten AST the sandtrap version that produced it wrote, and
+  recompiled that AST directly on activation with no second pass through the
+  rewriter. The rewritten AST *is* the trust boundary, so a function stored
+  under one version and loaded under a later one ran without the later
+  version's gates: every gate added in between was silently unapplied to
+  stored state. This is why the release is 0.4.0.
 
 ### Changed
 
