@@ -46,16 +46,23 @@ def filter_prints(
     return safe
 
 
-def filter_namespace(ns: Mapping[str, Any] | None) -> dict[str, Any] | None:
-    """Drop non-picklable values from a namespace dict.
+def partition_namespace(
+    ns: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any] | None, tuple[str, ...]]:
+    """Split a namespace into its pickle-safe entries and the names
+    that could not be pickled.
 
-    Returns a new dict containing only pickle-safe key/value pairs.
-    Used by both the parent (to sanitise outgoing namespaces) and the
-    worker (to sanitise result namespaces before sending them back).
+    Returns ``(filtered, dropped)``, where ``filtered`` is a new dict of
+    the pairs that survive and ``dropped`` names the rest in the order
+    they appeared. Used by both the parent (to sanitise outgoing
+    namespaces) and the worker (to sanitise result namespaces before
+    sending them back); the names are what lets either side say which
+    variable went missing rather than only that something did.
     """
     if ns is None:
-        return None
+        return None, ()
     filtered: dict[str, Any] = {}
+    dropped: list[str] = []
     for k, v in ns.items():
         try:
             pickle.dumps(v)
@@ -65,8 +72,18 @@ def filter_namespace(ns: Mapping[str, Any] | None) -> dict[str, Any] | None:
             # exceptions (a closed StringIO raises ValueError;
             # __reduce__ hooks raise whatever they like). Unpicklable
             # means dropped, never fatal.
-            pass
-    return filtered
+            dropped.append(k)
+    return filtered, tuple(dropped)
+
+
+def filter_namespace(ns: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Drop non-picklable values from a namespace dict.
+
+    Returns a new dict containing only pickle-safe key/value pairs.
+    :func:`partition_namespace` does the same work and also names what
+    it dropped.
+    """
+    return partition_namespace(ns)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +140,10 @@ class ResultMsg:
     ticks: int
     prints: list[tuple[Any, ...]]
     stderr: str = ""
+    dropped: tuple[str, ...] = ()
+    """Namespace names the worker could not pickle back, so the parent
+    can name the variable that went missing instead of leaving the
+    caller to notice a `KeyError`."""
 
 
 @dataclass

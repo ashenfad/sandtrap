@@ -424,7 +424,17 @@ start its own broker.
 
 ## Namespace serialization
 
-Namespaces are sent to and from the worker via `multiprocessing.Pipe` (pickle). Non-picklable values (lambdas, locks, etc.) are silently dropped from both input and output namespaces. A `RuntimeWarning` is emitted for each dropped input key.
+Namespaces are sent to and from the worker via `multiprocessing.Pipe` (pickle). Non-picklable values (lambdas, locks, etc.) are dropped from both input and output namespaces. A `RuntimeWarning` is emitted for each dropped input key; on the way back, `result.dropped` names them:
+
+```python
+with sandbox(Policy(), isolation="process") as sb:
+    result = sb.exec("kept = 7\nhandle = open('/data.txt')\n")
+
+result.namespace["kept"]  # 7
+result.dropped            # ("handle",)
+```
+
+A name in `dropped` is not in `namespace` -- the value could not cross the boundary -- and the tuple is what lets a caller say *which* variable is missing and why, rather than reading the absence as a bug. It is always empty under `isolation="none"`, which returns the live namespace and drops nothing.
 
 The `modules` mapping of [per-exec modules](sandbox.md#per-exec-modules) rides the same pipe and takes the same filter, one module's attributes at a time; a dropped attribute warns as `Module attribute host.fn skipped`. A live parent-side object goes in it as an `RpcProxyMarker`, exactly as it would as a namespace entry, and the worker substitutes a proxy before the module object is built -- so the module's attribute *is* the proxy, and the agent's `host.obj.method()` reaches the real object here.
 

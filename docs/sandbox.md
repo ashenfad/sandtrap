@@ -120,6 +120,7 @@ Both `exec()` and `aexec()` return an `ExecResult`:
 | `error` | `BaseException \| None` | Runtime error, or `None` on success |
 | `ticks` | `int` | Number of checkpoint ticks consumed |
 | `prints` | `list[tuple[Any, ...]]` | Raw `print()` args, deep-copied at call time (empty unless `snapshot_prints=True`) |
+| `dropped` | `tuple[str, ...]` | Names missing from `namespace` because the value could not be pickled out of a process worker; always empty in-process ([details](process.md#namespace-serialization)) |
 
 The namespace excludes sandbox internals (`__builtins__`, `__st_*` gates, registered functions/classes, `print`). If user code reassigns a registered name (e.g., `print = 42`), the new value is included.
 

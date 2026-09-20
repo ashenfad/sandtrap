@@ -20,8 +20,8 @@ from .protocol import (
     RpcReturnMsg,
     ShutdownMsg,
     WorkerErrorMsg,
-    filter_namespace,
     filter_prints,
+    partition_namespace,
 )
 
 
@@ -340,7 +340,8 @@ def worker_main(
                     argv=msg.argv,
                     echo=msg.echo,
                 )
-                safe_ns = filter_namespace(result.namespace) or {}
+                safe_ns, dropped = partition_namespace(result.namespace)
+                safe_ns = safe_ns or {}
                 err = result.error
                 if err is not None and err.__traceback__ is not None:
                     # Traceback objects don't survive pickling, so the
@@ -380,6 +381,7 @@ def worker_main(
                         ticks=result.ticks,
                         prints=filter_prints(result.prints),
                         stderr=result.stderr,
+                        dropped=dropped,
                     )
                 )
             except BaseException:

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`ExecResult.dropped` names the variables a process worker could not send
+  back.** A namespace value that fails to pickle -- an open file, a lambda, a
+  generator -- is dropped on its way out of the worker, and until now the only
+  evidence was its absence: the caller saw a `KeyError` on a variable the code
+  plainly assigned, with nothing to distinguish "unpicklable" from "the code
+  never ran that far". `dropped` is a `tuple[str, ...]` of exactly those names,
+  in the order they appeared, so the caller can say which variable went missing
+  and why. It is `()` for in-process execution, which returns the live
+  namespace and drops nothing, and `()` for a worker that dropped nothing. The
+  contract is otherwise unchanged -- the same values are dropped as before, and
+  the field has a default, so nothing that builds or reads an `ExecResult`
+  needs to know about it.
+
 ### Changed
 
 - **A platform that refuses worker processes now says so as

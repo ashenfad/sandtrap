@@ -34,7 +34,7 @@ from .protocol import (
     RpcReturnMsg,
     ShutdownMsg,
     WorkerErrorMsg,
-    filter_namespace,
+    partition_namespace,
 )
 
 # Type alias for RPC handler callables registered with the sandbox.
@@ -985,29 +985,26 @@ class ProcessSandbox:
         if self._conn is None:
             raise RuntimeError("No connection to worker process")
 
-        safe_ns = filter_namespace(namespace)
-        if namespace is not None and safe_ns is not None:
-            for k in namespace:
-                if k not in safe_ns:
-                    warnings.warn(
-                        f"Namespace key {k!r} skipped: value is not picklable",
-                        RuntimeWarning,
-                        stacklevel=2,
-                    )
+        safe_ns, dropped_in = partition_namespace(namespace)
+        for k in dropped_in:
+            warnings.warn(
+                f"Namespace key {k!r} skipped: value is not picklable",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         safe_modules: dict[str, dict[str, Any]] | None = None
         if modules is not None:
             safe_modules = {}
             for mod_name, attributes in modules.items():
-                safe_attrs = filter_namespace(attributes) or {}
-                for k in attributes:
-                    if k not in safe_attrs:
-                        warnings.warn(
-                            f"Module attribute {mod_name}.{k} skipped: value is "
-                            "not picklable",
-                            RuntimeWarning,
-                            stacklevel=2,
-                        )
-                safe_modules[mod_name] = safe_attrs
+                safe_attrs, dropped_attrs = partition_namespace(attributes)
+                for k in dropped_attrs:
+                    warnings.warn(
+                        f"Module attribute {mod_name}.{k} skipped: value is "
+                        "not picklable",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+                safe_modules[mod_name] = safe_attrs or {}
         self._conn.send(
             ExecMsg(
                 source=source,
@@ -1075,6 +1072,7 @@ class ProcessSandbox:
                     ticks=msg.ticks,
                     prints=msg.prints,
                     isolation=self._isolation_status,
+                    dropped=msg.dropped,
                 )
                 return self._reactivate_namespace(result)
             if isinstance(msg, WorkerErrorMsg):
