@@ -24,10 +24,11 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    # 0.1.9: the remaining `pathlib._NormalAccessor` captures on 3.10 are
-    # rebound — including an `expanduser` that leaked the host home — and
-    # `os.path.realpath(strict=True)` is honoured inside a patched block.
-    "monkeyfs>=0.1.9,<0.2.0",
+    # 0.2.0: the backend protocol's read takes a byte range
+    # (`read(path, offset, size)`) and a binary `open()` is a lazy stream
+    # over it, which is what lets the process sandbox's filesystem bridge
+    # forward a seek instead of shipping the whole file.
+    "monkeyfs>=0.2.0,<0.3.0",
 ]
 
 [project.urls]
