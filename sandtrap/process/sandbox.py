@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import multiprocessing
 import os
 import signal
@@ -110,6 +111,22 @@ def _native_crash_error(process: Any, start_method: str) -> RuntimeError:
     )
 
 
+#: The errnos that mean "this primitive does not exist here", as opposed
+#: to "it exists and failed this time". Only these turn a worker-startup
+#: failure into ``IsolationUnavailable``: a platform that lacks the
+#: primitive will lack it on every retry, whereas a full descriptor
+#: table or an out-of-memory condition is a passing state on a platform
+#: that isolates fine. Converting those too would hand a caller that
+#: falls back to ``isolation="none"`` on this exception a reason to drop
+#: the process boundary over a transient error.
+_UNSUPPORTED_ERRNOS = frozenset({errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS})
+
+
+def _refuses_workers(exc: BaseException) -> bool:
+    """Whether ``exc`` says the OS has no such primitive at all."""
+    return isinstance(exc, OSError) and exc.errno in _UNSUPPORTED_ERRNOS
+
+
 def _no_process_isolation(what: str, exc: OSError) -> IsolationUnavailable:
     """Report a platform whose OS refuses to give us a worker at all.
 
@@ -120,7 +137,9 @@ def _no_process_isolation(what: str, exc: OSError) -> IsolationUnavailable:
     supported``. That is the same answer as a kernel mechanism the
     platform can't provide -- the isolation asked for is not available
     here -- so it is reported the same way, and the raw ``OSError``
-    stays attached as the cause.
+    stays attached as the cause. Only an errno in
+    ``_UNSUPPORTED_ERRNOS`` gets here; any other ``OSError`` keeps its
+    own meaning and propagates unchanged.
     """
     return IsolationUnavailable(
         f"process isolation is unavailable on this platform "
@@ -733,6 +752,8 @@ class ProcessSandbox:
         try:
             parent_conn, child_conn = multiprocessing.Pipe(duplex=True)
         except OSError as exc:
+            if not _refuses_workers(exc):
+                raise
             raise _no_process_isolation("create the parent↔worker pipe", exc) from exc
         # Registered whatever the start method: a *later* fork still inherits
         # this endpoint and must close its copy, even if this worker didn't.
@@ -782,7 +803,7 @@ class ProcessSandbox:
             parent_conn.close()
             child_conn.close()
             self._process = None
-            if isinstance(exc, OSError):
+            if _refuses_workers(exc):
                 raise _no_process_isolation("start the worker process", exc) from exc
             raise
         if self._start_method == "forkserver":

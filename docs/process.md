@@ -183,7 +183,7 @@ with sandbox(Policy(), isolation="kernel", allow_degraded=True) as sb:
 
 Either way, the Python-level policy enforcement in `Sandbox` is always active regardless of kernel availability. The fail-closed default only governs whether a *missing kernel layer* is treated as an error.
 
-`IsolationUnavailable` also covers the coarser case: a platform whose OS refuses a worker process at all. `multiprocessing` imports everywhere, but some builds ship primitives that raise as soon as they are used -- under emscripten/Pyodide `multiprocessing.Pipe()` reaches `socket.socketpair()` and gets `OSError: [Errno 138] Not supported`. When creating the pipe or starting the worker raises `OSError`, `isolation="process"` and `isolation="kernel"` raise `IsolationUnavailable` naming the platform and that error, with the `OSError` attached as `__cause__`, rather than letting the raw errno out of construction. `isolation="none"` is the fallback there -- it runs in-process and needs no worker.
+`IsolationUnavailable` also covers the coarser case: a platform whose OS refuses a worker process at all. `multiprocessing` imports everywhere, but some builds ship primitives that raise as soon as they are used -- under emscripten/Pyodide `multiprocessing.Pipe()` reaches `socket.socketpair()` and gets `OSError: [Errno 138] Not supported`. When creating the pipe or starting the worker raises an `OSError` whose errno says the primitive does not exist (`ENOTSUP`, `EOPNOTSUPP`, `ENOSYS`), `isolation="process"` and `isolation="kernel"` raise `IsolationUnavailable` naming the platform and that error, with the `OSError` attached as `__cause__`, rather than letting the raw errno out of construction. A resource failure such as `EMFILE` or `ENOMEM` is not converted: the platform isolates fine and is merely busy, and a caller that falls back to `isolation="none"` on `IsolationUnavailable` must not be handed that fallback over a transient error. `isolation="none"` is the fallback there -- it runs in-process and needs no worker.
 
 #### Inspecting what was applied
 
@@ -428,10 +428,10 @@ Namespaces are sent to and from the worker via `multiprocessing.Pipe` (pickle). 
 
 ```python
 with sandbox(Policy(), isolation="process") as sb:
-    result = sb.exec("kept = 7\nhandle = open('/data.txt')\n")
+    result = sb.exec("kept = 7\nhandle = lambda: 7\n")
 
 result.namespace["kept"]  # 7
-result.dropped            # ("handle",)
+result.dropped            # ("handle",) -- a lambda does not pickle
 ```
 
 A name in `dropped` is not in `namespace` -- the value could not cross the boundary -- and the tuple is what lets a caller say *which* variable is missing and why, rather than reading the absence as a bug. It is always empty under `isolation="none"`, which returns the live namespace and drops nothing.
