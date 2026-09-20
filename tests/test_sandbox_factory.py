@@ -2,6 +2,7 @@
 
 import asyncio
 import threading
+import types
 
 import pytest
 from monkeyfs import IsolatedFS, VirtualFS
@@ -9,7 +10,6 @@ from monkeyfs import IsolatedFS, VirtualFS
 from sandtrap import Policy, StPolicyNotPortable, sandbox
 from sandtrap.process.sandbox import ProcessSandbox
 from sandtrap.sandbox import Sandbox
-from sandtrap.wrappers import StFunction
 
 
 @pytest.fixture
@@ -301,18 +301,25 @@ def test_factory_default_mode_is_raw():
     with sandbox(Policy(timeout=5.0)) as sb:
         result = sb.exec("def f(x): return x + 1")
         assert result.error is None
-        assert not isinstance(result.namespace["f"], StFunction)
+        assert type(result.namespace["f"]) is types.FunctionType
         assert result.namespace["f"](1) == 2
 
 
-def test_factory_wrapped_mode_warns():
-    with pytest.warns(DeprecationWarning, match="deprecated"):
+def test_factory_wrapped_mode_raises():
+    with pytest.raises(ValueError, match="removed in 0.4.0"):
         sandbox(Policy(timeout=5.0), mode="wrapped")
 
 
-def test_factory_raw_mode_does_not_warn(recwarn):
-    sandbox(Policy(timeout=5.0), mode="raw")
-    assert [w for w in recwarn.list if issubclass(w.category, DeprecationWarning)] == []
+def test_sandbox_wrapped_mode_raises():
+    with pytest.raises(ValueError, match="removed in 0.4.0"):
+        Sandbox(Policy(timeout=5.0), mode="wrapped")
+
+
+def test_sandbox_raw_mode_is_accepted():
+    sb = Sandbox(Policy(timeout=5.0), mode="raw")
+    result = sb.exec("x = 2 + 3")
+    assert result.error is None
+    assert result.namespace["x"] == 5
 
 
 def test_mode_raw_none():

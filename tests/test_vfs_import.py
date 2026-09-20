@@ -6,7 +6,7 @@ from contextlib import contextmanager
 import pytest
 
 from sandtrap import IsolationUnavailable, Policy, Sandbox, VirtualFS, sandbox
-from sandtrap.wrappers import ModuleRef
+from sandtrap.sandbox import ModuleRef
 
 
 def _make_sandbox(**kwargs):
