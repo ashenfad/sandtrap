@@ -6,6 +6,7 @@ import asyncio
 import multiprocessing
 import os
 import signal
+import sys
 import threading
 import time
 import traceback
@@ -106,6 +107,28 @@ def _native_crash_error(process: Any, start_method: str) -> RuntimeError:
         "A crash this early is the worker's own setup -- most often a granted "
         "module whose import crashes in a fresh interpreter. The worker's "
         "traceback goes to its stderr, which is where the cause will be."
+    )
+
+
+def _no_process_isolation(what: str, exc: OSError) -> IsolationUnavailable:
+    """Report a platform whose OS refuses to give us a worker at all.
+
+    ``multiprocessing`` imports everywhere, but on some platforms its
+    primitives are stubs that raise as soon as they are used: under
+    emscripten/Pyodide ``multiprocessing.Pipe()`` reaches
+    ``socket.socketpair()`` and gets ``OSError: [Errno 138] Not
+    supported``. That is the same answer as a kernel mechanism the
+    platform can't provide -- the isolation asked for is not available
+    here -- so it is reported the same way, and the raw ``OSError``
+    stays attached as the cause.
+    """
+    return IsolationUnavailable(
+        f"process isolation is unavailable on this platform "
+        f"(sys.platform={sys.platform!r}): could not {what} -- {exc!r}. "
+        "Some platforms ship a multiprocessing module that raises as soon "
+        "as it is used (emscripten/Pyodide is the known case). Use "
+        'isolation="none" to run in-process, or run on a platform with '
+        "working multiprocessing."
     )
 
 
@@ -707,7 +730,10 @@ class ProcessSandbox:
         # neutralizing them could clobber its own control channel. Nothing is
         # inherited to close, so close_fds is satisfied by construction.
         inherited_fds = _open_file_descriptors() if self._close_fds and forking else ()
-        parent_conn, child_conn = multiprocessing.Pipe(duplex=True)
+        try:
+            parent_conn, child_conn = multiprocessing.Pipe(duplex=True)
+        except OSError as exc:
+            raise _no_process_isolation("create the parent↔worker pipe", exc) from exc
         # Registered whatever the start method: a *later* fork still inherits
         # this endpoint and must close its copy, even if this worker didn't.
         _PARENT_CONNECTIONS.add(parent_conn)
@@ -751,11 +777,13 @@ class ProcessSandbox:
                 # bookkeeping.
                 _reset_inherited_forkserver()
                 self._process.start()
-        except BaseException:
+        except BaseException as exc:
             _PARENT_CONNECTIONS.discard(parent_conn)
             parent_conn.close()
             child_conn.close()
             self._process = None
+            if isinstance(exc, OSError):
+                raise _no_process_isolation("start the worker process", exc) from exc
             raise
         if self._start_method == "forkserver":
             # First moment the broker's pid exists. Note what it loaded, so a
