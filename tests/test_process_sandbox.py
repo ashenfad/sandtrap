@@ -978,6 +978,27 @@ def test_worker_spawn_refused_raises_isolation_unavailable(monkeypatch):
     assert caught.value.__cause__.errno == errno.ENOTSUP
 
 
+@pytest.mark.parametrize("code", [errno.EMFILE, errno.ENOMEM, errno.EAGAIN])
+def test_a_resource_failure_keeps_its_own_meaning(monkeypatch, code):
+    """A full descriptor table or a memory shortage is a passing state on a
+    platform that isolates fine, so it must not read as "unavailable": a
+    caller that answers IsolationUnavailable by falling back to
+    isolation="none" would otherwise drop the process boundary over a
+    transient error. The OSError propagates as itself."""
+
+    def _exhausted(*args, **kwargs):
+        raise OSError(code, "resources exhausted")
+
+    monkeypatch.setattr(multiprocessing, "Pipe", _exhausted)
+
+    with pytest.raises(OSError) as caught:
+        with sandbox(Policy(timeout=10.0), isolation="process"):
+            pass
+
+    assert not isinstance(caught.value, IsolationUnavailable)
+    assert caught.value.errno == code
+
+
 def test_process_sandbox_still_starts_on_a_working_platform():
     """The conversion is narrow: an OS that can spawn a worker does."""
     with sandbox(Policy(timeout=10.0), isolation="process") as sb:
