@@ -25,8 +25,6 @@ The rewriter injects calls to these internal functions:
 | `__st_importfrom__` | From-import (`from x import y`) |
 | `__st_dynimport__` | Dynamic import (`__import__(name)`) |
 | `__st_checkpoint__` | Timeout, tick limit, memory, and cancellation check |
-| `__st_defun__` | Function definition wrapping (wrapped mode) |
-| `__st_defclass__` | Class definition wrapping (wrapped mode) |
 
 All `obj.attr` access in sandboxed code -- including in f-strings and augmented assignments -- goes through the getattr gate.
 
