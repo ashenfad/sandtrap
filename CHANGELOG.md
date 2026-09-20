@@ -23,8 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   needs to know about it.
 ### Removed
 
-- **Wrapped mode, deprecated since 0.3.5.** `sandtrap/wrappers.py` is gone --
-  `StFunction`, `StClass`, `StInstance`, and `activate_value` with it -- along
+- **Wrapped mode, deprecated since 0.3.5.** `StFunction`, `StClass`,
+  `StInstance`, and `activate_value` are gone, and `sandtrap/wrappers.py`
+  survives only as an alias for `ModuleRef`, which moved to `sandtrap.sandbox`
+  and which a namespace pickled under an earlier release still names by its
+  old path -- along
   with the rewriter transforms that wrapped every `def` and `class`, the
   `__st_defun__` / `__st_defclass__` gates, the namespace auto-activation and
   its `__sandtrap_activate__` container hook, `Sandbox.activate()`, and the
