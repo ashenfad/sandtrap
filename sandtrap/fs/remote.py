@@ -9,10 +9,13 @@ the real filesystem (:func:`fs_rpc_handler`). ``ProcessSandbox`` wires
 this automatically for any non-``IsolatedFS`` filesystem — embedders
 don't construct these directly.
 
-File handles are whole-blob buffered, matching monkeyfs semantics
-(``VirtualFS`` materializes whole files anyway): read modes fetch the
-content once at ``open``; writable modes buffer locally and push on
-``flush``/``close``. Seeks, iteration, and partial reads are local.
+A binary read is lazy: ``open(path, "rb")`` hands back a seekable
+stream that asks the parent for the ranges the reader seeks to, so a
+reader that wants a parquet footer costs one 64 KiB range instead of
+the file. Text reads and every write, append and update mode are
+whole-blob buffered, matching what the protocol's whole-file ``write``
+can express: they fetch the content once at ``open`` and push it back
+on ``flush``/``close``, with seeks and iteration local to the buffer.
 """
 
 from __future__ import annotations
@@ -21,6 +24,8 @@ import io
 import os
 import posixpath
 from typing import Any
+
+from monkeyfs.virtualfile import open_file
 
 
 class RemoteFSMarker:
@@ -161,6 +166,15 @@ class RemoteFS:
 
         if kind == "x" and self.exists(path):
             raise FileExistsError(f"File exists: '{path}'")
+
+        if kind == "r" and not plus and binary:
+            # A plain binary read is served by a lazy stream over this
+            # filesystem: the reader's own seeks decide which ranges
+            # cross the channel, so seeking to the end of a large file
+            # and reading a little costs a little. Nothing is fetched
+            # here, which is why the missing file is asked about rather
+            # than discovered by reading.
+            return open_file(self, path, mode)
 
         if kind == "r":
             initial = self.read(path)  # missing file raises here
