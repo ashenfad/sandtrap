@@ -135,7 +135,6 @@ sandtrap powers sandboxed code execution in [agex](https://github.com/ashenfad/a
 - [Sandbox Execution](docs/sandbox.md) -- running code, results, error handling, REPL-style expression echo
 - [Process Sandbox](docs/process.md) -- subprocess isolation with kernel-level restrictions
 - [Filesystem & Network](docs/filesystem.md) -- VFS interception, network denial, VFS imports
-- [Serialization](docs/serialization.md) -- pickling functions, classes, and state across turns
 - [Security Model](docs/security.md) -- how the sandbox works, what it blocks, threat model
 - [Roadmap](docs/roadmap.md) -- planned isolation hardening (restricted deserialization, kernel-mode boundary)
 - [Forkserver design notes](docs/forkserver-design.md) -- why workers stopped being forked from the host, and what it cost

@@ -15,7 +15,7 @@ sb = sandbox(policy)
 
 - `policy` -- a `Policy` instance controlling what sandboxed code can access.
 - `isolation` -- `"none"` (default), `"process"`, or `"kernel"`. See [process.md](process.md).
-- `mode` -- `"raw"` (default) returns plain objects for user-defined functions and classes. `"wrapped"` wraps them for pickling instead; it is deprecated and warns. See [serialization.md](serialization.md).
+- `mode` -- `"raw"`, the default and the only accepted value: user-defined functions and classes come back as plain Python objects. Kept so callers that pass it explicitly keep working.
 - `filesystem` -- a `FileSystem` implementation for VFS interception (see [filesystem.md](filesystem.md)).
 - `snapshot_prints` -- when `True`, deep-copies `print()` arguments at call time and populates `result.prints`. Default `False`. Works with all isolation levels.
 - `echo` -- `"none"` (default), `"last"`, or `"all"`. REPL/notebook-style auto-display of bare top-level expressions. See [Expression echo](#expression-echo-repl-style).
@@ -105,7 +105,7 @@ The rules:
 Under `isolation="process"` / `"kernel"` the mapping crosses to the worker with
 the namespace, through the same picklability filter: plain data goes by value,
 and a live parent-side object goes as an
-[`RpcProxyMarker`](serialization.md#cross-process-resources-via-rpc-process--kernel-isolation) that the worker turns into
+[`RpcProxyMarker`](process.md#cross-process-resources-via-rpc) that the worker turns into
 a proxy onto the real object.
 
 ## ExecResult
@@ -266,7 +266,3 @@ assert isinstance(result.error, StCancelled)
 `cancel()` is safe to call from any thread. The sandbox raises `StCancelled` at the next checkpoint.
 
 The other in-process limits work the same way. `timeout`, `tick_limit`, and `cancel()` are checked only at checkpoints -- loop iterations, function entries, comprehension steps -- so none of them can interrupt a call that is already running. A long C call or a catastrophic regex holds the thread until it returns, and the timeout fires at the next checkpoint after that: in-process it is best-effort between checkpoints, not a deadline. `memory_limit` is the one exception, and only on Linux: there it also installs an `RLIMIT_AS` address-space cap, so the kernel can refuse an allocation and raise `MemoryError` inside a C call without waiting for a checkpoint; on macOS and Windows it is checkpoint-only like the rest (see [Memory limits](security.md#memory-limits)). `isolation="process"` is what can actually kill a runaway worker.
-
-## Reactivation
-
-See [serialization.md](serialization.md) for `sandbox.activate()` and the `__sandtrap_activate__` container hook.

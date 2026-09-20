@@ -253,7 +253,7 @@ with sandbox(policy, isolation="process", close_fds=True) as sb:
 With descriptor cleanup enabled, policy registrations cannot rely on an
 already-open host socket, database connection, pipe, or file handle surviving
 into the worker. Keep the live resource in the parent and expose the required
-operations through an [RPC handler](serialization.md#cross-process-resources-via-rpc-process--kernel-isolation).
+operations through an [RPC handler](#cross-process-resources-via-rpc).
 This makes ownership explicit and prevents a worker from keeping unrelated
 host resources alive. Leave `close_fds=False` only when inherited live state
 is an intentional part of the policy contract.
@@ -438,4 +438,56 @@ A name in `dropped` is not in `namespace` -- the value could not cross the bound
 
 The `modules` mapping of [per-exec modules](sandbox.md#per-exec-modules) rides the same pipe and takes the same filter, one module's attributes at a time; a dropped attribute warns as `Module attribute host.fn skipped`. A live parent-side object goes in it as an `RpcProxyMarker`, exactly as it would as a namespace entry, and the worker substitutes a proxy before the module object is built -- so the module's attribute *is* the proxy, and the agent's `host.obj.method()` reaches the real object here.
 
-Under the default `mode="raw"`, sandbox-defined functions and classes are plain objects and pickle no better than any other locally-defined function, so they do not come back from the worker. Under the deprecated `mode="wrapped"`, `StFunction`, `StClass`, and `StInstance` wrappers are picklable and survive the process boundary; `exec()` returns them active regardless of isolation level -- the same contract as in-process execution.
+Sandbox-defined functions and classes are plain objects and pickle no better than any other locally-defined function, so they do not come back from the worker. Code an agent should be able to reuse in a later turn belongs in a module on the filesystem, which it can import again: see [VFS imports](filesystem.md).
+
+## Cross-process resources via RPC
+
+The namespace is pickled into the worker, so any container that holds host-side state (database connections, caches with threading locks, file handles) can't cross the boundary intact. Sandtrap provides a worker-to-parent RPC channel for these cases.
+
+Register a handler with the sandbox and inject a placeholder marker into the namespace:
+
+```python
+from sandtrap import sandbox, Policy, RpcProxyMarker
+
+# Host-side state that the agent should be able to read/write
+store = {}
+
+def store_handler(method, args, kwargs):
+    if method == "get":
+        return store.get(args[0])
+    if method == "set":
+        store[args[0]] = args[1]
+        return None
+    raise AttributeError(method)
+
+with sandbox(
+    Policy(timeout=5.0),
+    isolation="process",
+    rpc_handlers={"kv": store_handler},
+) as sb:
+    result = sb.exec(
+        "kv.set('hello', 'world')\n"
+        "got = kv.get('hello')\n",
+        namespace={"kv": RpcProxyMarker(target="kv")},
+    )
+    assert result.namespace["got"] == "world"
+    assert store == {"hello": "world"}
+```
+
+The worker substitutes the marker with an `RpcProxy` bound to its connection.  Each method call on the proxy sends an `RpcCallMsg` to the parent, the parent dispatches to the registered handler, and the return value (or exception) is shipped back as `RpcReturnMsg`.  Calls block synchronously — the worker is single-threaded so only one RPC is outstanding at a time.
+
+For typed wrappers, set `marker.wrapper="module:Class"`:
+
+```python
+namespace={"cache": RpcProxyMarker(target="cache", wrapper="agex.cache:RemoteCache")}
+```
+
+The worker imports the named class on receipt and instantiates `Class(proxy, *marker.init_args)`.  Resolution failures fall back to the bare `RpcProxy` so the agent gets *something* callable rather than a hard worker-crash.
+
+Limitations to keep in mind:
+- The proxy is bound to its worker's connection and can't be pickled — `RpcProxy.__reduce__` raises so it's dropped from result namespaces cleanly.
+- Args and return values must pickle.  Things that don't (file handles, thread locks, etc.) need the handler to translate them into something serializable on its own.
+- Each call is one IPC round-trip; not free, but order-of-microseconds for small payloads.  Hot loops over thousands of calls warrant a batched method on the handler.
+- Re-entrancy isn't supported — a handler must not itself trigger an RPC back into the worker (would deadlock the single-reader loop).
+
+Functions and modules the policy grants need none of this: they are injected during `exec()` on the worker's own side and never travel through the namespace pipe.
