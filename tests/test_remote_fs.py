@@ -207,3 +207,83 @@ def test_a_ranged_read_crosses_the_boundary_as_a_range():
     assert r.error is None, r.error
     assert r.namespace["chunk"] == payload[500_000:500_050]
     assert fs.reads == [("/blob.bin", 500_000, 50)]
+
+
+def test_a_binary_read_is_lazy_across_the_boundary():
+    """Seeking to the end of a megabyte and reading 100 bytes must cost
+    one block, not the file: the whole point of the bridge forwarding a
+    range is that the reader's access pattern is what the parent sees."""
+    payload = bytes(range(256)) * 4096  # 1 MiB
+    fs = _CountingFS(VirtualFS({}))
+    fs.write("/blob.bin", payload)
+    fs.reads.clear()
+
+    with sandbox(Policy(timeout=15.0), isolation="process", filesystem=fs) as sb:
+        r = sb.exec(
+            "with open('/blob.bin', 'rb') as f:\n"
+            "    f.seek(-100, 2)\n"
+            "    tail = f.read(100)\n"
+        )
+    assert r.error is None, r.error
+    assert r.namespace["tail"] == payload[-100:]
+    assert len(fs.reads) == 1, fs.reads
+    path, _offset, size = fs.reads[0]
+    assert path == "/blob.bin"
+    assert size <= 64 * 1024 < len(payload)
+
+
+def test_a_whole_binary_read_still_returns_the_whole_file():
+    """Laziness must not cost the common case a second call: a reader
+    that wants everything gets everything, in one range."""
+    payload = bytes(range(256)) * 4096  # 1 MiB
+    fs = _CountingFS(VirtualFS({}))
+    fs.write("/blob.bin", payload)
+    fs.reads.clear()
+
+    with sandbox(Policy(timeout=15.0), isolation="process", filesystem=fs) as sb:
+        r = sb.exec("data = open('/blob.bin', 'rb').read()")
+    assert r.error is None, r.error
+    assert r.namespace["data"] == payload
+    assert fs.reads == [("/blob.bin", 0, len(payload))]
+
+
+def test_readline_stitches_a_line_across_a_block_boundary():
+    """A line that straddles the 64 KiB block the reader is inside has
+    to be joined from both blocks, not truncated at the seam."""
+    first = b"x" * 65_500 + b"\n"
+    second = b"y" * 100 + b"\n"
+    fs = VirtualFS({})
+    fs.write("/lines.bin", first + second + b"tail\n")
+
+    with sandbox(Policy(timeout=15.0), isolation="process", filesystem=fs) as sb:
+        r = sb.exec(
+            "with open('/lines.bin', 'rb') as f:\n"
+            "    one = f.readline()\n"
+            "    two = f.readline()\n"
+            "    three = f.readline()\n"
+            "    rest = f.readline()\n"
+        )
+    assert r.error is None, r.error
+    assert r.namespace["one"] == first
+    assert r.namespace["two"] == second
+    assert r.namespace["three"] == b"tail\n"
+    assert r.namespace["rest"] == b""
+
+
+def test_a_read_only_filesystem_still_serves_a_lazy_binary_read():
+    """Reading is what a read-only filesystem is for; making the read
+    lazy must not turn it into something the wrapper refuses."""
+    from monkeyfs import ReadOnlyFS
+
+    payload = bytes(range(256)) * 4096  # 1 MiB
+    inner = VirtualFS({})
+    inner.write("/blob.bin", payload)
+    fs = _CountingFS(ReadOnlyFS(inner))
+
+    with sandbox(Policy(timeout=15.0), isolation="process", filesystem=fs) as sb:
+        r = sb.exec("with open('/blob.bin', 'rb') as f:\n    head = f.read(16)\n")
+        refused = sb.exec("open('/blob.bin', 'wb').write(b'nope')")
+    assert r.error is None, r.error
+    assert r.namespace["head"] == payload[:16]
+    assert len(fs.reads) == 1 and fs.reads[0][2] <= 64 * 1024
+    assert isinstance(refused.error, PermissionError)
