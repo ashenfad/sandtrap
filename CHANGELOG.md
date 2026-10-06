@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- **A VFS package is importable by its own name, and runs before its
+  modules** (#56). Only `<name>.py` was looked for, never
+  `<name>/__init__.py`, so `import pkg` and `from pkg import name` failed
+  with "Import of 'pkg' is not allowed", which reads as a policy refusal.
+  And a dotted import ran the submodule before building its packages, so a
+  submodule importing from its own package (`from pkg import NAME` in
+  `pkg/cli.py`) failed the same way. Packages now resolve from
+  `__init__.py`, with `__path__` set, and a dotted import builds its
+  packages from the top down before the submodule runs, as CPython does.
+  A package is cached before its `__init__` runs, so a package and its
+  submodule can import each other. A directory with no `__init__.py`
+  still gives a bare package when a module under it is imported.
+
 ## 0.4.0 - 2026-09-20
 
 ### Added

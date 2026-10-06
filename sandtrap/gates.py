@@ -315,25 +315,43 @@ class _VFSLoader:
         return None
 
     def resolve_module(self, module_name: str) -> Any:
-        """Try to resolve a module from the VFS.  Returns None if not found."""
+        """Try to resolve a module from the VFS.  Returns None if not found.
+
+        ``<name>.py`` is a module and ``<name>/__init__.py`` a package, as
+        in CPython.  A dotted name's parent packages are built first, top
+        down, so a package's ``__init__`` has run before any of its
+        submodules does, and a submodule can import from its own package.
+        A module is cached before its body runs, so a circular import
+        sees it partly built rather than recursing, and it is bound on
+        its parent once it has loaded.
+        """
         if self._filesystem is None:
             return None
 
         if module_name in self._cache:
             return self._cache[module_name]
 
-        # Look for <root>/<module_name>.py in the VFS (dots → path
-        # separators; root is Policy.module_root, default the fs root)
-        path = self._root + "/" + module_name.replace(".", "/") + ".py"
+        # Look under the module root (Policy.module_root, default the fs
+        # root), dots → path separators.
+        base = self._root + "/" + module_name.replace(".", "/")
+        path, is_package = base + ".py", False
         if not self._filesystem.exists(path):
-            return None
+            path, is_package = base + "/__init__.py", True
+            if not self._filesystem.exists(path):
+                return None
+
+        parent_name, _, leaf_name = module_name.rpartition(".")
+        parent = self._package(parent_name) if parent_name else None
+        if module_name in self._cache:  # the parent's __init__ imported it
+            return self._cache[module_name]
 
         with self._filesystem.open(path, "r") as f:
             source = f.read()
 
-        # Cache before execution (circular import protection)
         mod = types.ModuleType(module_name)
         mod.__file__ = path
+        if is_package:
+            mod.__path__ = [base]
         self._cache[module_name] = mod
 
         try:
@@ -342,62 +360,46 @@ class _VFSLoader:
             self._cache.pop(module_name, None)
             raise
 
+        if parent is not None:
+            setattr(parent, leaf_name, mod)
         return mod
 
+    def _package(self, package_name: str) -> Any:
+        """The package a dotted import goes through, built if need be.
+
+        Only reached for a module the VFS holds, so the directory exists.
+        With an ``__init__.py`` it is that package (its own parents
+        first); without one it is a bare package object, as it has always
+        been, bound on its parent so ``import a.b.c`` binds ``a.b``.
+        """
+        if package_name in self._cache:
+            return self._cache[package_name]
+        pkg = self.resolve_module(package_name)
+        if pkg is not None:
+            return pkg
+        grand_name, _, leaf_name = package_name.rpartition(".")
+        grand = self._package(grand_name) if grand_name else None
+        base = self._root + "/" + package_name.replace(".", "/")
+        pkg = types.ModuleType(package_name)
+        pkg.__file__ = base + "/__init__.py"
+        pkg.__path__ = [base]
+        self._cache[package_name] = pkg
+        if grand is not None:
+            setattr(grand, leaf_name, pkg)
+        return pkg
+
     def ensure_package_chain(self, module_name: str) -> Any:
-        """Build the parent package chain for dotted VFS imports.
+        """Resolve a dotted VFS import and return its top-level package.
 
         ``import pkg.mod`` must bind ``pkg`` in the namespace with
         ``pkg.mod`` attached as an attribute — matching standard Python
-        import semantics.
+        import semantics.  :meth:`resolve_module` builds the packages on
+        the way, top down.
         """
-        parts = module_name.split(".")
-        if len(parts) <= 1:
-            return self.resolve_module(module_name)
-
-        # Resolve the leaf module first
         leaf = self.resolve_module(module_name)
         if leaf is None:
             return None
-
-        # Build parent packages from top down
-        parent = None
-        for i in range(len(parts) - 1):
-            pkg_name = ".".join(parts[: i + 1])
-            if pkg_name in self._cache:
-                parent = self._cache[pkg_name]
-            else:
-                init_path = (
-                    self._root + "/" + pkg_name.replace(".", "/") + "/__init__.py"
-                )
-                pkg = types.ModuleType(pkg_name)
-                pkg.__file__ = init_path
-                pkg.__path__ = [self._root + "/" + pkg_name.replace(".", "/")]
-                self._cache[pkg_name] = pkg
-
-                if self._filesystem is not None and self._filesystem.exists(init_path):
-                    with self._filesystem.open(init_path, "r") as f:
-                        source = f.read()
-                    try:
-                        self._compile_and_exec(pkg, source, pkg_name)
-                    except BaseException:
-                        self._cache.pop(pkg_name, None)
-                        raise
-
-                parent = pkg
-
-            # Attach child to parent
-            if i > 0:
-                prev_pkg_name = ".".join(parts[:i])
-                prev_pkg = self._cache.get(prev_pkg_name)
-                if prev_pkg is not None:
-                    setattr(prev_pkg, parts[i], parent)
-
-        # Attach leaf to its immediate parent
-        if parent is not None:
-            setattr(parent, parts[-1], leaf)
-
-        return self._cache[parts[0]]
+        return self._cache[module_name.split(".")[0]]
 
 
 def make_gates(

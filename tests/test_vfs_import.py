@@ -1080,3 +1080,84 @@ def test_the_old_path_holds_nothing_but_module_ref():
     assert old_path.__all__ == ["ModuleRef"]
     for gone in ("StFunction", "StClass", "StInstance", "activate_value"):
         assert not hasattr(old_path, gone)
+
+
+# ------------------------------------------------------------------
+# A package is importable by its own name, and runs before its modules
+# ------------------------------------------------------------------
+
+TERN = {
+    "/tern/__init__.py": "VERSION = '0.1.0'\n",
+    "/tern/cli.py": ("from tern import VERSION\n\ndef main():\n    return VERSION\n"),
+}
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "import tern\nresult = tern.VERSION",
+        "from tern import VERSION as result",
+        "from tern.cli import main\nresult = main()",
+        "import tern.cli\nresult = tern.cli.main()",
+        "import tern.cli as cli\nresult = cli.main()",
+        "result = __import__('tern', fromlist=['cli']).cli.main()",
+    ],
+)
+@pytest.mark.parametrize("isolation", ISOLATIONS)
+def test_a_package_is_importable_by_its_own_name(isolation, code):
+    """Only `<name>.py` was looked for, so a package directory read as
+    "Import of 'tern' is not allowed" -- and so did a submodule importing
+    from its own package."""
+    with _vfs_sandbox(isolation, TERN) as sb:
+        result = sb.exec(code)
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert result.namespace["result"] == "0.1.0"
+
+
+def test_a_package_runs_before_its_submodules():
+    """CPython runs `p/__init__.py` before `p/m.py`; the submodule ran first."""
+    sandbox, fs = _make_sandbox()
+    fs.write("/p/__init__.py", b"print('init')")
+    fs.write("/p/q/__init__.py", b"print('q')")
+    fs.write("/p/q/m.py", b"print('m')")
+    result = sandbox.exec("import p.q.m\nimport p.q.m")
+    assert result.error is None
+    assert result.stdout.split() == ["init", "q", "m"]
+
+
+def test_a_package_and_its_module_may_import_each_other():
+    """`__init__` re-exports from a submodule that imports from the
+    package, as packages commonly do: the module sees what the package
+    had bound when it was imported."""
+    sandbox, fs = _make_sandbox()
+    fs.write(
+        "/pkg/__init__.py",
+        b"NAME = 'pkg'\nfrom .core import shout\n",
+    )
+    fs.write(
+        "/pkg/core.py",
+        b"from pkg import NAME\n\ndef shout():\n    return NAME.upper()\n",
+    )
+    result = sandbox.exec("from pkg import shout\nresult = shout()")
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert result.namespace["result"] == "PKG"
+
+
+def test_a_package_whose_init_fails_stays_unimported():
+    """A failed `__init__` must not leave a half-built package behind for
+    the next import to find."""
+    sandbox, fs = _make_sandbox()
+    fs.write("/bad/__init__.py", b"raise ValueError('boom')")
+    fs.write("/bad/m.py", b"X = 1")
+    first = sandbox.exec("import bad")
+    second = sandbox.exec("import bad.m")
+    assert "boom" in str(first.error)
+    assert "boom" in str(second.error)
+
+
+def test_a_directory_without_init_still_carries_its_modules():
+    sandbox, fs = _make_sandbox()
+    fs.write("/plain/m.py", b"X = 7")
+    result = sandbox.exec("import plain.m\nresult = plain.m.X")
+    assert result.error is None
+    assert result.namespace["result"] == 7
