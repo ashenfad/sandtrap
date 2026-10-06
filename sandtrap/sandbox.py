@@ -4,6 +4,7 @@ import ast
 import asyncio
 import builtins as _builtins
 import copy
+import inspect
 import itertools
 import linecache
 import sys
@@ -147,6 +148,37 @@ class IsolationUnavailable(RuntimeError):
       raising ``OSError`` when the pipe or the process is created.  The
       underlying error is attached as ``__cause__``.
     """
+
+
+def _await_hint(error: SyntaxError, tree: ast.Module) -> SyntaxError:
+    """*error*, saying so when what the compiler refused is top-level
+    ``await`` (or ``async for``, ``async with``, an async comprehension).
+
+    Decided by compiling the same tree with ``PyCF_ALLOW_TOP_LEVEL_AWAIT``,
+    the test ``python -m asyncio`` uses: it compiles to a coroutine exactly
+    when the module awaits at the top. CPython's own wording differs by
+    construct and by version, so the message is not what is matched.
+    """
+    try:
+        code = compile(
+            tree, "<sandtrap:await-check>", "exec", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
+        )
+    except SyntaxError:
+        return error
+    if not code.co_flags & inspect.CO_COROUTINE:
+        return error
+    return SyntaxError(
+        f"{error.msg}: top-level await needs an async execution "
+        "(aexec runs it; exec does not)",
+        (
+            error.filename,
+            error.lineno,
+            error.offset,
+            error.text,
+            error.end_lineno,
+            error.end_offset,
+        ),
+    )
 
 
 @dataclass
@@ -791,11 +823,18 @@ class Sandbox:
             return prepared
         tree, rewriter = prepared
 
-        code, filename, gates, ns, injected, stdout_buf, stderr_buf, prints_list = (
-            self._compile_and_setup(
-                tree, rewriter, source, namespace, stdin, argv, modules
+        # Some syntax only the compiler rejects -- top-level `await`,
+        # `return` or `yield` at module level -- since `ast.parse` accepts
+        # it. It is the script's error, and comes back as one, as a parse
+        # error does.
+        try:
+            code, filename, gates, ns, injected, stdout_buf, stderr_buf, prints_list = (
+                self._compile_and_setup(
+                    tree, rewriter, source, namespace, stdin, argv, modules
+                )
             )
-        )
+        except SyntaxError as e:
+            return ExecResult(error=_await_hint(e, tree))
 
         error = None
         with ExitStack() as stack:
@@ -905,11 +944,14 @@ class Sandbox:
         wrapper = ast.AsyncFunctionDef(**wrapper_kwargs)
         tree.body = [wrapper]
 
-        code, filename, gates, ns, injected, stdout_buf, stderr_buf, prints_list = (
-            self._compile_and_setup(
-                tree, rewriter, source, namespace, stdin, argv, modules
+        try:
+            code, filename, gates, ns, injected, stdout_buf, stderr_buf, prints_list = (
+                self._compile_and_setup(
+                    tree, rewriter, source, namespace, stdin, argv, modules
+                )
             )
-        )
+        except SyntaxError as e:
+            return ExecResult(error=e)
         ns["__st_locals__"] = _builtins.locals
         ns["__st_local_capture__"] = {}
 
