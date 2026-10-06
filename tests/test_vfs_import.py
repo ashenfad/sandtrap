@@ -1163,3 +1163,32 @@ def test_a_directory_without_init_still_carries_its_modules():
     result = sandbox.exec("import plain.m\nresult = plain.m.X")
     assert result.error is None
     assert result.namespace["result"] == 7
+
+
+def test_a_package_wins_over_a_module_of_the_same_name():
+    """CPython takes `foo/__init__.py` over `foo.py`."""
+    sandbox, fs = _make_sandbox()
+    fs.write("/foo.py", b"WHICH = 'module'")
+    fs.write("/foo/__init__.py", b"WHICH = 'package'")
+    fs.write("/foo/bar.py", b"X = 1")
+    result = sandbox.exec("import foo.bar\nresult = (foo.WHICH, foo.bar.X)")
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert result.namespace["result"] == ("package", 1)
+
+
+def test_a_failed_package_takes_the_children_it_imported_with_it():
+    """A child the package's `__init__` imported before raising is not
+    importable past the package that never finished: each later import
+    runs the `__init__` again and fails as it did."""
+    sandbox, fs = _make_sandbox()
+    fs.write("/bad/__init__.py", b"import bad.child\nraise ValueError('boom')")
+    fs.write("/bad/child.py", b"X = 1")
+    attempt = "try:\n    import bad\nexcept ValueError:\n    pass\n"
+    for code in (
+        "from bad.child import X",
+        "import bad.child",
+        "import bad.child as c",
+    ):
+        result = sandbox.exec(attempt + code)
+        assert isinstance(result.error, ValueError), f"{code}: {result.error!r}"
+        assert "boom" in str(result.error)

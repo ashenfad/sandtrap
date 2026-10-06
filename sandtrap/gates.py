@@ -326,13 +326,17 @@ class _VFSLoader:
     def resolve_module(self, module_name: str) -> Any:
         """Try to resolve a module from the VFS.  Returns None if not found.
 
-        ``<name>.py`` is a module and ``<name>/__init__.py`` a package, as
-        in CPython.  A dotted name's parent packages are built first, top
-        down, so a package's ``__init__`` has run before any of its
-        submodules does, and a submodule can import from its own package.
-        A module is cached before its body runs, so a circular import
-        sees it partly built rather than recursing, and it is bound on
-        its parent once it has loaded.
+        ``<name>/__init__.py`` is a package and ``<name>.py`` a module,
+        the package first when both exist, as in CPython.  A dotted
+        name's parent packages are built first, top down, so a package's
+        ``__init__`` has run before any of its submodules does, and a
+        submodule can import from its own package.  A module is cached
+        before its body runs, so a circular import sees it partly built
+        rather than recursing, and it is bound on its parent once it has
+        loaded.  A body that raises takes the module out of the cache,
+        and a package takes its submodules with it: a child its
+        ``__init__`` imported before failing is not importable past the
+        package that never finished.
         """
         if self._filesystem is None:
             return None
@@ -343,9 +347,9 @@ class _VFSLoader:
         # Look under the module root (Policy.module_root, default the fs
         # root), dots → path separators.
         base = self._root + "/" + module_name.replace(".", "/")
-        path, is_package = base + ".py", False
+        path, is_package = base + "/__init__.py", True
         if not self._filesystem.exists(path):
-            path, is_package = base + "/__init__.py", True
+            path, is_package = base + ".py", False
             if not self._filesystem.exists(path):
                 return None
 
@@ -367,6 +371,10 @@ class _VFSLoader:
             self._compile_and_exec(mod, source, module_name)
         except BaseException:
             self._cache.pop(module_name, None)
+            if is_package:
+                inside = module_name + "."
+                for name in [n for n in self._cache if n.startswith(inside)]:
+                    del self._cache[name]
             raise
 
         if parent is not None:
