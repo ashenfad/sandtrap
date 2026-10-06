@@ -383,6 +383,47 @@ INTROSPECTION_DUNDERS = frozenset(
     }
 )
 
+# A module's conventional metadata: what version it is, who wrote it, what
+# `from m import *` takes.  Plain values a module body binds, read as often
+# as any other name (`from pkg import __version__` is how a package's own
+# modules learn its version), and nothing like the module type's machinery
+# (`__dict__`, `__getattribute__`, `__class__`) the dunder rule keeps out.
+# Readable on a module and nowhere else, out of the module's own namespace
+# without running anything (see `module_metadata`), and only as data: an
+# exact str, or for `__all__` a list or tuple of them, handed back as a
+# fresh list so a host module's own `__all__` cannot be changed through it.
+MODULE_METADATA_DUNDERS = frozenset({"__version__", "__author__", "__all__"})
+
+#: What :func:`module_metadata` answers when there is no readable value.
+NO_METADATA = object()
+
+
+def module_metadata(module: Any, name: str) -> Any:
+    """The value of one of ``MODULE_METADATA_DUNDERS`` on *module*, or
+    ``NO_METADATA``.
+
+    Read with ``inspect.getattr_static``, so a module's PEP 562
+    ``__getattr__`` and any descriptor under the name go unrun, and
+    accepted only as data: an exact ``str``, or for ``__all__`` a list or
+    tuple of exact strs, returned as a new list.
+    """
+    if not isinstance(module, ModuleType) or name not in MODULE_METADATA_DUNDERS:
+        return NO_METADATA
+    try:
+        value = inspect.getattr_static(module, name)
+    except Exception:
+        return NO_METADATA
+    if type(value) is str and name != "__all__":
+        return value
+    if (
+        name == "__all__"
+        and type(value) in (list, tuple)
+        and all(type(item) is str for item in value)
+    ):
+        return list(value)
+    return NO_METADATA
+
+
 # Default dunders accessible in sandboxed code
 DEFAULT_ALLOWED_DUNDERS = INTROSPECTION_DUNDERS | frozenset(
     {
@@ -750,6 +791,10 @@ class Policy:
                 # take running host code to produce.
                 if attr in INTROSPECTION_DUNDERS:
                     return True
+                # A module's metadata, likewise: it describes the module,
+                # and the gate reads it as data or not at all.
+                if attr in MODULE_METADATA_DUNDERS and isinstance(obj, ModuleType):
+                    return True
                 quals = _qualified_names(obj, attr)
                 if not (
                     reg._include_pred(attr)
@@ -782,6 +827,8 @@ class Policy:
             return False
         # Default dunder check
         if attr.startswith("__") and attr.endswith("__"):
+            if attr in MODULE_METADATA_DUNDERS:
+                return isinstance(obj, ModuleType)
             return attr in DEFAULT_ALLOWED_DUNDERS
         # Single-underscore private attrs blocked by default
         if attr.startswith("_"):
@@ -921,6 +968,17 @@ class Policy:
                     break
         if reg is None:
             raise ImportError(f"Module '{module_name}' not registered")
+
+        # A module's metadata is read as data, ahead of the member filters
+        # (a default "_*" exclude would otherwise hide it), as the
+        # attribute gate reads it.
+        if member_name in MODULE_METADATA_DUNDERS:
+            value = module_metadata(self.resolve_module(module_name), member_name)
+            if value is NO_METADATA:
+                raise ImportError(
+                    f"cannot import name '{member_name}' from '{module_name}'"
+                )
+            return value
 
         # Check include/exclude filters — bare member name plus the
         # module-qualified form, so dotted patterns work here too.

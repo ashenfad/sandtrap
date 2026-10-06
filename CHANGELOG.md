@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **A module's metadata reads: `__version__`, `__author__`, `__all__`.**
+  No dunder was readable or importable from a module, so
+  `from pkg import __version__` -- how a package's own modules commonly
+  learn its version -- failed in the sandbox. These three now read on a
+  module, as `mod.__version__` and as `from mod import __version__`, on
+  workspace modules and granted host modules alike (ahead of a grant's
+  member filters, whose default `_*` exclude would hide them). They resolve
+  statically out of the module's own namespace, so a PEP 562 `__getattr__`
+  or a descriptor under the name never runs, and only as data: an exact
+  `str`, or for `__all__` a list or tuple of exact strs, returned as a new
+  list. On anything that is not a module they stay refused, and they are
+  not writable from outside. Every other dunder rule is unchanged.
+
 ### Fixed
 
 - **A VFS package is importable by its own name, and runs before its
