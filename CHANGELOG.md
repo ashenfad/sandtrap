@@ -24,6 +24,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Syntax only the compiler rejects is the script's error** (part of #55).
+  `ast.parse` accepts top-level `await`, `async for`, `async with` and async
+  comprehensions, and `return` or `yield` at module level; `compile()`
+  refuses them. In process the `SyntaxError` escaped `exec` as an exception,
+  and from a worker it came back wrapped in a `RuntimeError`, where an
+  ordinary syntax error is `result.error` at every isolation level. It is
+  now `result.error` everywhere, and top-level await says it needs an
+  async execution ("aexec runs it; exec does not"). Running top-level await
+  under process isolation is still open in #55.
+
 - **A VFS package is importable by its own name, and runs before its
   modules** (#56). Only `<name>.py` was looked for, never
   `<name>/__init__.py`, so `import pkg` and `from pkg import name` failed
