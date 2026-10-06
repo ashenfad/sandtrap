@@ -19,7 +19,13 @@ from .builtins import _FrozenBuiltins, make_safe_builtins
 from .errors import StCancelled, StTickLimit, StTimeout
 from .fs import current_fs, suspend
 from .net.context import allow_network, network_allowed
-from .policy import INTROSPECTION_DUNDERS, Policy
+from .policy import (
+    INTROSPECTION_DUNDERS,
+    MODULE_METADATA_DUNDERS,
+    NO_METADATA,
+    Policy,
+    module_metadata,
+)
 from .resource_limits import get_rss_bytes
 from .rewriter import Rewriter
 
@@ -160,6 +166,9 @@ def _module_export(mod: Any, name: str) -> Any:
     dunders a module does answer for describe the module rather than
     export anything, and ``mod.__doc__`` is how to read those.
     """
+    if name in MODULE_METADATA_DUNDERS:
+        value = module_metadata(mod, name)
+        return _MISSING if value is NO_METADATA else value
     if name.startswith("__") and name.endswith("__"):
         return _MISSING
     return mod.__dict__.get(name, _MISSING)
@@ -560,6 +569,19 @@ def make_gates(
                 f"Attribute '{attr}' is not accessible on '{type(obj).__name__}'{loc}"
             )
 
+        # A module's metadata, read as data or not at all (see
+        # MODULE_METADATA_DUNDERS); the policy let it this far only for a
+        # module.
+        if attr in MODULE_METADATA_DUNDERS:
+            value = module_metadata(obj, attr)
+            if value is not NO_METADATA:
+                return value
+            lineno = _caller_lineno()
+            loc = f" (line {lineno})" if lineno else ""
+            raise AttributeError(
+                f"Attribute '{attr}' is not accessible on '{type(obj).__name__}'{loc}"
+            )
+
         value = getattr(obj, attr)
         if callable(value):
             reg = policy._find_registration_for(obj)
@@ -572,7 +594,11 @@ def make_gates(
         # The introspection dunders are readable, not writable: renaming or
         # re-documenting an object the sandbox was merely handed is a write
         # to host state, and the read is what sandboxed code asked for.
-        if attr in INTROSPECTION_DUNDERS or not policy.is_attr_allowed(obj, attr):
+        if (
+            attr in INTROSPECTION_DUNDERS
+            or attr in MODULE_METADATA_DUNDERS
+            or not policy.is_attr_allowed(obj, attr)
+        ):
             lineno = _caller_lineno()
             loc = f" (line {lineno})" if lineno else ""
             raise AttributeError(
@@ -583,7 +609,11 @@ def make_gates(
     def __st_delattr__(obj: Any, attr: str) -> None:
         if isinstance(obj, _ExecModule):
             raise obj._st_refuse_write(attr)
-        if attr in INTROSPECTION_DUNDERS or not policy.is_attr_allowed(obj, attr):
+        if (
+            attr in INTROSPECTION_DUNDERS
+            or attr in MODULE_METADATA_DUNDERS
+            or not policy.is_attr_allowed(obj, attr)
+        ):
             lineno = _caller_lineno()
             loc = f" (line {lineno})" if lineno else ""
             raise AttributeError(

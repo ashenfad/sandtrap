@@ -1000,12 +1000,14 @@ def test_from_import_of_dunder_dict_is_refused(isolation):
 
 @pytest.mark.parametrize("isolation", ISOLATIONS)
 def test_from_import_of_a_body_assigned_dunder_is_refused(isolation):
-    """A module body cannot re-export a name under a dunder spelling."""
+    """A module body cannot re-export a name under a dunder spelling --
+    beyond the module metadata (`__version__`, `__author__`, `__all__`),
+    which is read as data (see test_module_metadata.py)."""
     files = {"/h.py": "__version__ = '1.2'\n__getattr__ = 'not a hook'\n"}
     with _vfs_sandbox(isolation, files) as sb:
         version = sb.exec("from h import __version__ as v")
         hook = sb.exec("from h import __getattr__ as g")
-    assert isinstance(version.error, ImportError), f"leaked: {version.error!r}"
+    assert version.error is None and version.namespace["v"] == "1.2"
     assert isinstance(hook.error, ImportError), f"leaked: {hook.error!r}"
 
 

@@ -102,9 +102,12 @@ builtins it runs on live in the same `__dict__`, so `__builtins__` and the
 `from <module> import` targets, and `dir()` does not list them. Nor does a
 from-import reach the *module type* -- `from h import __getattribute__` and
 `from h import __dict__` are refused, since either one answers for the whole
-dict. No dunder is importable from a workspace module, including one the body
-assigned: `h.__version__` is not readable as an attribute either, so a module
-that wants to publish a version names it `VERSION`.
+dict. No other dunder is importable from a workspace module, including one the
+body assigned, except a module's metadata: `__version__`, `__author__` and
+`__all__` read as attributes and import as names, out of the module's own
+namespace and only as data (an exact `str`, or for `__all__` a list of them,
+copied). So `from pkg import __version__` in `pkg/cli.py` works as it does
+outside the sandbox.
 
 ### Relative imports
 
