@@ -13,6 +13,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and under process isolation every RPC to the parent, no longer counts
   against the timeout.
 
+### Fixed
+
+- **An async registration keeps its grant while it runs.** `network_access`
+  and `host_fs_access` on an `async def` were held only while the call made
+  the coroutine, so its body ran without them.
+- **Cancelling `aexec` waits for the sandboxed code to stop.** Code that
+  caught the cancellation could otherwise keep running after the sandbox's
+  context was gone.
+
 ## 0.4.1 - 2026-10-06
 
 ### Changed

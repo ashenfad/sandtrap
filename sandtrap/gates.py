@@ -136,15 +136,33 @@ def wrap_privileged(
     network_access: bool = False,
     host_fs_access: bool = False,
 ) -> Any:
-    """Wrap a callable to temporarily grant network/fs privileges."""
+    """Wrap a callable to temporarily grant network/fs privileges.
+
+    A coroutine function gets an async wrapper that holds the grant across
+    the await: its body runs when awaited, not when called, so a grant
+    held only around the call is gone before the body needs it.
+    """
+
+    def _granted(stack: ExitStack) -> None:
+        if network_access:
+            stack.enter_context(allow_network())
+        if host_fs_access:
+            stack.enter_context(suspend())
+
+    if inspect.iscoroutinefunction(fn):
+
+        @functools.wraps(fn)
+        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+            with ExitStack() as stack:
+                _granted(stack)
+                return await fn(*args, **kwargs)
+
+        return async_wrapper
 
     @functools.wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         with ExitStack() as stack:
-            if network_access:
-                stack.enter_context(allow_network())
-            if host_fs_access:
-                stack.enter_context(suspend())
+            _granted(stack)
             return fn(*args, **kwargs)
 
     return wrapper
