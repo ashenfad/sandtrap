@@ -174,7 +174,13 @@ async def _within_timeout(coro: Any, timeout: float | None, clock: Any) -> Any:
             if task.done():
                 return task.result()
     except BaseException:
+        # Settle the child before unwinding, as wait_for does: code that
+        # catches CancelledError would otherwise run on after the
+        # sandbox's context and output capture are gone.
         task.cancel()
+        await asyncio.wait({task})
+        if not task.cancelled():
+            task.exception()  # retrieved, so asyncio doesn't log it
         raise
     task.cancel()
     await asyncio.wait({task})

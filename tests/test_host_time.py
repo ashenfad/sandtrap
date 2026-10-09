@@ -138,3 +138,53 @@ def test_overlapping_calls_refund_once():
 def test_host_time_outside_an_execution_is_a_no_op():
     with host_time():
         pass
+
+
+class SlowNet:
+    async def await_(self, seconds: float = WAIT) -> bool:
+        from sandtrap.net.context import network_allowed
+
+        await asyncio.sleep(seconds)
+        return network_allowed.get()
+
+
+@pytest.mark.asyncio
+async def test_a_privileged_async_call_keeps_both_its_grant_and_host_time():
+    """The privilege wrapper used to turn a coroutine function into a
+    plain one returning a coroutine, so the host-time wrapper over it
+    let go before the await, and the grant itself was gone by then."""
+    policy = Policy(timeout=TIMEOUT, allow_network=False)
+    policy.cls(SlowNet, name="SlowNet", network_access=True, host_time=True)
+    result = await Sandbox(policy).aexec(
+        "a = await h.await_()\nb = await h.await_()", namespace={"h": SlowNet()}
+    )
+    assert result.error is None
+    assert result.namespace["a"] is True and result.namespace["b"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_aexec_settles_its_code_first():
+    """As wait_for does: code that catches the cancellation finishes
+    before aexec unwinds, not after the sandbox's context is gone."""
+    policy = Policy(timeout=10.0)
+    policy.module(asyncio)
+    log: list[str] = []
+    sb = Sandbox(policy)
+    task = asyncio.ensure_future(
+        sb.aexec(
+            "import asyncio\n"
+            "try:\n"
+            "    await asyncio.sleep(10)\n"
+            "except asyncio.CancelledError:\n"
+            "    await asyncio.sleep(0.2)\n"
+            "    log.append('settled')\n",
+            namespace={"log": log},
+        )
+    )
+    await asyncio.sleep(0.2)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    assert log == ["settled"]
