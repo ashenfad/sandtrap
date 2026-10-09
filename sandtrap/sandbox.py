@@ -31,6 +31,7 @@ from .builtins import (
     redirect_stderr,
     redirect_stdout,
 )
+from .clock import current_clock, wrap_host_time
 from .errors import StTimeout, StValidationError, strip_internal_frames
 from .fs import FileSystem, patch
 from .gates import _ExecModule, make_gates, wrap_privileged
@@ -148,6 +149,38 @@ class IsolationUnavailable(RuntimeError):
       raising ``OSError`` when the pipe or the process is created.  The
       underlying error is attached as ``__cause__``.
     """
+
+
+# How often the async timeout looks again while a host call holds the clock.
+_PAUSED_POLL = 0.05
+
+
+async def _within_timeout(coro: Any, timeout: float | None, clock: Any) -> Any:
+    """``asyncio.wait_for`` with a deadline that host calls move.
+
+    The checkpoint enforces the timeout while code runs; this enforces it
+    while code awaits. Both read the same clock, so time inside a host call
+    counts against neither.
+    """
+    if timeout is None:
+        return await coro
+    task = asyncio.ensure_future(coro)
+    try:
+        while True:
+            left = clock.remaining(timeout)
+            if left is not None and left <= 0:
+                break
+            await asyncio.wait({task}, timeout=_PAUSED_POLL if left is None else left)
+            if task.done():
+                return task.result()
+    except BaseException:
+        task.cancel()
+        raise
+    task.cancel()
+    await asyncio.wait({task})
+    if task.cancelled():
+        raise asyncio.TimeoutError
+    return task.result()
 
 
 def _await_hint(error: SyntaxError, tree: ast.Module) -> SyntaxError:
@@ -400,7 +433,7 @@ class Sandbox:
         gates["__st_memory__"][1] = start_rss
 
         with ExitStack() as stack:
-            self._enter_sandbox_context(stack)
+            self._enter_sandbox_context(stack, gates=gates)
             return fn(*args, **kwargs)
 
     def _build_namespace(
@@ -449,6 +482,8 @@ class Sandbox:
                     network_access=fn_reg.network_access,
                     host_fs_access=fn_reg.host_fs_access,
                 )
+            if getattr(fn_reg, "host_time", False):
+                fn = wrap_host_time(fn)
             ns.setdefault(fn_name, fn)
             injected[fn_name] = ns[fn_name]
 
@@ -581,9 +616,13 @@ class Sandbox:
         print_fn: Any = None,
         stderr_buf: "TailBuffer | None" = None,
         stdout_buf: "TailBuffer | None" = None,
+        gates: dict[str, Any] | None = None,
     ) -> None:
         """Set up memory limits, network denial, filesystem interception,
-        and print/stdout/stderr redirection."""
+        print/stdout/stderr redirection, and the clock host calls pause."""
+        if gates is not None:
+            token = current_clock.set(gates["__st_host_clock__"])
+            stack.callback(current_clock.reset, token)
         if self.policy.memory_limit is not None:
             stack.enter_context(memory_limit_context(self.policy.memory_limit))
 
@@ -843,6 +882,7 @@ class Sandbox:
                 print_fn=ns["print"],
                 stderr_buf=stderr_buf,
                 stdout_buf=stdout_buf,
+                gates=gates,
             )
             try:
                 exec(code, ns)  # noqa: S102
@@ -989,12 +1029,13 @@ class Sandbox:
                 print_fn=ns["print"],
                 stderr_buf=stderr_buf,
                 stdout_buf=stdout_buf,
+                gates=gates,
             )
             try:
                 exec(code, ns)  # noqa: S102
                 coro = ns["__st_aexec__"]()
-                result_locals = await asyncio.wait_for(
-                    coro, timeout=self.policy.timeout
+                result_locals = await _within_timeout(
+                    coro, self.policy.timeout, gates["__st_host_clock__"]
                 )
                 if result_locals is None:
                     result_locals = {}

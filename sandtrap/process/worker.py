@@ -10,6 +10,7 @@ import uuid
 from multiprocessing.connection import Connection
 from typing import Any, Callable, Literal, Mapping
 
+from ..clock import host_time
 from .protocol import (
     ExecMsg,
     ReadyMsg,
@@ -54,6 +55,13 @@ class RpcProxy:
         object.__setattr__(self, "_attributes", attributes)
 
     def _call(self, method: str, *args: Any, **kwargs: Any) -> Any:
+        # The parent's handler is host time: the worker's checkpoint stops
+        # counting until the answer is back, as the parent's own deadline
+        # does.
+        with host_time():
+            return self._round_trip(method, *args, **kwargs)
+
+    def _round_trip(self, method: str, *args: Any, **kwargs: Any) -> Any:
         call_id = uuid.uuid4().hex
         self._conn.send(
             RpcCallMsg(

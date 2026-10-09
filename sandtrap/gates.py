@@ -16,6 +16,7 @@ from contextlib import ExitStack
 from typing import Any
 
 from .builtins import _FrozenBuiltins, make_safe_builtins
+from .clock import HostClock, current_clock, wrap_host_time
 from .errors import StCancelled, StTickLimit, StTimeout
 from .fs import current_fs, suspend
 from .net.context import allow_network, network_allowed
@@ -508,17 +509,22 @@ def make_gates(
             return value
         needs_network = getattr(reg, "network_access", False)
         needs_host_fs = getattr(reg, "host_fs_access", False)
+        # getattr: registrations pickled by older versions lack host_time.
+        is_host_time = getattr(reg, "host_time", False)
         # Check per-member overrides
         if hasattr(reg, "configure") and member_name in reg.configure:
             spec = reg.configure[member_name]
             needs_network = needs_network or spec.network_access
             needs_host_fs = needs_host_fs or spec.host_fs_access
+            is_host_time = is_host_time or getattr(spec, "host_time", False)
         if needs_network or needs_host_fs:
-            return wrap_privileged(
+            value = wrap_privileged(
                 value,
                 network_access=needs_network,
                 host_fs_access=needs_host_fs,
             )
+        if is_host_time:
+            value = wrap_host_time(value)
         return value
 
     def __st_getattr__(obj: Any, attr: str) -> Any:
@@ -921,6 +927,7 @@ def make_gates(
     _memory_box = [_memory_limit_bytes, _start_rss]
     _in_exec_box = [True]  # True during sb.exec(), False after
     _callback_depth = [0]  # Tracks nesting depth of callback invocations
+    _host_clock = HostClock(_start_time_box)
 
     def __st_checkpoint__() -> None:
         if _cancel_flag_box[0] is not None and _cancel_flag_box[0].is_set():
@@ -928,7 +935,14 @@ def make_gates(
         _tick_counter[0] += 1
         if policy.tick_limit is not None and _tick_counter[0] > policy.tick_limit:
             raise StTickLimit(f"Execution exceeded {policy.tick_limit} tick limit")
-        if _start_time_box[0] is not None and policy.timeout is not None:
+        # Paused while a host call is outstanding: what runs then is
+        # sandboxed code the host called back, and the host's time is
+        # not the code's. Ticks still count it.
+        if (
+            _start_time_box[0] is not None
+            and policy.timeout is not None
+            and not _host_clock.paused
+        ):
             if time.monotonic() - _start_time_box[0] > policy.timeout:
                 raise StTimeout(f"Execution exceeded {policy.timeout}s timeout")
         if _memory_box[0] is not None and _memory_box[1] is not None:
@@ -967,10 +981,12 @@ def make_gates(
                     current_fs.set(captured_fs) if captured_fs is not None else None
                 )
                 tok_net = network_allowed.set(captured_net)
+                tok_clock = current_clock.set(_host_clock)
                 try:
                     return await fn(*args, **kwargs)
                 finally:
                     _callback_depth[0] -= 1
+                    current_clock.reset(tok_clock)
                     network_allowed.reset(tok_net)
                     if tok_fs is not None:
                         current_fs.reset(tok_fs)
@@ -988,10 +1004,12 @@ def make_gates(
                     current_fs.set(captured_fs) if captured_fs is not None else None
                 )
                 tok_net = network_allowed.set(captured_net)
+                tok_clock = current_clock.set(_host_clock)
                 try:
                     return fn(*args, **kwargs)
                 finally:
                     _callback_depth[0] -= 1
+                    current_clock.reset(tok_clock)
                     network_allowed.reset(tok_net)
                     if tok_fs is not None:
                         current_fs.reset(tok_fs)
@@ -1003,6 +1021,7 @@ def make_gates(
     gates["__st_cancel_flag__"] = _cancel_flag_box
     gates["__st_memory__"] = _memory_box
     gates["__st_in_exec__"] = _in_exec_box
+    gates["__st_host_clock__"] = _host_clock
     gates.update(
         {
             "__st_getattr__": __st_getattr__,

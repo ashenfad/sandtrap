@@ -235,6 +235,7 @@ class MemberSpec:
 
     host_fs_access: bool = False
     network_access: bool = False
+    host_time: bool = False
 
 
 @dataclass
@@ -243,6 +244,7 @@ class _FnRegistration:
     name: str
     host_fs_access: bool = False
     network_access: bool = False
+    host_time: bool = False
 
     def __getstate__(self) -> dict:
         detail = _carries_host_state(self.func)
@@ -274,6 +276,7 @@ class _ClsRegistration(_ReconstructsPredicates):
     configure: dict[str, MemberSpec] = field(default_factory=dict)
     host_fs_access: bool = False
     network_access: bool = False
+    host_time: bool = False
 
     def __post_init__(self) -> None:
         self._include_pred = _make_predicate(self.include)
@@ -292,6 +295,7 @@ class _ModuleRegistration(_ReconstructsPredicates):
     recursive: bool = False
     host_fs_access: bool = False
     network_access: bool = False
+    host_time: bool = False
 
     def __post_init__(self) -> None:
         self._include_pred = _make_predicate(self.include)
@@ -625,6 +629,7 @@ class Policy:
         name: str | None = None,
         host_fs_access: bool = False,
         network_access: bool = False,
+        host_time: bool = False,
     ) -> Callable:
         """Register a function. Usable as @policy.fn or @policy.fn(...)."""
 
@@ -642,6 +647,7 @@ class Policy:
                 name=fn_name,
                 host_fs_access=host_fs_access,
                 network_access=network_access,
+                host_time=host_time,
             )
             return f
 
@@ -660,6 +666,7 @@ class Policy:
         configure: dict[str, MemberSpec] | None = None,
         host_fs_access: bool = False,
         network_access: bool = False,
+        host_time: bool = False,
     ) -> type | Callable[[type], type]:
         """Register a class. Usable as @policy.cls or @policy.cls(...)."""
 
@@ -674,6 +681,7 @@ class Policy:
                 configure=configure or {},
                 host_fs_access=host_fs_access,
                 network_access=network_access,
+                host_time=host_time,
             )
             self.classes[cls_name] = reg
             self._reg_by_cls_id[id(c)] = reg
@@ -694,6 +702,7 @@ class Policy:
         recursive: bool = False,
         host_fs_access: bool = False,
         network_access: bool = False,
+        host_time: bool = False,
     ) -> None:
         """Register a module or live object instance."""
         if name is None:
@@ -725,6 +734,7 @@ class Policy:
             recursive=recursive,
             host_fs_access=host_fs_access,
             network_access=network_access,
+            host_time=host_time,
         )
         self.modules[mod_name] = reg
         self._reg_by_module_id[id(obj)] = reg

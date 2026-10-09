@@ -1,4 +1,5 @@
 from .builtins import passthrough_stdio
+from .clock import host_time
 from .errors import (
     StCancelled,
     StError,
@@ -34,6 +35,7 @@ __all__ = [
     "StPolicyNotPortable",
     "StValidationError",
     "VirtualFS",
+    "host_time",
     "passthrough_stdio",
     "sandbox",
 ]

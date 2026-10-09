@@ -24,6 +24,8 @@ policy = Policy(
 
 For agent workloads, a generous `timeout` (safety net) plus a tighter `tick_limit` (abuse prevention) is recommended.
 
+The timeout bounds the code, not the host it calls. Time inside a call to a registration marked `host_time=True` (on `fn`, `cls`, `module`, or a `MemberSpec`) doesn't count against it, and under process isolation neither does an RPC to the parent. Mark the host's own objects, where a call may wait on an LLM or a sub-agent, not libraries: the sandbox can't tell the two apart, and a library's work is the code's. While a host call is outstanding the clock is paused, so code the host calls back into is bounded by `tick_limit` and `cancel()` rather than the timeout. Embedder code can mark a block the same way with `sandtrap.host_time()`.
+
 Both are checked at checkpoints, and so is `sandbox.cancel()`. In-process that makes them cooperative: nothing interrupts a call while it is running, so a long C call (a `pandas` merge over a huge frame) or a catastrophic regex holds the thread until it returns and the timeout fires only at the next checkpoint after that. Treat an in-process `timeout` as best-effort between checkpoints; `isolation="process"` is what puts the code in a worker the host can actually kill. `memory_limit` is checkpoint-checked too, but on Linux it additionally installs an `RLIMIT_AS` cap the kernel enforces mid-call (see [Memory limits](security.md#memory-limits)); on macOS and Windows it is checkpoint-only.
 
 ## Registering functions
@@ -51,7 +53,7 @@ def fetch_url(url):
     ...
 ```
 
-**Options**: `name` (override function name), `host_fs_access` (grant real filesystem access), `network_access` (grant network access).
+**Options**: `name` (override function name), `host_fs_access` (grant real filesystem access), `network_access` (grant network access), `host_time` (its calls don't count against the timeout; see [timeout vs tick_limit](#timeout-vs-tick_limit)).
 
 Register functions that can be looked up by name — module-level functions,
 builtins, classmethods, `functools.partial` of any of those. A **bound method or
@@ -85,7 +87,7 @@ policy.cls(MyClass, exclude="_*")              # hide private attrs (default)
 policy.cls(MyClass, host_fs_access=True)       # methods get real filesystem access
 ```
 
-**Options**: `name`, `constructable`, `include`, `exclude`, `configure`, `host_fs_access`, `network_access`.
+**Options**: `name`, `constructable`, `include`, `exclude`, `configure`, `host_fs_access`, `network_access`, `host_time`.
 
 ## Registering modules
 
@@ -111,7 +113,7 @@ import json
 policy.module(json, recursive=True)
 ```
 
-**Options**: `name`, `include`, `exclude`, `configure`, `recursive`, `host_fs_access`, `network_access`.
+**Options**: `name`, `include`, `exclude`, `configure`, `recursive`, `host_fs_access`, `network_access`, `host_time`.
 
 ## Exposing a live host object
 
