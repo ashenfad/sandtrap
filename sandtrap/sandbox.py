@@ -39,7 +39,7 @@ from .net.context import deny_network
 from .net.patch import install as install_net
 from .policy import Policy
 from .resource_limits import get_rss_bytes, memory_limit_context
-from .rewriter import Rewriter
+from .rewriter import Rewriter, take_future
 
 _exec_counter = itertools.count(1)
 _INTERNAL_KEYS = {"__builtins__", "__name__"}
@@ -678,11 +678,13 @@ class Sandbox:
         """
         try:
             tree = ast.parse(source)
+            future = take_future(tree)
         except SyntaxError as e:
             return ExecResult(error=e)
 
         effective_echo = self.echo if echo is None else echo
         rewriter = Rewriter(echo=effective_echo)
+        rewriter.future_flags = future
         try:
             tree = rewriter.visit(tree)
         except StValidationError as e:
@@ -727,7 +729,7 @@ class Sandbox:
             filename,
         )
 
-        code = compile(tree, filename, "exec")
+        code = compile(tree, filename, "exec", flags=rewriter.future_flags)
 
         self._cancel_flag.clear()
         mem_limit_bytes, start_rss = self._memory_params()
