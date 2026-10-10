@@ -277,6 +277,7 @@ class _VFSLoader:
         tree = ast.parse(source)
         future = take_future(tree)
         rewriter = Rewriter()
+        rewriter.future_flags = future
         tree = rewriter.visit(tree)
         ast.fix_missing_locations(tree)
         code = compile(tree, f"<sandtrap:vfs:{module_name}>", "exec", flags=future)

@@ -3,6 +3,7 @@
 import __future__
 
 import ast
+import copy
 import sys
 from typing import TypeVar, cast
 
@@ -91,6 +92,49 @@ class Rewriter(ast.NodeTransformer):
         self.future_flags = 0
         """The compiler flags the source's ``__future__`` imports ask for,
         set by whoever took them off the tree (:func:`take_future`)."""
+
+    @property
+    def _postponed(self) -> bool:
+        """Whether annotations are postponed (``from __future__ import
+        annotations``): the compiler then stores each annotation's source
+        as a string and never evaluates it."""
+        return bool(self.future_flags & __future__.annotations.compiler_flag)
+
+    def _hold_annotations(
+        self, node: ast.AnnAssign | ast.FunctionDef | ast.AsyncFunctionDef
+    ) -> list[tuple[ast.AST, str, ast.expr]]:
+        """Take ``node``'s annotations off it, to put back after it is
+        rewritten (:meth:`_put_back`), when they are postponed.
+
+        A postponed annotation is stored as its source, so it must stay as
+        written: rewritten, ``typing.ClassVar[int]`` would be stored as a
+        gate call that ``dataclasses`` and anything reading annotations
+        don't recognise. Each is still checked as any code is, on a copy
+        thrown away after, so a name the sandbox refuses is refused there
+        too."""
+        if not self._postponed:
+            return []
+        if isinstance(node, ast.AnnAssign):
+            owners: list[tuple[ast.AST, str]] = [(node, "annotation")]
+        else:
+            a = node.args
+            params = [*a.posonlyargs, *a.args, *a.kwonlyargs, a.vararg, a.kwarg]
+            owners = [(p, "annotation") for p in params if p is not None]
+            owners.append((node, "returns"))
+        held = []
+        for owner, attr in owners:
+            annotation = getattr(owner, attr)
+            if annotation is None:
+                continue
+            self.visit(copy.deepcopy(annotation))
+            setattr(owner, attr, None)
+            held.append((owner, attr, annotation))
+        return held
+
+    @staticmethod
+    def _put_back(held: list[tuple[ast.AST, str, ast.expr]]) -> None:
+        for owner, attr, annotation in held:
+            setattr(owner, attr, annotation)
 
     def _new_tmp(self) -> str:
         name = f"__st_tmp_{self._tmp_counter}"
@@ -290,7 +334,10 @@ class Rewriter(ast.NodeTransformer):
             obj = self.visit(node.target.value)
             value = self.visit(node.value)
             return self._make_setattr(obj, node.target.attr, value, node)
-        return self._recurse(node)
+        held = self._hold_annotations(node)
+        rewritten = self._recurse(node)
+        self._put_back(held)
+        return rewritten
 
     visit_Return = _recurse
     visit_Raise = _recurse
@@ -518,13 +565,17 @@ class Rewriter(ast.NodeTransformer):
         return node
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST | list[ast.stmt]:
+        held = self._hold_annotations(node)
         node = self._prepend_checkpoint(node)
+        self._put_back(held)
         return self._wrap_context_capture(node)
 
     def visit_AsyncFunctionDef(
         self, node: ast.AsyncFunctionDef
     ) -> ast.AST | list[ast.stmt]:
+        held = self._hold_annotations(node)
         node = self._prepend_checkpoint(node)
+        self._put_back(held)
         return self._wrap_context_capture(node)
 
     def visit_ClassDef(self, node: ast.ClassDef) -> ast.AST | list[ast.stmt]:
