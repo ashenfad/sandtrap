@@ -2,6 +2,7 @@
 Python finds a class's home by finds it, and what the code defines still
 can't leave the sandbox by pickle."""
 
+import asyncio
 import dataclasses
 import pickle
 import sys
@@ -10,7 +11,7 @@ import typing
 import pytest
 
 from sandtrap import Policy, RpcProxyMarker, Sandbox, sandbox
-from sandtrap.home import SandboxObjectError, check_sendable, is_sandbox_module
+from sandtrap.home import HOMES, SandboxObjectError, check_sendable, is_sandbox_module
 
 NODE = """\
 from dataclasses import dataclass
@@ -50,6 +51,46 @@ def test_the_module_is_in_use_only_while_the_sandbox_is():
         sb.exec("x = 1")
         assert sb.module_name in sys.modules
     assert sb.module_name not in sys.modules
+
+
+def test_a_class_keeps_its_home_through_later_executions():
+    with Sandbox(policy()) as sb:
+        node = sb.exec(NODE).namespace["Node"]
+        sb.exec("other = 1")
+        assert typing.get_type_hints(node)["child"] == node | None
+
+
+def test_only_the_latest_executions_keep_their_homes():
+    with Sandbox(policy()) as sb:
+        names = []
+        for _ in range(HOMES + 3):
+            sb.exec("x = 1")
+            names.append(sb.module_name)
+        assert len(set(names)) == len(names)
+        kept = [n for n in names if n in sys.modules]
+        assert kept == names[-HOMES:]
+    assert not any(n in sys.modules for n in names)
+
+
+def test_an_async_executions_definitions_are_in_its_module():
+    with Sandbox(policy()) as sb:
+        result = asyncio.run(sb.aexec(NODE))
+        assert result.error is None, result.error
+        node = result.namespace["Node"]
+        assert typing.get_type_hints(node)["child"] == node | None
+
+
+def test_a_quoted_class_variable_is_a_class_variable():
+    p = policy()
+    p.module(typing)
+    with Sandbox(p) as sb:
+        result = sb.exec(
+            "import dataclasses\nimport typing\n"
+            "@dataclasses.dataclass\nclass Counter:\n"
+            "    total: 'typing.ClassVar[int]' = 0\n    name: str = 'c'\n"
+            "print([f.name for f in dataclasses.fields(Counter)])"
+        )
+        assert (result.stdout.strip(), result.error) == ("['name']", None)
 
 
 def test_each_sandbox_has_a_module_of_its_own():
