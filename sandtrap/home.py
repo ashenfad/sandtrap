@@ -1,11 +1,13 @@
 """Where sandboxed code lives: a module of its own, in ``sys.modules``.
 
-Code a :class:`~sandtrap.Sandbox` runs executes in a module named for
-that sandbox (``__sandtrap_<n>__``), registered in ``sys.modules`` while
-the sandbox is in use. A class the code defines names that module as
-its ``__module__``, so what Python finds a class's home by finds it:
+Each execution of a :class:`~sandtrap.Sandbox` runs its code in a module
+of its own (``__sandtrap_<sandbox>_<execution>__``), registered in
+``sys.modules`` for the sandbox's latest :data:`HOMES` executions while
+it is in use. A class the code defines names that module as its
+``__module__``, so what Python finds a class's home by finds it:
 ``dataclasses`` reading a quoted annotation, ``typing.get_type_hints``,
-``inspect.getmodule``.
+``inspect.getmodule``. A module per execution means a class never
+resolves against another execution's names.
 
 It also makes the code's own classes and functions picklable by
 reference, where before nothing could find them. Pickled data has to be
@@ -25,17 +27,39 @@ import pickle
 import types
 from typing import Any
 
-__all__ = ["PREFIX", "SandboxObjectError", "check_sendable", "is_sandbox_module"]
+__all__ = [
+    "HOMES",
+    "PREFIX",
+    "SandboxObjectError",
+    "check_sendable",
+    "is_sandbox_module",
+]
 
 PREFIX = "__sandtrap_"
 """What every sandbox module's name starts with."""
+
+HOMES = 8
+"""How many of a sandbox's executions keep their module registered: the
+latest ones. A class from an older one loses its home (what Python finds
+it by), and its namespace is let go; all of them go when the sandbox
+exits."""
 
 _count = itertools.count(1)
 
 
 def new_module_name() -> str:
-    """A name for one sandbox's module, unique in this process."""
+    """A name for one sandbox's modules, unique in this process: each
+    execution's module is this name with the execution's number."""
     return f"{PREFIX}{next(_count)}__"
+
+
+def forget(names: Any) -> None:
+    """Take the modules named ``names`` out of ``sys.modules``, and
+    empty ``names``."""
+    import sys
+
+    while names:
+        sys.modules.pop(names.pop(), None)
 
 
 def is_sandbox_module(name: Any) -> bool:

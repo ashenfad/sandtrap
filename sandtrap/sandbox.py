@@ -3,6 +3,7 @@
 import ast
 import asyncio
 import builtins as _builtins
+import collections
 import copy
 import inspect
 import itertools
@@ -37,7 +38,7 @@ from .clock import current_clock, wrap_host_time
 from .errors import StTimeout, StValidationError, strip_internal_frames
 from .fs import FileSystem, patch
 from .gates import _ExecModule, make_gates, wrap_privileged
-from .home import new_module_name
+from .home import HOMES, forget, new_module_name
 from .net.context import deny_network
 from .net.patch import install as install_net
 from .policy import Policy
@@ -374,11 +375,17 @@ class Sandbox:
         _validate_echo(echo)
         self.echo = echo
         self._cancel_flag = threading.Event()
-        # The module this sandbox's code runs in (sandtrap.home): its
-        # classes and functions name it, and it is in sys.modules while
-        # the sandbox is in use, so Python finds them there.
-        self.module_name = new_module_name()
-        weakref.finalize(self, sys.modules.pop, self.module_name, None)
+        # The modules this sandbox's code runs in (sandtrap.home), one per
+        # execution: its classes and functions name theirs, and the latest
+        # HOMES of them are in sys.modules while the sandbox is in use, so
+        # Python finds them there, and a class never resolves against
+        # another execution's names.
+        self._base = new_module_name()
+        self._executions = itertools.count(1)
+        self._homes: collections.deque[str] = collections.deque()
+        self.module_name = self._base
+        """The module the latest execution ran in."""
+        weakref.finalize(self, forget, self._homes)
 
         # Install FS-aware patches once (idempotent, permanent) so that
         # builtins.open is the patched version *before* _build_namespace
@@ -393,7 +400,7 @@ class Sandbox:
 
     def __exit__(self, *exc: Any) -> None:
         self._cancel_flag.clear()
-        sys.modules.pop(self.module_name, None)
+        forget(self._homes)
 
     def cancel(self) -> None:
         """Cancel the currently running execution.
@@ -475,13 +482,17 @@ class Sandbox:
         items that should be filtered from result.namespace (unless reassigned).
         """
         # The code's module: a fresh one each execution, registered under
-        # the sandbox's name (unless the embedder named the code itself).
+        # a name of its own (unless the embedder named the code itself).
+        self.module_name = f"{self._base[:-2]}_{next(self._executions)}__"
         module = types.ModuleType(self.module_name)
         ns: dict[str, Any] = module.__dict__
         if namespace:
             ns.update(namespace)
         if ns.get("__name__") == self.module_name:
             sys.modules[self.module_name] = module
+            self._homes.append(self.module_name)
+            while len(self._homes) > HOMES:
+                sys.modules.pop(self._homes.popleft(), None)
         injected: dict[str, Any] = {}
 
         # Modules the embedder handed to this execution. Built here, where
@@ -1078,6 +1089,10 @@ class Sandbox:
                 error = strip_internal_frames(e)
                 result_locals = ns.get("__st_local_capture__", {})
 
+        # The body ran inside a function, so what it defined is local
+        # there: put it in the module, as an exec would have it, for
+        # whatever finds a class by its home.
+        ns.update((k, v) for k, v in result_locals.items() if not k.startswith("__st_"))
         gates["__st_in_exec__"][0] = False
 
         return self._build_result(
