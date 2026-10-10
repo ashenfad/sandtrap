@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **Sandboxed code runs in a module of its own.** Each sandbox's code
+  runs in `__sandtrap_<n>__` (`Sandbox.module_name`), registered in
+  `sys.modules` while the sandbox is in use, so a dataclass with a quoted
+  annotation works and `typing.get_type_hints` resolves the code's
+  classes; it was `__sandtrap__`, which nothing could find.
+- **What the code defines still can't leave by pickle.** Its classes and
+  functions are refused where a value crosses to a worker's parent (the
+  result namespace, an error, a host call's arguments), as pickle refused
+  them before; `sandtrap.home.check_sendable` is the same check for an
+  embedder that pickles what the code hands it.
+
 ### Fixed
 
 - **`from __future__ import ...` takes effect.** Sandboxed code and

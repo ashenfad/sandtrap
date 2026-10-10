@@ -10,6 +10,8 @@ import linecache
 import sys
 import threading
 import time
+import types
+import weakref
 from collections.abc import Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass, field
@@ -35,6 +37,7 @@ from .clock import current_clock, wrap_host_time
 from .errors import StTimeout, StValidationError, strip_internal_frames
 from .fs import FileSystem, patch
 from .gates import _ExecModule, make_gates, wrap_privileged
+from .home import new_module_name
 from .net.context import deny_network
 from .net.patch import install as install_net
 from .policy import Policy
@@ -42,7 +45,15 @@ from .resource_limits import get_rss_bytes, memory_limit_context
 from .rewriter import Rewriter, take_future
 
 _exec_counter = itertools.count(1)
-_INTERNAL_KEYS = {"__builtins__", "__name__"}
+_INTERNAL_KEYS = {
+    "__builtins__",
+    # what the code's module holds of its own (sandtrap.home)
+    "__name__",
+    "__doc__",
+    "__loader__",
+    "__package__",
+    "__spec__",
+}
 
 _ECHO_OPTIONS = ("none", "last", "all")
 
@@ -363,6 +374,11 @@ class Sandbox:
         _validate_echo(echo)
         self.echo = echo
         self._cancel_flag = threading.Event()
+        # The module this sandbox's code runs in (sandtrap.home): its
+        # classes and functions name it, and it is in sys.modules while
+        # the sandbox is in use, so Python finds them there.
+        self.module_name = new_module_name()
+        weakref.finalize(self, sys.modules.pop, self.module_name, None)
 
         # Install FS-aware patches once (idempotent, permanent) so that
         # builtins.open is the patched version *before* _build_namespace
@@ -377,6 +393,7 @@ class Sandbox:
 
     def __exit__(self, *exc: Any) -> None:
         self._cancel_flag.clear()
+        sys.modules.pop(self.module_name, None)
 
     def cancel(self) -> None:
         """Cancel the currently running execution.
@@ -457,7 +474,14 @@ class Sandbox:
         Returns (namespace, injected) where injected maps name → value for
         items that should be filtered from result.namespace (unless reassigned).
         """
-        ns: dict[str, Any] = dict(namespace) if namespace else {}
+        # The code's module: a fresh one each execution, registered under
+        # the sandbox's name (unless the embedder named the code itself).
+        module = types.ModuleType(self.module_name)
+        ns: dict[str, Any] = module.__dict__
+        if namespace:
+            ns.update(namespace)
+        if ns.get("__name__") == self.module_name:
+            sys.modules[self.module_name] = module
         injected: dict[str, Any] = {}
 
         # Modules the embedder handed to this execution. Built here, where
@@ -476,7 +500,6 @@ class Sandbox:
             gates["__st_getattr__"],
             checkpoint=gates["__st_checkpoint__"],
         )
-        ns.setdefault("__name__", "__sandtrap__")
         ns.update(gates)
 
         # Populate registered functions (with privilege wrapping)
