@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   workspace modules that open with one (`annotations`, say) are compiled
   with it, in `exec` and `aexec` alike; before, it was turned into a
   runtime import and silently did nothing. A late one is refused, as
-  Python refuses it.
+  Python refuses it. Postponed annotations are stored as written, so
+  `typing.ClassVar[int]` reads as itself rather than as a gate call.
 
 ## 0.4.2 - 2026-10-09
 
