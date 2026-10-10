@@ -11,6 +11,7 @@ from multiprocessing.connection import Connection
 from typing import Any, Callable, Literal, Mapping
 
 from ..clock import host_time
+from ..home import check_sendable
 from .protocol import (
     ExecMsg,
     ReadyMsg,
@@ -62,6 +63,9 @@ class RpcProxy:
             return self._round_trip(method, *args, **kwargs)
 
     def _round_trip(self, method: str, *args: Any, **kwargs: Any) -> Any:
+        # refused here, in the sandboxed code's terms, rather than by the
+        # parent failing to read the call (sandtrap.home)
+        check_sendable((args, kwargs))
         call_id = uuid.uuid4().hex
         self._conn.send(
             RpcCallMsg(
@@ -141,7 +145,6 @@ class RpcProxy:
         ``filter_namespace`` drop it cleanly when the worker
         sanitises the result namespace before sending it to the
         parent."""
-        import pickle
 
         raise pickle.PicklingError(
             "RpcProxy is bound to its worker connection and can't be pickled "
@@ -364,7 +367,7 @@ def worker_main(
                     # noise. Ship a stand-in that tells the same story
                     # — same class name, message, and rendered frames.
                     try:
-                        pickle.dumps(err)
+                        check_sendable(err)
                     except Exception:
                         try:
                             message = f"{type(err).__name__}: {err}"

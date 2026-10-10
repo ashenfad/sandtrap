@@ -25,6 +25,7 @@ import pickle
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
+from ..home import check_sendable
 from ..sandbox import IsolationStatus
 
 
@@ -39,7 +40,7 @@ def filter_prints(
     safe: list[tuple[Any, ...]] = []
     for entry in prints:
         try:
-            pickle.dumps(entry)
+            check_sendable(entry)
             safe.append(entry)
         except (pickle.PicklingError, TypeError, AttributeError):
             pass
@@ -65,7 +66,9 @@ def partition_namespace(
     dropped: list[str] = []
     for k, v in ns.items():
         try:
-            pickle.dumps(v)
+            # a class or function of the sandbox's own pickles by reference
+            # to a module the other side doesn't have (sandtrap.home)
+            check_sendable(v)
             filtered[k] = v
         except Exception:
             # Anything: pickling arbitrary objects raises arbitrary
