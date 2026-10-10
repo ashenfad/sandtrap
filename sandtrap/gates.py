@@ -28,7 +28,7 @@ from .policy import (
     module_metadata,
 )
 from .resource_limits import get_rss_bytes
-from .rewriter import Rewriter
+from .rewriter import Rewriter, take_future
 
 
 class _SafeFormatter(_string_mod.Formatter):
@@ -275,10 +275,11 @@ class _VFSLoader:
         refuses them as ``from <module> import`` targets.
         """
         tree = ast.parse(source)
+        future = take_future(tree)
         rewriter = Rewriter()
         tree = rewriter.visit(tree)
         ast.fix_missing_locations(tree)
-        code = compile(tree, f"<sandtrap:vfs:{module_name}>", "exec")
+        code = compile(tree, f"<sandtrap:vfs:{module_name}>", "exec", flags=future)
 
         ns = mod.__dict__
         ns["__builtins__"] = make_safe_builtins(

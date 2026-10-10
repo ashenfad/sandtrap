@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- **`from __future__ import ...` takes effect.** Sandboxed code and
+  workspace modules that open with one (`annotations`, say) are compiled
+  with it, in `exec` and `aexec` alike; before, it was turned into a
+  runtime import and silently did nothing. A late one is refused, as
+  Python refuses it.
+
 ## 0.4.2 - 2026-10-09
 
 ### Added

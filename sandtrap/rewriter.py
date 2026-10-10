@@ -1,5 +1,7 @@
 """AST rewriter: validates and transforms Python AST for sandboxed execution."""
 
+import __future__
+
 import ast
 import sys
 from typing import TypeVar, cast
@@ -28,6 +30,52 @@ _BLOCKED_LOAD_NAMES = frozenset({"__builtins__"})
 _DYNAMIC_IMPORT_GATE = "__st_dynimport__"
 
 
+def take_future(tree: ast.Module) -> int:
+    """Remove ``tree``'s leading ``from __future__ import ...`` statements
+    (after its docstring, where Python allows them), and return the
+    compiler flags they ask for.
+
+    They are directives to the compiler, not imports: left in, the
+    rewriter would turn them into runtime imports the compiler never
+    sees (so ``annotations`` would silently not apply), and an async
+    execution wraps the body in a function, where they are not allowed.
+    The caller passes the flags to ``compile`` instead. A feature Python
+    doesn't have is a ``SyntaxError``, as it is to Python.
+    """
+    body = tree.body
+    start = 1 if body and _is_docstring(body[0]) else 0
+    end = start
+    flags = 0
+    while end < len(body) and _is_future(body[end]):
+        node = cast(ast.ImportFrom, body[end])
+        for alias in node.names:
+            feature = getattr(__future__, alias.name, None)
+            if alias.name not in __future__.all_feature_names or feature is None:
+                error = SyntaxError(f"future feature {alias.name} is not defined")
+                error.lineno, error.offset = node.lineno, node.col_offset + 1
+                raise error
+            flags |= feature.compiler_flag
+        end += 1
+    del body[start:end]
+    return flags
+
+
+def _is_docstring(node: ast.stmt) -> bool:
+    return (
+        isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+    )
+
+
+def _is_future(node: ast.stmt) -> bool:
+    return (
+        isinstance(node, ast.ImportFrom)
+        and node.module == "__future__"
+        and not node.level
+    )
+
+
 class Rewriter(ast.NodeTransformer):
     """Fail-closed AST rewriter.
 
@@ -40,6 +88,9 @@ class Rewriter(ast.NodeTransformer):
         super().__init__()
         self._tmp_counter = 0
         self._echo = echo
+        self.future_flags = 0
+        """The compiler flags the source's ``__future__`` imports ask for,
+        set by whoever took them off the tree (:func:`take_future`)."""
 
     def _new_tmp(self) -> str:
         name = f"__st_tmp_{self._tmp_counter}"
@@ -368,6 +419,13 @@ class Rewriter(ast.NodeTransformer):
         return stmts
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> ast.AST | list[ast.stmt]:
+        if _is_future(node):
+            # the leading ones were taken off already (take_future)
+            raise StValidationError(
+                "from __future__ imports must occur at the beginning of the file",
+                lineno=node.lineno,
+                col=node.col_offset,
+            )
         if node.names and any(alias.name == "*" for alias in node.names):
             raise StValidationError(
                 "Wildcard imports are not allowed",
