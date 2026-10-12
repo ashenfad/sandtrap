@@ -9,7 +9,6 @@ import inspect
 import itertools
 import linecache
 import sys
-import threading
 import time
 import types
 import weakref
@@ -37,7 +36,7 @@ from .builtins import (
 from .clock import current_clock, wrap_host_time
 from .errors import StTimeout, StValidationError, strip_internal_frames
 from .fs import FileSystem, patch
-from .gates import _ExecModule, make_gates, wrap_privileged
+from .gates import CancelFlag, _ExecModule, make_gates, wrap_privileged
 from .home import HOMES, forget, new_module_name
 from .net.context import deny_network
 from .net.patch import install as install_net
@@ -374,7 +373,7 @@ class Sandbox:
         # with the display function.
         _validate_echo(echo)
         self.echo = echo
-        self._cancel_flag = threading.Event()
+        self._cancel_flag = CancelFlag()
         # The modules this sandbox's code runs in (sandtrap.home), one per
         # execution: its classes and functions name theirs, and the latest
         # HOMES of them are in sys.modules while the sandbox is in use, so

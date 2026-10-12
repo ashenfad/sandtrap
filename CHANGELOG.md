@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- **A cancel can no longer hang a process worker.** The worker's SIGUSR1
+  handler set a `threading.Event` that the same thread clears at every
+  execution's start, and a signal landing inside that clear deadlocked
+  the worker on the Event's lock; the cancel flag is now lock-free.
+
 ## 0.4.3 - 2026-10-09
 
 ### Changed

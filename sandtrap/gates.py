@@ -8,7 +8,6 @@ import inspect
 import posixpath
 import string as _string_mod
 import sys
-import threading
 import time
 import types
 from collections.abc import Mapping
@@ -440,11 +439,39 @@ class _VFSLoader:
         return self._cache[module_name.split(".")[0]]
 
 
+class CancelFlag:
+    """Whether an execution has been cancelled: ``threading.Event``'s
+    ``set``, ``clear`` and ``is_set``, without its lock.
+
+    A process worker sets it from a signal handler (SIGUSR1), which runs
+    on the main thread between two of its bytecodes, the thread that also
+    clears it at the start of every execution. An Event takes the same
+    non-reentrant lock in both, so a signal landing inside ``clear`` left
+    the handler waiting forever on a lock its own thread held, and the
+    worker hung. Nothing waits on a cancel, so the lock bought nothing:
+    each method is one attribute access, atomic under the GIL.
+    """
+
+    __slots__ = ("_set",)
+
+    def __init__(self) -> None:
+        self._set = False
+
+    def set(self) -> None:
+        self._set = True
+
+    def clear(self) -> None:
+        self._set = False
+
+    def is_set(self) -> bool:
+        return self._set
+
+
 def make_gates(
     policy: Policy,
     *,
     _start_time: float | None = None,
-    _cancel_flag: threading.Event | None = None,
+    _cancel_flag: CancelFlag | None = None,
     _memory_limit_bytes: int | None = None,
     _start_rss: int | None = None,
     _filesystem: Any = None,
