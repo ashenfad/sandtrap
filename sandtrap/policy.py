@@ -489,6 +489,7 @@ class Policy:
         timeout: float = 30.0,
         memory_limit: int | None = None,
         max_stdout: int | None = None,
+        stdout_keep: str = "tail",
         allow_network: bool = False,
         tick_limit: int | None = None,
         module_root: str = "/",
@@ -507,7 +508,15 @@ class Policy:
         # Resource limits
         self.timeout = timeout
         self.memory_limit = memory_limit  # MB of additional allocation headroom
-        self.max_stdout = max_stdout  # max chars of stdout (keeps tail)
+        self.max_stdout = max_stdout  # max chars of captured stdout and stderr
+        # Which part of over-long output max_stdout keeps: "tail", the most
+        # recent; or "ends", the first half and the last half with a marker
+        # counting what was left out between them.
+        if stdout_keep not in ("tail", "ends"):
+            raise ValueError(
+                f'stdout_keep must be "tail" or "ends", not {stdout_keep!r}'
+            )
+        self.stdout_keep = stdout_keep
         self.tick_limit = tick_limit  # max checkpoint ticks per execution
 
         # Where VFS module imports resolve from. `import mod` looks for

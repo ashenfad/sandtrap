@@ -9,9 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`Policy(stdout_keep="ends")`** keeps the first and last halves of
+  `max_stdout` with a marker counting what was left out between them;
+  `"tail"`, the default, keeps the most recent output as before.
 - **`render_prints=PrintRendering(...)`** renders each print's values with
   reprobate as it is made, into `result.rendered_prints`: bounded text
   instead of `snapshot_prints`' deep copies (#71). Needs `sandtrap[render]`.
+
+### Changed
+
+- **Capturing output past `max_stdout` costs what is written**, not what the
+  buffer holds: it used to copy the whole retained tail on every write.
 
 ## 0.5.0 - 2026-10-16
 

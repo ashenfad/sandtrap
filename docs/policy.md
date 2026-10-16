@@ -11,10 +11,25 @@ policy = Policy(
     timeout=30.0,        # wall-clock seconds (default 30, None to disable)
     tick_limit=None,     # max checkpoint ticks (None to disable)
     memory_limit=None,   # MB of additional RSS headroom (None to disable)
-    max_stdout=None,     # max chars of captured stdout, keeps tail (None for unlimited)
+    max_stdout=None,     # max chars of captured stdout and stderr (None for unlimited)
+    stdout_keep="tail",  # past max_stdout keep the "tail", or both "ends"
     allow_network=False, # allow socket operations (default False)
 )
 ```
+
+### max_stdout and stdout_keep
+
+`max_stdout` caps how much of stdout and of stderr an execution captures. Past it, `stdout_keep="tail"` (the default) keeps the most recent `max_stdout` characters after a `... [earlier output truncated]` marker. `stdout_keep="ends"` keeps the first half and the last half, with a marker counting what was left out between them:
+
+```
+line 0
+line 1
+... [12345 characters omitted] ...
+line 998
+line 999
+```
+
+The start says what a run was doing and the end how it finished; the tail alone loses the first. Either way, the captured text never grows past the cap, however much the code writes, and a write costs what it writes.
 
 ### timeout vs tick_limit
 
