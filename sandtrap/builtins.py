@@ -1,6 +1,7 @@
 """Safe builtins for sandboxed execution."""
 
 import builtins as _builtins
+import collections
 import contextvars
 import copyreg
 import functools
@@ -287,34 +288,95 @@ copyreg.dispatch_table[_GatedMeta] = _reduce_gated
 
 
 class TailBuffer:
-    """A write-only string buffer that keeps only the most recent bytes.
+    """A write-only string buffer that keeps only the most recent characters.
 
-    When the total written content exceeds *max_chars*, earlier output is
-    discarded and a truncation marker is prepended on read.
+    When the total written exceeds *max_chars*, earlier output is discarded
+    and a truncation marker is prepended on read. Output is held as a queue
+    of the chunks written and trimmed from the front, so a write costs what
+    it writes, not what the buffer holds.
     """
 
     _TRUNCATION_MARKER = "... [earlier output truncated]\n"
 
     def __init__(self, max_chars: int | None = None) -> None:
-        self._buf = StringIO()
         self._max = max_chars
-        self._truncated = False
+        self._chunks: collections.deque[str] = collections.deque()
+        self._size = 0
+        self._dropped = 0
 
     def write(self, text: str) -> None:
-        self._buf.write(text)
-        if self._max is not None and self._buf.tell() > self._max:
-            # Keep the tail
-            content = self._buf.getvalue()
-            keep = content[-self._max :]
-            self._buf = StringIO()
-            self._buf.write(keep)
-            self._truncated = True
+        if not text:
+            return
+        self._chunks.append(text)
+        self._size += len(text)
+        if self._max is not None and self._size > self._max:
+            self._trim(self._size - self._max)
+
+    def _trim(self, excess: int) -> None:
+        """Drop ``excess`` characters from the front."""
+        self._dropped += excess
+        self._size -= excess
+        while excess:
+            first = self._chunks[0]
+            if len(first) <= excess:
+                self._chunks.popleft()
+                excess -= len(first)
+            else:
+                self._chunks[0] = first[excess:]
+                excess = 0
+
+    def _kept(self) -> str:
+        return "".join(self._chunks)
 
     def getvalue(self) -> str:
-        content = self._buf.getvalue()
-        if self._truncated:
+        content = self._kept()
+        if self._dropped:
             return self._TRUNCATION_MARKER + content
         return content
+
+
+class EndsBuffer(TailBuffer):
+    """A :class:`TailBuffer` that keeps the start of the output as well.
+
+    The first half of *max_chars* holds the beginning of what was written
+    and the second half the most recent; what falls between is replaced on
+    read by a marker counting it. The start says what a run was doing and
+    the end how it finished, where tail alone loses the first.
+    """
+
+    def __init__(self, max_chars: int | None = None) -> None:
+        tail = None if max_chars is None else max_chars - max_chars // 2
+        super().__init__(tail)
+        self._head_max = None if max_chars is None else max_chars // 2
+        self._head: list[str] = []
+        self._head_size = 0
+
+    def write(self, text: str) -> None:
+        if self._head_max is not None and self._head_size < self._head_max:
+            take = text[: self._head_max - self._head_size]
+            self._head.append(take)
+            self._head_size += len(take)
+            text = text[len(take) :]
+        super().write(text)
+
+    def getvalue(self) -> str:
+        head = "".join(self._head)
+        if self._dropped:
+            return (
+                f"{head}\n... [{self._dropped} characters omitted] ...\n{self._kept()}"
+            )
+        return head + self._kept()
+
+
+OUTPUT_KEEPS = ("tail", "ends")
+
+
+def make_output_buffer(max_chars: int | None, keep: str = "tail") -> TailBuffer:
+    """A capture buffer for stdout or stderr: one that keeps the most recent
+    *max_chars* (``"tail"``), or the start and the end (``"ends"``)."""
+    if keep == "ends":
+        return EndsBuffer(max_chars)
+    return TailBuffer(max_chars)
 
 
 def make_print(buffer: StringIO | TailBuffer) -> Any:

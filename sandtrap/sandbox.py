@@ -26,6 +26,7 @@ from .builtins import (
     install_stderr,
     install_stdout,
     make_input,
+    make_output_buffer,
     make_print,
     make_safe_builtins,
     make_safe_help,
@@ -713,8 +714,12 @@ class Sandbox:
         return self.policy.memory_limit * 1024 * 1024, get_rss_bytes()
 
     def _make_stdout_buf(self) -> TailBuffer:
-        """Create a stdout buffer, respecting max_stdout policy."""
-        return TailBuffer(max_chars=self.policy.max_stdout)
+        """Create a capture buffer, respecting the policy's max_stdout and
+        stdout_keep (read with a default: a policy pickled before it existed
+        has none)."""
+        return make_output_buffer(
+            self.policy.max_stdout, getattr(self.policy, "stdout_keep", "tail")
+        )
 
     def _enter_sandbox_context(
         self,
@@ -837,7 +842,7 @@ class Sandbox:
         # Buffers first: the synthetic sys's stdout/stderr route to them,
         # and the import gate needs the synthetic sys.
         stdout_buf = self._make_stdout_buf()
-        stderr_buf = TailBuffer(max_chars=self.policy.max_stdout)
+        stderr_buf = self._make_stdout_buf()
         sandbox_sys = (
             make_sandbox_sys(stdin, argv, stdout_buf, stderr_buf)
             if (stdin is not None or argv is not None)
