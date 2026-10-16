@@ -1,6 +1,6 @@
 [project]
 name = "sandtrap"
-version = "0.4.4"
+version = "0.5.0"
 description = "Local Python sandbox using AST rewriting, with optional subprocess isolation and kernel-level enforcement."
 readme = "README.md"
 license = "MIT"
@@ -24,11 +24,11 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    # 0.2.0: the backend protocol's read takes a byte range
-    # (`read(path, offset, size)`) and a binary `open()` is a lazy stream
-    # over it, which is what lets the process sandbox's filesystem bridge
-    # forward a seek instead of shipping the whole file.
-    "monkeyfs>=0.2.0,<0.3.0",
+    # 0.2.8: a virtual file whose save fails at garbage collection reports
+    # it (LostWriteError) instead of discarding it, which is what lets an
+    # in-process execution fail for a write it lost. Earlier 0.2.x discard
+    # it silently.
+    "monkeyfs>=0.2.8,<0.3.0",
 ]
 
 [project.urls]
