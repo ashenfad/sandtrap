@@ -12,6 +12,7 @@ from multiprocessing.connection import Connection
 from typing import Any, Callable, Literal, Mapping
 
 from ..clock import host_time
+from ..errors import RpcChannelClosed
 from ..home import check_sendable
 from .protocol import (
     ExecMsg,
@@ -26,6 +27,12 @@ from .protocol import (
     partition_namespace,
 )
 from .spool import spool_namespace
+
+_channel = {"open": True}
+"""Whether the worker still serves its parent's answers to host calls.
+Closed when the worker's loop ends: a call made after that (a file's
+finalizer pushing its content while the worker exits) would wait for an
+answer that never comes, until the parent kills the worker."""
 
 
 class RpcProxy:
@@ -65,6 +72,11 @@ class RpcProxy:
             return self._round_trip(method, *args, **kwargs)
 
     def _round_trip(self, method: str, *args: Any, **kwargs: Any) -> Any:
+        if not _channel["open"]:
+            raise RpcChannelClosed(
+                f"cannot call {method!r} on the host: the worker is shutting "
+                "down and its parent no longer answers"
+            )
         # refused here, in the sandboxed code's terms, rather than by the
         # parent failing to read the call (sandtrap.home)
         check_sendable((args, kwargs))
@@ -87,9 +99,18 @@ class RpcProxy:
             raise RuntimeError(
                 f"RPC call_id mismatch (sent {call_id!r}, got {msg.call_id!r})"
             )
-        if msg.error is not None:
-            raise msg.error
-        return msg.value
+        error, value = msg.error, msg.value
+        del msg
+        if error is None:
+            return value
+        # Raised without a local left holding it: the error's traceback
+        # holds this frame, so a local naming the error would make a cycle
+        # that keeps the whole failed call, its arguments and its caller's
+        # objects alive until the cyclic GC runs.
+        try:
+            raise error
+        finally:
+            del error
 
     def __getattr__(self, name: str) -> Callable[..., Any]:
         # Dunder lookup falls through to the type, so this only fires
@@ -417,3 +438,8 @@ def worker_main(
                 # After a memory failure the next execution needs that
                 # memory back.
                 gc.collect()
+
+    # The parent has shut the worker down and stops answering: whatever
+    # still calls the host from here on (a finalizer as the worker exits)
+    # is refused at once rather than left waiting.
+    _channel["open"] = False

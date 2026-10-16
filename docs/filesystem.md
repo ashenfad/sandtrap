@@ -32,6 +32,10 @@ An explicit `close()` or `with` block still raises the failure into the code, an
 
 A loss is charged to the execution whose context finalized the file, through `sys.unraisablehook`: sandtrap puts one hook in front of whatever hook is installed and passes on everything that isn't a lost write. So a file still open when the execution ends -- bound in `result.namespace`, or held by a failed execution's traceback -- fails nothing when it is collected later: that loss goes to the previous hook, which by default prints it to stderr. The same goes for a file in a reference cycle, which is saved whenever the cyclic garbage collector runs, possibly during another execution, which it then fails. Close files explicitly to keep the failure where it happened.
 
+Under process isolation, a file still open when the sandbox closes is not saved at all: the worker finalizes it as it exits, after its parent has stopped answering, so the save is refused and nothing is reported.
+
+A save that fails at an explicit `close()` or, in a worker, `flush()` has already been raised to the code; the file is not saved again when collected, and nothing more is reported, unless the code changes the file's content afterwards. That new content was never reported, so losing it fails the execution as above.
+
 ### Library data files
 
 Granted libraries can still read their own bundled data while a VFS is

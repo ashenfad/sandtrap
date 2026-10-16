@@ -28,7 +28,7 @@ from typing import Any
 
 from monkeyfs.virtualfile import open_file
 
-from ..errors import lost_write_error
+from ..errors import RpcChannelClosed, lost_write_error
 
 
 class RemoteFSMarker:
@@ -343,40 +343,69 @@ class _PushOnClose:
     def writable(self) -> bool:  # type: ignore[override]
         return self._writable
 
+    def _changed(self) -> None:
+        """Note a change to the buffer: content no failed save has
+        reported yet."""
+        self._save_raised = False
+
+    def _save(self) -> None:
+        """Push the buffer, marking it reported when the push raises: the
+        caller has been told about this content, and a finalizer that
+        fails to save it again has nothing new to report, until the
+        buffer changes."""
+        try:
+            self._push()
+        except BaseException:
+            self._save_raised = True
+            raise
+
+    def writelines(self, lines: Any) -> None:  # type: ignore[override]
+        for line in lines:
+            self.write(line)  # type: ignore[attr-defined]
+
+    def truncate(self, size: Any = None) -> int:  # type: ignore[override]
+        self._guard_write()
+        before = len(self.getvalue())  # type: ignore[attr-defined]
+        after = super().truncate(size)  # type: ignore[misc]
+        if after != before:
+            self._changed()
+        return after
+
     def flush(self) -> None:  # type: ignore[override]
         super().flush()  # type: ignore[misc]
         if self._writable and not self.closed:  # type: ignore[attr-defined]
-            self._push()
+            self._save()
 
     def close(self) -> None:  # type: ignore[override]
         if not self.closed and self._writable:  # type: ignore[attr-defined]
-            try:
-                self._push()
-            except BaseException:
-                # The caller has been told; a later finalizer that fails
-                # the same way has nothing new to report.
-                self._close_raised = True
-                raise
+            self._save()
         super().close()  # type: ignore[misc]
 
-    def __del__(self, _is_finalizing: Any = sys.is_finalizing) -> None:
+    def __del__(
+        self,
+        _is_finalizing: Any = sys.is_finalizing,
+        _channel_closed: Any = RpcChannelClosed,
+    ) -> None:
         """Push an unclosed file's content when it is garbage collected.
 
         Defined here rather than left to ``io``'s finalizer, which calls
         ``close()`` but discards a failure before Python 3.13 (outside
         development mode). A push that fails raises :class:`StLostWrite`
         to ``sys.unraisablehook``, where the execution that dropped the
-        file picks it up. It stays quiet while the interpreter shuts down,
-        and when an explicit ``close()`` already raised the failure.
+        file picks it up. It stays quiet while the interpreter or the
+        worker shuts down, when no execution is left to report to, and
+        does not push again content whose save an explicit ``close()`` or
+        ``flush()`` already raised to the code.
         """
         if self.closed:  # type: ignore[attr-defined]
             return
-        reported = getattr(self, "_close_raised", False)
         try:
-            if getattr(self, "_writable", False):
+            if getattr(self, "_writable", False) and not getattr(
+                self, "_save_raised", False
+            ):
                 self._push()
         except Exception as e:
-            if reported or _is_finalizing():
+            if _is_finalizing() or isinstance(e, _channel_closed):
                 return
             raise lost_write_error(self._path, e) from e
         finally:
@@ -421,7 +450,10 @@ class _RemoteBytesFile(_PushOnClose, io.BytesIO):
 
     def write(self, data: Any) -> int:  # type: ignore[override]
         self._guard_write()
-        return super().write(data)
+        written = super().write(data)
+        if written:
+            self._changed()
+        return written
 
 
 class _RemoteTextFile(_PushOnClose, io.StringIO):
@@ -458,4 +490,7 @@ class _RemoteTextFile(_PushOnClose, io.StringIO):
 
     def write(self, data: str) -> int:  # type: ignore[override]
         self._guard_write()
-        return super().write(data)
+        written = super().write(data)
+        if written:
+            self._changed()
+        return written
