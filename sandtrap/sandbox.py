@@ -42,6 +42,7 @@ from .home import HOMES, forget, new_module_name
 from .net.context import deny_network
 from .net.patch import install as install_net
 from .policy import Policy
+from .prints import Fanout, PrintRenderer, PrintRendering, require_reprobate
 from .resource_limits import get_rss_bytes, memory_limit_context
 from .rewriter import Rewriter, take_future
 
@@ -70,6 +71,19 @@ def _validate_echo(echo: Any) -> None:
         raise ValueError(
             f"Invalid echo option: {echo!r}. Expected one of {_ECHO_OPTIONS}."
         )
+
+
+def _validate_render_prints(render_prints: Any) -> None:
+    """Refuse anything but a :class:`PrintRendering` or ``None``, and
+    import reprobate now, so a missing install fails at construction."""
+    if render_prints is None:
+        return
+    if not isinstance(render_prints, PrintRendering):
+        raise TypeError(
+            "render_prints takes a PrintRendering (or None), not "
+            f"{type(render_prints).__name__}"
+        )
+    require_reprobate()
 
 
 def _validate_keep(keep: Any) -> "frozenset[str] | None":
@@ -370,6 +384,15 @@ class ExecResult:
     finds a variable gone can say *which* one and why, rather than
     reading the absence as a bug.  Names left out by ``keep`` are not
     listed: the caller asked for them to be left out."""
+    rendered_prints: list[str] = field(default_factory=list)
+    """With ``render_prints``: each print's values (``print``, an echoed
+    expression, ``help``) rendered by reprobate as it was made, at most
+    ``PrintRendering.per_print`` characters each, for the first
+    ``PrintRendering.limit`` prints. Empty otherwise."""
+    print_count: int = 0
+    """With ``render_prints``: how many prints the execution made,
+    rendered or not, so a caller can say how many it was not shown.
+    ``0`` otherwise."""
     sizes: dict[str, int] = field(default_factory=dict)
     """Each ``namespace`` value's pickled size in bytes, known before any
     value is read, when a process sandbox spooled the result; empty
@@ -392,12 +415,15 @@ class Sandbox:
         filesystem: FileSystem | None = None,
         snapshot_prints: bool = False,
         echo: Literal["none", "last", "all"] = "none",
+        render_prints: PrintRendering | None = None,
     ) -> None:
         _validate_mode(mode)
+        _validate_render_prints(render_prints)
         self.policy = policy
         self.mode = mode
         self.filesystem = filesystem
         self.snapshot_prints = snapshot_prints
+        self.render_prints = render_prints
         # REPL-style auto-display of top-level expression statements.
         # Fixed at construction: the setting changes the compiled AST,
         # so a mutable one would leave already-compiled code disagreeing
@@ -505,6 +531,7 @@ class Sandbox:
         sandbox_sys: Any = None,
         echo: str | None = None,
         modules: Mapping[str, Mapping[str, Any]] | None = None,
+        renderer: PrintRenderer | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Build the execution namespace with builtins, gates, and registered items.
 
@@ -593,6 +620,8 @@ class Sandbox:
                 except Exception:
                     snapped = args
                 prints_list.append(snapped)
+            if renderer is not None:
+                renderer.append(args)
             stdout_handler(*args, **kwargs)
 
         ns["print"] = print_fn
@@ -622,6 +651,8 @@ class Sandbox:
                     except Exception:
                         snapped = (value,)
                     prints_list.append(snapped)
+                if renderer is not None:
+                    renderer.append((value,))
                 stdout_handler(repr(value))
 
             ns["__st_display__"] = display_fn
@@ -630,7 +661,10 @@ class Sandbox:
         # help() writes directly to stdout_buf/prints_list (it predates
         # the sys.stdout router; direct writes also skip the router's
         # indirection for the common case).
-        help_fn = make_safe_help(stdout_buf, prints_list)
+        help_fn = make_safe_help(
+            stdout_buf,
+            Fanout(prints_list, renderer) if renderer is not None else prints_list,
+        )
         ns["help"] = help_fn
         injected["help"] = help_fn
         ns["__builtins__"]["help"] = help_fn
@@ -774,11 +808,12 @@ class Sandbox:
         TailBuffer,
         TailBuffer,
         list[tuple[Any, ...]] | None,
+        PrintRenderer | None,
     ]:
         """Fix locations, register linecache, compile, and build namespace.
 
         Returns ``(code, filename, gates, ns, injected, stdout_buf,
-        stderr_buf, prints_list)``.
+        stderr_buf, prints_list, renderer)``.
         """
         ast.fix_missing_locations(tree)
 
@@ -816,6 +851,11 @@ class Sandbox:
             _sandbox_sys=sandbox_sys,
         )
         prints_list = [] if self.snapshot_prints else None
+        renderer = (
+            PrintRenderer(self.render_prints)
+            if self.render_prints is not None
+            else None
+        )
         # the rewriter carries this execution's effective echo — using
         # it here keeps the display transform and display fn in lockstep
         ns, injected = self._build_namespace(
@@ -826,10 +866,21 @@ class Sandbox:
             sandbox_sys,
             echo=rewriter._echo,
             modules=modules,
+            renderer=renderer,
         )
         self._resolve_module_refs(ns, gates)
 
-        return code, filename, gates, ns, injected, stdout_buf, stderr_buf, prints_list
+        return (
+            code,
+            filename,
+            gates,
+            ns,
+            injected,
+            stdout_buf,
+            stderr_buf,
+            prints_list,
+            renderer,
+        )
 
     def _build_result(
         self,
@@ -844,6 +895,7 @@ class Sandbox:
         extra_locals: dict[str, Any] | None = None,
         keep: "frozenset[str] | None" = None,
         home: str | None = None,
+        renderer: PrintRenderer | None = None,
     ) -> ExecResult:
         """Post-execution: build the result namespace and clean up.
 
@@ -903,6 +955,8 @@ class Sandbox:
             ticks=ticks,
             prints=prints,
             dropped=dropped,
+            rendered_prints=renderer.rendered if renderer is not None else [],
+            print_count=renderer.count if renderer is not None else 0,
         )
 
     def _forget_home(self, name: Any) -> None:
@@ -986,10 +1040,18 @@ class Sandbox:
         # it. It is the script's error, and comes back as one, as a parse
         # error does.
         try:
-            code, filename, gates, ns, injected, stdout_buf, stderr_buf, prints_list = (
-                self._compile_and_setup(
-                    tree, rewriter, source, namespace, stdin, argv, modules
-                )
+            (
+                code,
+                filename,
+                gates,
+                ns,
+                injected,
+                stdout_buf,
+                stderr_buf,
+                prints_list,
+                renderer,
+            ) = self._compile_and_setup(
+                tree, rewriter, source, namespace, stdin, argv, modules
             )
         except SyntaxError as e:
             return ExecResult(error=_await_hint(e, tree))
@@ -1027,6 +1089,7 @@ class Sandbox:
                 error,
                 keep=keep,
                 home=home,
+                renderer=renderer,
             )
         finally:
             # The code's frames have this one as their f_back, and the
@@ -1035,6 +1098,7 @@ class Sandbox:
             # the cyclic GC frees, keeping what the code built alive until
             # it runs.
             del ns, injected, gates, stdout_buf, stderr_buf, prints_list, error
+            del renderer
 
     async def aexec(
         self,
@@ -1126,10 +1190,18 @@ class Sandbox:
         tree.body = [wrapper]
 
         try:
-            code, filename, gates, ns, injected, stdout_buf, stderr_buf, prints_list = (
-                self._compile_and_setup(
-                    tree, rewriter, source, namespace, stdin, argv, modules
-                )
+            (
+                code,
+                filename,
+                gates,
+                ns,
+                injected,
+                stdout_buf,
+                stderr_buf,
+                prints_list,
+                renderer,
+            ) = self._compile_and_setup(
+                tree, rewriter, source, namespace, stdin, argv, modules
             )
         except SyntaxError as e:
             return ExecResult(error=e)
@@ -1210,6 +1282,7 @@ class Sandbox:
                 extra_locals=result_locals,
                 keep=keep,
                 home=home,
+                renderer=renderer,
             )
         finally:
             # The code's frames have this one as their f_back, and the
@@ -1218,4 +1291,5 @@ class Sandbox:
             # the cyclic GC frees, keeping what the code built alive until
             # it runs.
             del ns, injected, gates, stdout_buf, stderr_buf, prints_list, error
+            del renderer
             del result_locals

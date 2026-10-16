@@ -176,6 +176,22 @@ Objects are deep-copied at print time, so mutations after `print()` don't affect
 
 If code errors mid-execution, `result.prints` still contains all prints that occurred before the error.
 
+### Rendering prints instead of copying them
+
+A snapshot is a deep copy of everything printed: `print(df)` of a 200MB table copies it, and out of a worker pickles and sends it, whatever the host then does with it. When the host wants the printed values only to show them within a budget, `render_prints` renders each one with [reprobate](https://github.com/ashenfad/reprobate) at the moment it is printed instead:
+
+```python
+from sandtrap import PrintRendering
+
+with sandbox(Policy(), render_prints=PrintRendering(per_print=80, limit=200)) as sb:
+    result = sb.exec("rows = list(range(100_000))\nprint('rows:', rows)\n")
+
+result.rendered_prints  # ["'rows:' [0, 1, 2, 3, 4, 5, 6, 7, ...99992 more]"]
+result.print_count      # 1
+```
+
+Each `print`, echoed expression and `help()` becomes one string of at most `per_print` characters, its values sharing the budget (each at least 40). Only the first `limit` prints are rendered; the rest are counted in `result.print_count`, so the work and the memory stay bounded however much the code prints. Nothing is copied, and out of a worker only the strings cross. A value whose rendering fails is named by its type. Renderings are kept after a `MemoryError`, as stdout is. `render_prints` needs `pip install 'sandtrap[render]'`, and works alongside `snapshot_prints` or without it.
+
 ## Expression echo (REPL-style)
 
 Agents (and people) coming from notebooks often write a bare expression -- `x` -- expecting to see its value, as at a REPL. By default sandtrap runs it silently, like a script. The `echo` option enables notebook semantics:

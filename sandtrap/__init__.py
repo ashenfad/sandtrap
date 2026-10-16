@@ -13,6 +13,7 @@ from .errors import (
 from .factory import sandbox
 from .fs import FileSystem, IsolatedFS, VirtualFS
 from .policy import MemberSpec, Policy, PolicyProblem
+from .prints import PrintRendering
 from .process.protocol import RpcProxyMarker, rpc_surface
 from .sandbox import ExecResult, IsolationStatus, IsolationUnavailable
 from .sandbox import Sandbox as Sandbox
@@ -26,6 +27,7 @@ __all__ = [
     "MemberSpec",
     "Policy",
     "PolicyProblem",
+    "PrintRendering",
     "RpcProxyMarker",
     "rpc_surface",
     "StCancelled",

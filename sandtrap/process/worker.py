@@ -247,6 +247,7 @@ def worker_main(
     snapshot_prints: bool = False,
     echo: Literal["none", "last", "all"] = "none",
     spool_dir: str | None = None,
+    render_prints: Any = None,
 ) -> None:
     """Main loop for the worker subprocess.
 
@@ -299,6 +300,12 @@ def worker_main(
         # inherited these in sys.modules and never noticed; one that starts
         # fresh has to fetch them from disk.
         _warm_deferred_imports()
+        if render_prints is not None:
+            # rendering imports reprobate at its first print, which must
+            # be readable then: import it while the filesystem still is
+            from ..prints import require_reprobate
+
+            require_reprobate()
 
         # Apply kernel-level isolation before running any user code.
         from .platform import apply_isolation
@@ -317,6 +324,7 @@ def worker_main(
             filesystem=filesystem,
             snapshot_prints=snapshot_prints,
             echo=echo,
+            render_prints=render_prints,
         )
 
         # Install SIGUSR1 handler for cancel — single reader on the pipe,
@@ -423,6 +431,8 @@ def worker_main(
                         prints=filter_prints(result.prints),
                         stderr=result.stderr,
                         dropped=(*result.dropped, *dropped),
+                        rendered_prints=result.rendered_prints,
+                        print_count=result.print_count,
                         spooled=spooled,
                     )
                 )

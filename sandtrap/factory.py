@@ -7,6 +7,7 @@ from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Literal
 
 from .policy import Policy
+from .prints import PrintRendering
 from .sandbox import Sandbox
 
 if TYPE_CHECKING:
@@ -27,6 +28,7 @@ def sandbox(
     start_method: Literal["fork", "spawn", "forkserver"] | None = None,
     preload_grants: bool = False,
     spool: "bool | str | os.PathLike[str]" = False,
+    render_prints: PrintRendering | None = None,
 ) -> Sandbox | ProcessSandbox:
     """Create a sandbox with the specified isolation level.
 
@@ -121,6 +123,12 @@ def sandbox(
         path spools under that directory instead (``/dev/shm`` keeps it in
         memory on Linux). Ignored for ``isolation="none"``, whose result
         holds the values themselves.
+    render_prints:
+        A :class:`~sandtrap.PrintRendering` renders each print's values with
+        reprobate as the print is made, into ``result.rendered_prints``:
+        bounded text instead of ``snapshot_prints``' deep copies, so nothing
+        is copied and, out of a worker, only text crosses. Needs
+        ``sandtrap[render]``.
     """
     if isolation == "none":
         return Sandbox(
@@ -129,6 +137,7 @@ def sandbox(
             filesystem=filesystem,
             snapshot_prints=snapshot_prints,
             echo=echo,
+            render_prints=render_prints,
         )
 
     # Deferred import — avoid loading multiprocessing for in-process use.
@@ -149,4 +158,5 @@ def sandbox(
         start_method=start_method,
         preload_grants=preload_grants,
         spool=spool,
+        render_prints=render_prints,
     )

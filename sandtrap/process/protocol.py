@@ -150,6 +150,8 @@ class ResultMsg:
     """Namespace names the worker could not pickle back, so the parent
     can name the variable that went missing instead of leaving the
     caller to notice a `KeyError`."""
+    rendered_prints: list[str] = field(default_factory=list)
+    print_count: int = 0
     spooled: dict[str, Any] | None = None
     """With spooling on, what the worker wrote for each namespace value,
     name → :class:`~sandtrap.process.spool.SpoolEntry`; ``namespace`` is
