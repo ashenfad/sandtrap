@@ -1060,7 +1060,7 @@ class Sandbox:
 
         if "dir" not in ns:
             ns["dir"] = _Dir()
-            injected["dir"] = True
+            injected["dir"] = ns["dir"]
 
         error = None
         result_locals: dict[str, Any] = {}
