@@ -384,6 +384,11 @@ class ExecResult:
     finds a variable gone can say *which* one and why, rather than
     reading the absence as a bug.  Names left out by ``keep`` are not
     listed: the caller asked for them to be left out."""
+    sizes: dict[str, int] = field(default_factory=dict)
+    """Each ``namespace`` value's pickled size in bytes, known before any
+    value is read, when a process sandbox spooled the result; empty
+    otherwise. Lets a caller refuse or skip a value by its size without
+    paying to read it."""
     rendered_prints: list[str] = field(default_factory=list)
     """With ``render_prints``: each print's values (``print``, an echoed
     expression, ``help``) rendered by reprobate as it was made, at most
@@ -393,11 +398,6 @@ class ExecResult:
     """With ``render_prints``: how many prints the execution made,
     rendered or not, so a caller can say how many it was not shown.
     ``0`` otherwise."""
-    sizes: dict[str, int] = field(default_factory=dict)
-    """Each ``namespace`` value's pickled size in bytes, known before any
-    value is read, when a process sandbox spooled the result; empty
-    otherwise. Lets a caller refuse or skip a value by its size without
-    paying to read it."""
 
 
 class Sandbox:
@@ -620,9 +620,11 @@ class Sandbox:
                 except Exception:
                     snapped = args
                 prints_list.append(snapped)
+            stdout_handler(*args, **kwargs)
+            # after the print itself, so looking at the values for the
+            # rendering can't change what the print does
             if renderer is not None:
                 renderer.append(args)
-            stdout_handler(*args, **kwargs)
 
         ns["print"] = print_fn
         injected["print"] = print_fn
@@ -651,9 +653,9 @@ class Sandbox:
                     except Exception:
                         snapped = (value,)
                     prints_list.append(snapped)
+                stdout_handler(repr(value))
                 if renderer is not None:
                     renderer.append((value,))
-                stdout_handler(repr(value))
 
             ns["__st_display__"] = display_fn
             injected["__st_display__"] = display_fn

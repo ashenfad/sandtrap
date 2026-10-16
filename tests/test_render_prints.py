@@ -89,23 +89,45 @@ def test_prints_past_the_limit_are_only_counted(isolation):
 
 
 def test_rendering_copies_nothing():
-    """A printed 50MB value is rendered where it is; snapshots copy it."""
-    import tracemalloc
+    """A printed 48MB DataFrame is rendered where it is; a snapshot copies
+    it. (Its own printed repr is short, so stdout costs the same either way.)
 
-    def peak(sb):
-        tracemalloc.start()
-        try:
-            result = sb.exec("b = bytearray(50 << 20)\nprint(b)\ndel b\n", keep=())
-            assert result.error is None, result.error
-            return tracemalloc.get_traced_memory()[1]
-        finally:
-            tracemalloc.stop()
+    Measured in a fresh interpreter: allocating here would raise this
+    process's peak RSS, which an in-process memory limit is measured from,
+    and loosen the limits of the tests that follow."""
+    import subprocess
+    import sys
+    import textwrap
 
-    with sandbox(Policy(timeout=30.0), snapshot_prints=True) as copying:
-        copied = peak(copying)
-    with _sandbox("none") as rendering:
-        rendered = peak(rendering)
-    assert rendered < copied - (40 << 20)
+    pytest.importorskip("pandas")
+    script = textwrap.dedent(
+        """
+        import tracemalloc
+        import pandas
+        from sandtrap import Policy, PrintRendering, sandbox
+
+        def peak(**options):
+            policy = Policy(timeout=60.0)
+            policy.module(pandas, name="pd")
+            df = pandas.DataFrame({"a": range(6_000_000)})
+            with sandbox(policy, **options) as sb:
+                tracemalloc.start()
+                try:
+                    result = sb.exec("print(df)", namespace={"df": df}, keep=())
+                    assert result.error is None, result.error
+                    return tracemalloc.get_traced_memory()[1]
+                finally:
+                    tracemalloc.stop()
+
+        print(peak(snapshot_prints=True), peak(render_prints=PrintRendering()))
+        """
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, check=True
+    )
+    copied, rendered = map(int, done.stdout.split())
+    assert copied > 40 << 20  # the snapshot copied the frame
+    assert rendered < 8 << 20  # the rendering did not
 
 
 @pytest.mark.parametrize("isolation", ISOLATIONS)
@@ -171,3 +193,61 @@ def test_render_prints_takes_a_print_rendering(value, error):
 def test_print_rendering_bounds_are_positive_ints(field, bad):
     with pytest.raises(ValueError, match=field):
         PrintRendering(**{field: bad})
+
+
+@pytest.mark.parametrize("isolation", ISOLATIONS)
+def test_a_print_of_many_values_stays_within_its_budget(isolation):
+    """The budget holds for the whole print, not each value: values past it
+    are counted, not rendered."""
+    with _sandbox(isolation, rendering=PrintRendering(per_print=80)) as sb:
+        result = sb.exec("print(*range(100_000))\n")
+    (rendered,) = result.rendered_prints
+    assert len(rendered) <= 80
+    assert rendered.startswith("0 1 2 ") and rendered.endswith(" more")
+
+
+def test_rendering_work_is_bounded_by_the_budget(monkeypatch):
+    import reprobate
+
+    calls = []
+    real = reprobate.render
+
+    def counting(value, budget):
+        calls.append(budget)
+        return real(value, budget=budget)
+
+    monkeypatch.setattr(reprobate, "render", counting)
+    with _sandbox("none", rendering=PrintRendering(per_print=80)) as sb:
+        sb.exec("print(*range(100_000))\n")
+    assert len(calls) <= 80
+
+
+@pytest.mark.parametrize("isolation", ISOLATIONS)
+def test_rendering_does_not_change_what_print_does(isolation):
+    """The print happens first: a value whose repr works once is printed
+    as it would be without rendering, and its rendering falls back."""
+    with _sandbox(isolation) as sb:
+        result = sb.exec(
+            "class Once:\n"
+            "    calls = 0\n"
+            "    def __repr__(self):\n"
+            "        Once.calls += 1\n"
+            "        if Once.calls > 1:\n"
+            "            raise RuntimeError('again')\n"
+            "        return 'once'\n"
+            "print(Once())\n"
+        )
+    assert result.error is None, result.error
+    assert result.stdout == "once\n"
+    assert result.rendered_prints == ["<Once>"]
+
+
+def test_exec_result_keeps_its_positional_order():
+    """Fields added later come last, so a result built positionally keeps
+    meaning what it meant."""
+    from sandtrap import ExecResult
+
+    result = ExecResult({}, "out", "", None, 0, [], None, ("x",), {"v": 3})
+    assert result.dropped == ("x",)
+    assert result.sizes == {"v": 3}
+    assert result.rendered_prints == [] and result.print_count == 0
