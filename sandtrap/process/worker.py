@@ -344,8 +344,14 @@ def worker_main(
                     stdin=msg.stdin,
                     argv=msg.argv,
                     echo=msg.echo,
+                    result_names=msg.result_names,
                 )
-                safe_ns, dropped = partition_namespace(result.namespace)
+                # Resource failure reporting must not pickle the large locals
+                # that caused it, or captured print objects referring to them.
+                memory_failed = isinstance(result.error, MemoryError)
+                safe_ns, dropped = partition_namespace(
+                    {} if memory_failed else result.namespace
+                )
                 safe_ns = safe_ns or {}
                 err = result.error
                 if err is not None and err.__traceback__ is not None:
@@ -384,7 +390,7 @@ def worker_main(
                         stdout=result.stdout,
                         error=err,
                         ticks=result.ticks,
-                        prints=filter_prints(result.prints),
+                        prints=[] if memory_failed else filter_prints(result.prints),
                         stderr=result.stderr,
                         dropped=dropped,
                     )

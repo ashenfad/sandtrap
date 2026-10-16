@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `exec`/`aexec(result_names=(...))` select namespace outputs before process serialization; None preserves existing behavior and () omits all locals.
+
+### Fixed
+- Process workers omit locals and print snapshots when reporting MemoryError, preventing a second large serialization of over-budget data. Captured text and the error remain available.
+
 ## 0.4.4 - 2026-10-12
 
 ### Fixed

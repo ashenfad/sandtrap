@@ -71,6 +71,13 @@ def _validate_echo(echo: Any) -> None:
         )
 
 
+def _validate_result_names(names: tuple[str, ...] | None) -> None:
+    if names is not None and (
+        not isinstance(names, tuple) or any(not isinstance(k, str) for k in names)
+    ):
+        raise TypeError("result_names must be a tuple of strings or None")
+
+
 def _validate_modules(
     policy: Policy, modules: "Mapping[str, Mapping[str, Any]] | None"
 ) -> None:
@@ -811,6 +818,7 @@ class Sandbox:
         filename: str,
         error: BaseException | None,
         extra_locals: dict[str, Any] | None = None,
+        result_names: tuple[str, ...] | None = None,
     ) -> ExecResult:
         """Post-execution: build the result namespace and clean up."""
         # A module the embedder provided lasts exactly as long as the
@@ -836,6 +844,9 @@ class Sandbox:
             for k, v in extra_locals.items():
                 if not k.startswith("__st_"):
                     result_ns[k] = v
+
+        if result_names is not None:
+            result_ns = {k: v for k, v in result_ns.items() if k in result_names}
 
         tick_counter = gates.get("__st_tick_counter__")
         ticks = tick_counter[0] if tick_counter else 0
@@ -864,6 +875,7 @@ class Sandbox:
         stdin: "str | Any | None" = None,
         argv: "list[str] | None" = None,
         echo: 'Literal["none", "last", "all"] | None' = None,
+        result_names: tuple[str, ...] | None = None,
     ) -> ExecResult:
         """Execute source code synchronously in the sandbox.
 
@@ -888,6 +900,10 @@ class Sandbox:
         ``sys.argv`` — plus a stdin-backed ``input()``. Nothing else of
         ``sys`` is reachable.
 
+        ``result_names`` selects returned namespace keys before any process
+        transport. None returns all eligible locals (the default); () returns
+        none. It does not restrict execution, cache writes or printed output.
+
         ``result.stdout``/``result.stderr`` also carry host-side writes
         to the real ``sys.stdout``/``sys.stderr`` made during the
         execution (registered library code like ``df.info()``,
@@ -898,6 +914,7 @@ class Sandbox:
         if echo is not None:
             _validate_echo(echo)
         _validate_modules(self.policy, modules)
+        _validate_result_names(result_names)
         prepared = self._parse_and_rewrite(source, echo=echo)
         if isinstance(prepared, ExecResult):
             return prepared
@@ -935,7 +952,15 @@ class Sandbox:
         gates["__st_in_exec__"][0] = False
 
         return self._build_result(
-            ns, injected, gates, stdout_buf, stderr_buf, prints_list, filename, error
+            ns,
+            injected,
+            gates,
+            stdout_buf,
+            stderr_buf,
+            prints_list,
+            filename,
+            error,
+            result_names=result_names,
         )
 
     async def aexec(
@@ -947,12 +972,14 @@ class Sandbox:
         stdin: "str | Any | None" = None,
         argv: "list[str] | None" = None,
         echo: 'Literal["none", "last", "all"] | None' = None,
+        result_names: tuple[str, ...] | None = None,
     ) -> ExecResult:
         """Execute source code asynchronously in the sandbox. See
         :meth:`exec` for ``modules``/``stdin``/``argv``/``echo``."""
         if echo is not None:
             _validate_echo(echo)
         _validate_modules(self.policy, modules)
+        _validate_result_names(result_names)
         prepared = self._parse_and_rewrite(source, echo=echo)
         if isinstance(prepared, ExecResult):
             return prepared
@@ -1104,4 +1131,5 @@ class Sandbox:
             filename,
             error,
             extra_locals=result_locals,
+            result_names=result_names,
         )

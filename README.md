@@ -82,6 +82,13 @@ print(result.namespace)    # {"total": 45}
 
 Swap `isolation="kernel"` for the same thing plus kernel-level restrictions.
 
+Use `sb.exec(code, result_names=("ui",))` to return only selected locals, or
+`result_names=()` for none. The default (`None`) keeps all eligible locals.
+Selection happens before worker serialization and also works with `aexec`.
+It leaves printed output and explicit RPC/cache writes unchanged. When a process
+worker reports `MemoryError`, it omits locals and print-object snapshots to avoid
+copying the over-budget data again; captured text and the error remain available.
+
 ## Worker-backed isolation
 
 `"process"` and `"kernel"` both run code in a separate worker. What that buys,

@@ -103,6 +103,7 @@ class ExecMsg:
     stdin: Any | None = None
     argv: list[str] | None = None
     echo: str | None = None  # per-exec override; None = sandbox default
+    result_names: tuple[str, ...] | None = None
     modules: Mapping[str, Mapping[str, Any]] | None = None
     """Modules the embedder provided for this execution, name → attributes.
 

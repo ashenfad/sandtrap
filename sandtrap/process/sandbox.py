@@ -26,6 +26,7 @@ from ..sandbox import (
     _validate_echo,
     _validate_mode,
     _validate_modules,
+    _validate_result_names,
 )
 from .protocol import (
     ExecMsg,
@@ -932,6 +933,7 @@ class ProcessSandbox:
         stdin: str | Any | None = None,
         argv: list[str] | None = None,
         echo: Literal["none", "last", "all"] | None = None,
+        result_names: tuple[str, ...] | None = None,
     ) -> ExecResult:
         """Execute source code in the sandboxed subprocess.
 
@@ -942,6 +944,11 @@ class ProcessSandbox:
         :class:`~sandtrap.RpcProxyMarker` and the worker's code reaches
         the real object through the proxy.
 
+        ``result_names`` selects namespace keys in the worker before pickling.
+        None keeps the default full namespace; () requests no namespace. A
+        MemoryError always omits namespace and print snapshots, avoiding a
+        second large allocation while reporting an over-budget execution.
+
         ``echo`` overrides the worker sandbox's echo mode for this
         call only (``None`` keeps the construction-time default).
 
@@ -951,6 +958,7 @@ class ProcessSandbox:
         if echo is not None:
             _validate_echo(echo)  # fail here, not as worker-error noise
         _validate_modules(self._policy, modules)  # ditto
+        _validate_result_names(result_names)
         if not self._started:
             raise RuntimeError(
                 "Worker process is not running. "
@@ -987,6 +995,7 @@ class ProcessSandbox:
                 stdin=stdin,
                 argv=argv,
                 echo=echo,
+                result_names=result_names,
                 modules=safe_modules,
             )
         )
@@ -1133,6 +1142,7 @@ class ProcessSandbox:
         stdin: str | Any | None = None,
         argv: list[str] | None = None,
         echo: Literal["none", "last", "all"] | None = None,
+        result_names: tuple[str, ...] | None = None,
     ) -> ExecResult:
         """Execute source code asynchronously in the sandboxed subprocess.
 
@@ -1142,6 +1152,7 @@ class ProcessSandbox:
         if echo is not None:
             _validate_echo(echo)  # fail on the calling task, not in the executor
         _validate_modules(self._policy, modules)  # ditto
+        _validate_result_names(result_names)
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             None,
@@ -1152,6 +1163,7 @@ class ProcessSandbox:
                 stdin=stdin,
                 argv=argv,
                 echo=echo,
+                result_names=result_names,
             ),
         )
 
