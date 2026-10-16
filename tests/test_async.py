@@ -183,3 +183,17 @@ async def test_aexec_dir_with_arg_unchanged():
     names = result.namespace["names"]
     assert "append" in names
     assert "my_var" not in names
+
+
+@pytest.mark.asyncio
+async def test_aexec_does_not_return_its_dir_helper(sandbox):
+    result = await sandbox.aexec("x = 1\nnames = dir()\n")
+    assert result.error is None
+    assert "dir" not in result.namespace
+    assert "x" in result.namespace["names"]
+
+
+@pytest.mark.asyncio
+async def test_aexec_returns_a_dir_the_code_bound_itself(sandbox):
+    result = await sandbox.aexec("dir = 'mine'\n")
+    assert result.namespace == {"dir": "mine"}
