@@ -457,6 +457,25 @@ def _is_isolated_fs(filesystem: Any) -> bool:
     return isinstance(filesystem, IsolatedFS)
 
 
+def _refuse_spool_inside_root(spool: Any, root: Any) -> None:
+    """Raise ``ValueError`` when the spool directory would be created in
+    sight of the sandboxed code: at or under its filesystem root.
+
+    The parent unpickles the spool's files, so code that could reach them
+    through its own filesystem could replace an unread one and run code in
+    the parent when it is read.
+    """
+    base = os.path.realpath(tempfile.gettempdir() if spool is True else spool)
+    root = os.path.realpath(root)
+    if os.path.commonpath([root, base]) == root:
+        where = "the system temporary directory" if spool is True else "spool"
+        raise ValueError(
+            f"{where} ({base}) is inside the sandbox's filesystem root ({root}), "
+            "so sandboxed code could replace a spooled result before the host "
+            "reads it: pass spool= a directory outside the root"
+        )
+
+
 def _open_file_descriptors() -> tuple[int, ...]:
     """Snapshot descriptors that predate the worker's private plumbing.
 
@@ -702,6 +721,8 @@ class ProcessSandbox:
                 "spool must be True, False, or a directory to spool under, "
                 f"not {type(spool).__name__}"
             )
+        if spool and _is_isolated_fs(filesystem):
+            _refuse_spool_inside_root(spool, filesystem.root)
         self._spool = spool
         self._spool_dir: str | None = None
         self._spool_finalizer: weakref.finalize | None = None

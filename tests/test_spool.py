@@ -269,3 +269,104 @@ def test_a_restricted_worker_can_still_spool(tmp_path):
 def test_only_a_file_the_worker_could_have_named_is_read(tmp_path, name):
     with pytest.raises(ValueError, match="unexpected spool file name"):
         SpooledNamespace(str(tmp_path), {"v": SpoolEntry(size=1, file=name)})
+
+
+# ------------------------------------------------------------------
+# Keeping the spool out of the sandbox's reach
+# ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("where", ["root", "inside"])
+def test_a_spool_inside_the_sandbox_root_is_refused(tmp_path, where):
+    root = tmp_path / "root"
+    (root / "sub").mkdir(parents=True)
+    base = root if where == "root" else root / "sub"
+    with pytest.raises(ValueError, match="inside the sandbox's filesystem root"):
+        sandbox(
+            Policy(timeout=30.0),
+            isolation="process",
+            filesystem=IsolatedFS(str(root)),
+            spool=base,
+        )
+
+
+def test_a_temp_directory_inside_the_sandbox_root_is_refused(tmp_path, monkeypatch):
+    import tempfile
+
+    root = tmp_path / "root"
+    (root / "tmp").mkdir(parents=True)
+    monkeypatch.setattr(tempfile, "tempdir", str(root / "tmp"))
+    with pytest.raises(ValueError, match="system temporary directory"):
+        sandbox(
+            Policy(timeout=30.0),
+            isolation="process",
+            filesystem=IsolatedFS(str(root)),
+            spool=True,
+        )
+
+
+def test_a_spool_beside_the_sandbox_root_is_fine(tmp_path):
+    root = tmp_path / "root"
+    root.mkdir()
+    with _sandbox("process", filesystem=IsolatedFS(str(root)), spool=tmp_path) as sb:
+        result = sb.exec(f"big = bytearray({BIG})\n")
+        assert len(result.namespace["big"]) == BIG
+
+
+def test_a_spool_file_replaced_by_a_link_is_not_read(tmp_path):
+    import pickle
+
+    decoy = tmp_path / "decoy.pkl"
+    decoy.write_bytes(pickle.dumps("not what the worker wrote"))
+    with _sandbox("process") as sb:
+        result = sb.exec(f"big = bytearray({BIG})\n")
+        (name,) = _files(sb)
+        path = os.path.join(sb._spool_dir, name)
+        os.unlink(path)
+        os.symlink(decoy, path)
+        with pytest.raises(ValueError, match="not one the worker wrote"):
+            result.namespace["big"]
+
+
+def test_a_spool_file_replaced_by_a_directory_is_not_read():
+    with _sandbox("process") as sb:
+        result = sb.exec(f"big = bytearray({BIG})\n")
+        (name,) = _files(sb)
+        path = os.path.join(sb._spool_dir, name)
+        os.unlink(path)
+        os.mkdir(path)
+        with pytest.raises(ValueError, match="not a regular file"):
+            result.namespace["big"]
+
+
+# ------------------------------------------------------------------
+# Streaming without a copy
+# ------------------------------------------------------------------
+
+
+def test_a_value_holding_the_module_prefix_still_streams_without_a_copy():
+    """Bytes that merely contain a sandbox module's name send the value
+    through the refusal pass as well; that pass must not copy a large
+    buffer either."""
+    import pickle
+    import tracemalloc
+
+    from sandtrap.home import PREFIX, dump_sendable
+
+    if pickle.DEFAULT_PROTOCOL >= 5:
+        pytest.skip("the default protocol already streams a bytearray")
+
+    class Sink:
+        def write(self, data):
+            return len(memoryview(data))
+
+    size = 32 << 20
+    value = bytearray(size)
+    value[: len(PREFIX)] = PREFIX.encode()
+    tracemalloc.start()
+    try:
+        dump_sendable(value, Sink())
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak < size // 4, f"peak {peak >> 20}MB for a {size >> 20}MB buffer"

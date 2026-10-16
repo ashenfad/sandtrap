@@ -20,6 +20,7 @@ import os
 import pickle
 import re
 import secrets
+import stat
 import threading
 import weakref
 from collections.abc import Iterator, Mapping
@@ -172,14 +173,24 @@ class SpooledNamespace(Mapping[str, Any]):
             return pickle.loads(entry.data)
         path = os.path.join(self._directory, entry.file)
         try:
-            with open(path, "rb") as f:
-                value = pickle.load(f)
+            # Never through a link, and only a regular file: what is read
+            # here is unpickled, so it must be the file the worker wrote.
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
         except FileNotFoundError:
             raise SpoolClosedError(
                 f"{name!r} was never read, and its sandbox has closed, which "
                 "removes the files of unread values: read what you need "
                 "before the sandbox exits"
             ) from None
+        except OSError as exc:
+            raise ValueError(
+                f"spool file for {name!r} is not one the worker wrote"
+            ) from exc
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            os.close(fd)
+            raise ValueError(f"spool file for {name!r} is not a regular file")
+        with os.fdopen(fd, "rb") as f:
+            value = pickle.load(f)
         self._files.discard(entry.file)
         try:
             os.unlink(path)
