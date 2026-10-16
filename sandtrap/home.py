@@ -148,4 +148,4 @@ def dump_sendable(obj: Any, file: Any) -> None:
     scanning = _Scanning(file)
     pickle.dump(obj, scanning, protocol=pickle.HIGHEST_PROTOCOL)
     if scanning.found:  # by reference, the name is in the bytes
-        _Refusing(_Discard()).dump(obj)
+        _Refusing(_Discard(), protocol=pickle.HIGHEST_PROTOCOL).dump(obj)

@@ -461,7 +461,7 @@ result.namespace["summary"]  # read now, from its own file
 - **Files of values never read are removed** when the result is let go, or when the sandbox exits; reading one after that raises `sandtrap.process.SpoolClosedError`. Read what you need while the sandbox is open.
 - **Each value is pickled on its own**, so two names bound to one object come back as two copies.
 
-The directory is created for the sandbox, mode 0700, in the system temporary directory; `spool="/some/dir"` creates it there instead (`/dev/shm` keeps it in memory on Linux). It is never inside the sandbox's own filesystem: the parent unpickles what is in it, and reads only files the worker named in its reply. Under kernel isolation with an `IsolatedFS` root, Landlock and Seatbelt keep this one directory writable alongside the root.
+The directory is created for the sandbox, mode 0700, in the system temporary directory; `spool="/some/dir"` creates it there instead (`/dev/shm` keeps it in memory on Linux). The parent unpickles what is in it, so it must stay out of the sandboxed code's reach: a spool directory (or, with `spool=True`, the system temporary directory) at or under an `IsolatedFS` root is refused at construction with `ValueError`. The parent reads only regular files the worker named in its reply, never through a link. Under kernel isolation with an `IsolatedFS` root, Landlock and Seatbelt keep this one directory writable alongside the root.
 
 Spooling covers the result namespace. Print snapshots and the error still ride the pipe, and so does what the code sends the host while it runs (RPC calls, bridged filesystem writes). In-process sandboxes ignore `spool`: their result holds the values themselves.
 
