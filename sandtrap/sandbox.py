@@ -833,8 +833,12 @@ class Sandbox:
         error: BaseException | None,
         extra_locals: dict[str, Any] | None = None,
         keep: "frozenset[str] | None" = None,
+        home: str | None = None,
     ) -> ExecResult:
-        """Post-execution: build the result namespace and clean up."""
+        """Post-execution: build the result namespace and clean up.
+
+        ``home`` is the name the execution's module was registered under,
+        read before the code ran: the code can rebind ``__name__``."""
         # A module the embedder provided lasts exactly as long as the
         # execution it was provided for: dropping it here is what keeps a
         # pooled worker from carrying one into the next exec, and what
@@ -874,7 +878,7 @@ class Sandbox:
             dropped = tuple(result_ns)
             result_ns = {}
             prints = []
-            self._forget_home(ns.get("__name__"))
+            self._forget_home(home)
 
         tick_counter = gates.get("__st_tick_counter__")
         ticks = tick_counter[0] if tick_counter else 0
@@ -979,6 +983,8 @@ class Sandbox:
             )
         except SyntaxError as e:
             return ExecResult(error=_await_hint(e, tree))
+        # the module's registered name, before the code can rebind it
+        home = ns.get("__name__")
 
         error = None
         with ExitStack() as stack:
@@ -1009,6 +1015,7 @@ class Sandbox:
                 filename,
                 error,
                 keep=keep,
+                home=home,
             )
         finally:
             # The code's frames have this one as their f_back, and the
@@ -1115,6 +1122,8 @@ class Sandbox:
             )
         except SyntaxError as e:
             return ExecResult(error=e)
+        # the module's registered name, before the code can rebind it
+        home = ns.get("__name__")
         ns["__st_locals__"] = _builtins.locals
         ns["__st_local_capture__"] = {}
 
@@ -1188,6 +1197,7 @@ class Sandbox:
                 error,
                 extra_locals=result_locals,
                 keep=keep,
+                home=home,
             )
         finally:
             # The code's frames have this one as their f_back, and the

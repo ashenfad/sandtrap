@@ -351,6 +351,10 @@ def worker_main(
                 safe_ns, dropped = partition_namespace(result.namespace)
                 safe_ns = safe_ns or {}
                 err = result.error
+                # Decided on the error as raised: one that can't be pickled
+                # is replaced by a stand-in below, but its run still failed
+                # for memory and still holds what exhausted it.
+                memory_failed = isinstance(err, MemoryError)
                 if err is not None and err.__traceback__ is not None:
                     # Traceback objects don't survive pickling, so the
                     # parent would see a bare message. Render the full
@@ -392,7 +396,7 @@ def worker_main(
                         dropped=(*result.dropped, *dropped),
                     )
                 )
-                reclaim = isinstance(err, MemoryError)
+                reclaim = memory_failed
             except BaseException:
                 conn.send(WorkerErrorMsg(message=traceback.format_exc()))
             # Nothing of this execution is wanted once its result is sent,

@@ -206,6 +206,55 @@ def test_a_memory_error_lets_go_of_the_executions_module():
                 gc.enable()
 
 
+@pytest.mark.parametrize("runner", RUNNERS)
+def test_rebinding_name_does_not_keep_a_failed_module(runner):
+    """The module is let go by the name it was registered under, which
+    the code cannot change by rebinding ``__name__``."""
+    with _sandbox("none") as sb:
+        result = _run(sb, runner, "__name__ = 'mine'\nraise MemoryError('synthetic')\n")
+        assert isinstance(result.error, MemoryError)
+        assert sb.module_name not in sys.modules
+
+
+class _RecordingGC:
+    """Stands in for the worker's ``gc``: each ``collect()`` appends a
+    line to *path*, which the parent can read after the worker ran."""
+
+    def __init__(self, path):
+        self.path = str(path)
+
+    def collect(self):
+        with open(self.path, "a") as f:
+            f.write("collect\n")
+        return 0
+
+
+@pytest.mark.parametrize(
+    "raise_it",
+    [
+        "raise MemoryError('synthetic')",
+        # a class of the code's own can't be pickled out, so the worker
+        # sends a stand-in error -- but the run still failed for memory
+        "class Exhausted(MemoryError):\n    pass\nraise Exhausted('synthetic')",
+    ],
+    ids=["builtin", "sandbox-subclass"],
+)
+def test_the_worker_collects_after_a_memory_failure(tmp_path, monkeypatch, raise_it):
+    import sandtrap.process.worker as worker
+
+    record = tmp_path / "collected"
+    monkeypatch.setattr(worker, "gc", _RecordingGC(record))
+    with sandbox(Policy(timeout=30.0), isolation="process", start_method="fork") as sb:
+        ok = sb.exec("x = 1\n")
+        assert not record.exists()  # only a memory failure collects
+        result = sb.exec(f"scratch = bytearray(1 << 20)\n{raise_it}\n")
+    assert ok.error is None
+    assert result.error is not None and "synthetic" in str(result.error)
+    assert result.namespace == {}
+    assert "scratch" in result.dropped
+    assert record.read_text() == "collect\n"
+
+
 def test_an_ordinary_error_keeps_the_executions_module():
     with _sandbox("none") as sb:
         result = sb.exec("x = 1\nraise ValueError('boom')\n")
