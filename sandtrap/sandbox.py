@@ -12,7 +12,7 @@ import sys
 import time
 import types
 import weakref
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -69,6 +69,26 @@ def _validate_echo(echo: Any) -> None:
         raise ValueError(
             f"Invalid echo option: {echo!r}. Expected one of {_ECHO_OPTIONS}."
         )
+
+
+def _validate_keep(keep: Any) -> "frozenset[str] | None":
+    """``keep`` as a frozenset of names, or ``None`` for every name.
+
+    A bare string is refused: it is a collection of its characters, so
+    ``keep="ui"`` would quietly keep ``u`` and ``i``.
+    """
+    if keep is None:
+        return None
+    if isinstance(keep, (str, bytes)) or not isinstance(keep, Collection):
+        raise TypeError(
+            f"keep must be a collection of names, not {type(keep).__name__}: "
+            'write keep=("ui",) for a single name.'
+        )
+    names = frozenset(keep)
+    for name in names:
+        if not isinstance(name, str):
+            raise TypeError(f"keep names must be strings, got {name!r}")
+    return names
 
 
 def _validate_modules(
@@ -338,12 +358,13 @@ class ExecResult:
     the host confirm what restrictions are in force rather than trusting
     the requested level was achievable — see :class:`IsolationStatus`."""
     dropped: tuple[str, ...] = ()
-    """Names the execution bound that are missing from ``namespace``
-    because they could not be pickled out of a process worker (an open
-    file, a lambda, a generator).  A caller that finds a variable gone
-    can say *which* one and why, rather than reading the absence as a
-    bug.  Always empty for in-process execution, which returns the live
-    namespace and drops nothing."""
+    """Names the execution bound that are missing from ``namespace``:
+    ones that could not be pickled out of a process worker (an open
+    file, a lambda, a generator), and, when the execution failed with a
+    ``MemoryError``, every name it would have returned.  A caller that
+    finds a variable gone can say *which* one and why, rather than
+    reading the absence as a bug.  Names left out by ``keep`` are not
+    listed: the caller asked for them to be left out."""
 
 
 class Sandbox:
@@ -811,6 +832,7 @@ class Sandbox:
         filename: str,
         error: BaseException | None,
         extra_locals: dict[str, Any] | None = None,
+        keep: "frozenset[str] | None" = None,
     ) -> ExecResult:
         """Post-execution: build the result namespace and clean up."""
         # A module the embedder provided lasts exactly as long as the
@@ -837,6 +859,23 @@ class Sandbox:
                 if not k.startswith("__st_"):
                     result_ns[k] = v
 
+        if keep is not None:
+            result_ns = {k: v for k, v in result_ns.items() if k in keep}
+
+        prints = prints_list or []
+        dropped: tuple[str, ...] = ()
+        if isinstance(error, MemoryError):
+            # Reporting a memory failure must not cost memory, and out of
+            # a worker every value costs a pickled copy: nothing the code
+            # bound comes back, and neither do its print snapshots. The
+            # names say what was withheld. Its module goes now rather than
+            # staying registered through the next executions, so what it
+            # holds can be freed.
+            dropped = tuple(result_ns)
+            result_ns = {}
+            prints = []
+            self._forget_home(ns.get("__name__"))
+
         tick_counter = gates.get("__st_tick_counter__")
         ticks = tick_counter[0] if tick_counter else 0
 
@@ -848,8 +887,18 @@ class Sandbox:
             stderr=stderr_buf.getvalue(),
             error=error,
             ticks=ticks,
-            prints=prints_list or [],
+            prints=prints,
+            dropped=dropped,
         )
+
+    def _forget_home(self, name: Any) -> None:
+        """Take one execution's module out of ``sys.modules``, if it is
+        one of this sandbox's registered ones."""
+        try:
+            self._homes.remove(name)
+        except ValueError:
+            return
+        sys.modules.pop(name, None)
 
     # ------------------------------------------------------------------
     # Public execution methods
@@ -864,6 +913,7 @@ class Sandbox:
         stdin: "str | Any | None" = None,
         argv: "list[str] | None" = None,
         echo: 'Literal["none", "last", "all"] | None' = None,
+        keep: "Collection[str] | None" = None,
     ) -> ExecResult:
         """Execute source code synchronously in the sandbox.
 
@@ -894,9 +944,23 @@ class Sandbox:
         ``warnings``) — routed per-execution, so concurrent sandboxes
         don't mix streams. Host callbacks that want the real console
         instead can wrap output in :func:`sandtrap.passthrough_stdio`.
+
+        ``keep`` names the bindings ``result.namespace`` carries (``None``,
+        the default, carries every one). A process worker leaves the rest
+        behind unpickled, so a caller that reads only ``ui`` pays nothing
+        for the code's scratch values. It bounds the result only: what
+        the code sends the host while it runs (a host object's method
+        call, a file write through a bridged filesystem) crosses as it
+        always did.
+
+        When the execution fails with a ``MemoryError``, the result
+        carries no namespace and no print snapshots, whatever ``keep``
+        says: ``result.dropped`` names what was withheld, and stdout,
+        stderr and the error come back as usual.
         """
         if echo is not None:
             _validate_echo(echo)
+        keep = _validate_keep(keep)
         _validate_modules(self.policy, modules)
         prepared = self._parse_and_rewrite(source, echo=echo)
         if isinstance(prepared, ExecResult):
@@ -934,9 +998,25 @@ class Sandbox:
 
         gates["__st_in_exec__"][0] = False
 
-        return self._build_result(
-            ns, injected, gates, stdout_buf, stderr_buf, prints_list, filename, error
-        )
+        try:
+            return self._build_result(
+                ns,
+                injected,
+                gates,
+                stdout_buf,
+                stderr_buf,
+                prints_list,
+                filename,
+                error,
+                keep=keep,
+            )
+        finally:
+            # The code's frames have this one as their f_back, and the
+            # error's traceback holds those frames: a local here naming the
+            # error, the namespace or the output would make a cycle only
+            # the cyclic GC frees, keeping what the code built alive until
+            # it runs.
+            del ns, injected, gates, stdout_buf, stderr_buf, prints_list, error
 
     async def aexec(
         self,
@@ -947,11 +1027,13 @@ class Sandbox:
         stdin: "str | Any | None" = None,
         argv: "list[str] | None" = None,
         echo: 'Literal["none", "last", "all"] | None' = None,
+        keep: "Collection[str] | None" = None,
     ) -> ExecResult:
         """Execute source code asynchronously in the sandbox. See
-        :meth:`exec` for ``modules``/``stdin``/``argv``/``echo``."""
+        :meth:`exec` for ``modules``/``stdin``/``argv``/``echo``/``keep``."""
         if echo is not None:
             _validate_echo(echo)
+        keep = _validate_keep(keep)
         _validate_modules(self.policy, modules)
         prepared = self._parse_and_rewrite(source, echo=echo)
         if isinstance(prepared, ExecResult):
@@ -1094,14 +1176,24 @@ class Sandbox:
         ns.update((k, v) for k, v in result_locals.items() if not k.startswith("__st_"))
         gates["__st_in_exec__"][0] = False
 
-        return self._build_result(
-            ns,
-            injected,
-            gates,
-            stdout_buf,
-            stderr_buf,
-            prints_list,
-            filename,
-            error,
-            extra_locals=result_locals,
-        )
+        try:
+            return self._build_result(
+                ns,
+                injected,
+                gates,
+                stdout_buf,
+                stderr_buf,
+                prints_list,
+                filename,
+                error,
+                extra_locals=result_locals,
+                keep=keep,
+            )
+        finally:
+            # The code's frames have this one as their f_back, and the
+            # error's traceback holds those frames: a local here naming the
+            # error, the namespace or the output would make a cycle only
+            # the cyclic GC frees, keeping what the code built alive until
+            # it runs.
+            del ns, injected, gates, stdout_buf, stderr_buf, prints_list, error
+            del result_locals

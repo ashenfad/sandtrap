@@ -13,7 +13,7 @@ import time
 import traceback
 import warnings
 import weakref
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from types import ModuleType
 from typing import Any, Literal
 
@@ -24,6 +24,7 @@ from ..sandbox import (
     IsolationStatus,
     IsolationUnavailable,
     _validate_echo,
+    _validate_keep,
     _validate_mode,
     _validate_modules,
 )
@@ -932,6 +933,7 @@ class ProcessSandbox:
         stdin: str | Any | None = None,
         argv: list[str] | None = None,
         echo: Literal["none", "last", "all"] | None = None,
+        keep: Collection[str] | None = None,
     ) -> ExecResult:
         """Execute source code in the sandboxed subprocess.
 
@@ -945,11 +947,16 @@ class ProcessSandbox:
         ``echo`` overrides the worker sandbox's echo mode for this
         call only (``None`` keeps the construction-time default).
 
+        ``keep`` names the bindings the result carries -- see
+        :meth:`sandtrap.Sandbox.exec`. The worker applies it before
+        pickling anything, so a value left out never crosses the pipe.
+
         If a previous execution killed the worker (segfault, OOM,
         seccomp violation), a fresh worker is spawned transparently —
         a crash costs the crashing turn, not the sandbox."""
         if echo is not None:
             _validate_echo(echo)  # fail here, not as worker-error noise
+        keep = _validate_keep(keep)  # ditto
         _validate_modules(self._policy, modules)  # ditto
         if not self._started:
             raise RuntimeError(
@@ -988,6 +995,7 @@ class ProcessSandbox:
                 argv=argv,
                 echo=echo,
                 modules=safe_modules,
+                keep=keep,
             )
         )
         return self._await_result()
@@ -1133,6 +1141,7 @@ class ProcessSandbox:
         stdin: str | Any | None = None,
         argv: list[str] | None = None,
         echo: Literal["none", "last", "all"] | None = None,
+        keep: Collection[str] | None = None,
     ) -> ExecResult:
         """Execute source code asynchronously in the sandboxed subprocess.
 
@@ -1141,6 +1150,7 @@ class ProcessSandbox:
         them by changing the ``isolation`` argument and nothing else."""
         if echo is not None:
             _validate_echo(echo)  # fail on the calling task, not in the executor
+        keep = _validate_keep(keep)  # ditto
         _validate_modules(self._policy, modules)  # ditto
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
@@ -1152,6 +1162,7 @@ class ProcessSandbox:
                 stdin=stdin,
                 argv=argv,
                 echo=echo,
+                keep=keep,
             ),
         )
 

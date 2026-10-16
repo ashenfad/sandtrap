@@ -109,6 +109,9 @@ class ExecMsg:
     Rides the same pipe as the namespace and is filtered for picklability
     the same way, so a live parent-side object reaches the worker as an
     ``RpcProxyMarker`` here exactly as it would as a namespace entry."""
+    keep: frozenset[str] | None = None
+    """The names the result namespace carries; ``None`` for every one.
+    Applied in the worker, so a name left out is never pickled."""
 
 
 @dataclass
