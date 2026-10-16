@@ -41,6 +41,42 @@ def _child_wrapper(conn, fn, args):
         conn.send(("error", type(e).__name__, str(e)))
 
 
+def _try_writable(backend, root, writable, outside):
+    """Apply *backend* to *root* with *writable* kept writable, then write
+    a file in *writable* (must work) and in *outside* (must be refused)."""
+    import importlib
+
+    apply = importlib.import_module(f"sandtrap.process.{backend}").apply
+    if not apply(root, writable=(writable,)):
+        return ("skipped", f"{backend} not available")
+    try:
+        with open(os.path.join(writable, "spooled.pkl"), "wb") as f:
+            f.write(b"x")
+    except PermissionError:
+        return ("fail", "write in the writable directory was refused")
+    try:
+        with open(os.path.join(outside, "escaped.pkl"), "wb") as f:
+            f.write(b"x")
+        return ("fail", "write outside root and writable succeeded")
+    except PermissionError:
+        return ("ok", "writable directory open, the rest still restricted")
+
+
+def _writable_case(tmp_path, backend):
+    dirs = []
+    for name in ("root", "spool", "outside"):
+        d = tmp_path / name
+        d.mkdir()
+        dirs.append(os.path.realpath(d))
+    exitcode, result = _run_in_child(_try_writable, backend, *dirs)
+    assert exitcode == 0, f"child crashed with exit code {exitcode}"
+    status, msg = result[0], result[1]
+    if status == "skipped":
+        pytest.skip(msg)
+    assert status == "ok", msg
+    assert os.path.exists(os.path.join(dirs[1], "spooled.pkl"))
+
+
 # =====================================================================
 # Landlock (Linux)
 # =====================================================================
@@ -107,6 +143,9 @@ def _landlock_skipped_when_host_fs(root):
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Landlock is Linux-only")
 class TestLandlock:
+    def test_keeps_a_writable_directory_writable(self, tmp_path):
+        _writable_case(tmp_path, "landlock")
+
     def test_blocks_read_outside_root(self, tmp_path):
         exitcode, result = _run_in_child(_landlock_try_read_outside, str(tmp_path))
         assert exitcode == 0, f"child crashed with exit code {exitcode}"
@@ -380,6 +419,9 @@ def _seatbelt_try_no_root(tmp_dir):
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="Seatbelt is macOS-only")
 class TestSeatbelt:
+    def test_keeps_a_writable_directory_writable(self, tmp_path):
+        _writable_case(tmp_path, "seatbelt")
+
     def test_blocks_read_outside_root(self, tmp_path):
         exitcode, result = _run_in_child(_seatbelt_try_read_outside, str(tmp_path))
         assert exitcode == 0, f"child crashed with exit code {exitcode}"
@@ -462,7 +504,11 @@ class TestApplyIsolation:
         with patch("sandtrap.process.platform._apply_linux") as mock:
             apply_isolation("auto", str(tmp_path))
             mock.assert_called_once_with(
-                ANY, str(tmp_path), allow_network=False, allow_host_fs=False
+                ANY,
+                str(tmp_path),
+                allow_network=False,
+                allow_host_fs=False,
+                writable=(),
             )
 
     @pytest.mark.skipif(sys.platform != "darwin", reason="macOS-only")
@@ -473,7 +519,11 @@ class TestApplyIsolation:
         with patch("sandtrap.process.platform._apply_darwin") as mock:
             apply_isolation("auto", str(tmp_path))
             mock.assert_called_once_with(
-                ANY, str(tmp_path), allow_network=False, allow_host_fs=False
+                ANY,
+                str(tmp_path),
+                allow_network=False,
+                allow_host_fs=False,
+                writable=(),
             )
 
     @pytest.mark.skipif(sys.platform != "darwin", reason="macOS-only")
@@ -484,7 +534,7 @@ class TestApplyIsolation:
         with patch("sandtrap.process.platform._apply_darwin") as mock:
             apply_isolation("auto", str(tmp_path), allow_network=True)
             mock.assert_called_once_with(
-                ANY, str(tmp_path), allow_network=True, allow_host_fs=False
+                ANY, str(tmp_path), allow_network=True, allow_host_fs=False, writable=()
             )
 
     @pytest.mark.skipif(sys.platform != "linux", reason="Linux-only")
@@ -495,7 +545,7 @@ class TestApplyIsolation:
         with patch("sandtrap.process.platform._apply_linux") as mock:
             apply_isolation("auto", str(tmp_path), allow_network=True)
             mock.assert_called_once_with(
-                ANY, str(tmp_path), allow_network=True, allow_host_fs=False
+                ANY, str(tmp_path), allow_network=True, allow_host_fs=False, writable=()
             )
 
     @pytest.mark.skipif(sys.platform != "darwin", reason="macOS-only")
@@ -504,9 +554,9 @@ class TestApplyIsolation:
         from sandtrap.process.platform import apply_isolation
 
         with patch("sandtrap.process.platform._apply_darwin") as mock:
-            apply_isolation("auto", str(tmp_path), allow_host_fs=True)
+            apply_isolation("auto", str(tmp_path), allow_host_fs=True, writable=())
             mock.assert_called_once_with(
-                ANY, str(tmp_path), allow_network=False, allow_host_fs=True
+                ANY, str(tmp_path), allow_network=False, allow_host_fs=True, writable=()
             )
 
     @pytest.mark.skipif(sys.platform != "linux", reason="Linux-only")
@@ -515,9 +565,9 @@ class TestApplyIsolation:
         from sandtrap.process.platform import apply_isolation
 
         with patch("sandtrap.process.platform._apply_linux") as mock:
-            apply_isolation("auto", str(tmp_path), allow_host_fs=True)
+            apply_isolation("auto", str(tmp_path), allow_host_fs=True, writable=())
             mock.assert_called_once_with(
-                ANY, str(tmp_path), allow_network=False, allow_host_fs=True
+                ANY, str(tmp_path), allow_network=False, allow_host_fs=True, writable=()
             )
 
     @pytest.mark.skipif(sys.platform != "darwin", reason="macOS-only")
@@ -527,10 +577,14 @@ class TestApplyIsolation:
 
         with patch("sandtrap.process.platform._apply_darwin") as mock:
             apply_isolation(
-                "auto", str(tmp_path), allow_network=True, allow_host_fs=True
+                "auto",
+                str(tmp_path),
+                allow_network=True,
+                allow_host_fs=True,
+                writable=(),
             )
             mock.assert_called_once_with(
-                ANY, str(tmp_path), allow_network=True, allow_host_fs=True
+                ANY, str(tmp_path), allow_network=True, allow_host_fs=True, writable=()
             )
 
     @pytest.mark.skipif(sys.platform != "linux", reason="Linux-only")
@@ -540,10 +594,14 @@ class TestApplyIsolation:
 
         with patch("sandtrap.process.platform._apply_linux") as mock:
             apply_isolation(
-                "auto", str(tmp_path), allow_network=True, allow_host_fs=True
+                "auto",
+                str(tmp_path),
+                allow_network=True,
+                allow_host_fs=True,
+                writable=(),
             )
             mock.assert_called_once_with(
-                ANY, str(tmp_path), allow_network=True, allow_host_fs=True
+                ANY, str(tmp_path), allow_network=True, allow_host_fs=True, writable=()
             )
 
     def test_root_none_forwarded(self):
@@ -558,7 +616,7 @@ class TestApplyIsolation:
         with patch(platform_fn) as mock:
             apply_isolation("auto", None, allow_network=True)
             mock.assert_called_once_with(
-                ANY, None, allow_network=True, allow_host_fs=False
+                ANY, None, allow_network=True, allow_host_fs=False, writable=()
             )
 
 

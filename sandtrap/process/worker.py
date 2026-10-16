@@ -25,6 +25,7 @@ from .protocol import (
     filter_prints,
     partition_namespace,
 )
+from .spool import spool_namespace
 
 
 class RpcProxy:
@@ -224,6 +225,7 @@ def worker_main(
     isolation: Literal["auto", "none"],
     snapshot_prints: bool = False,
     echo: Literal["none", "last", "all"] = "none",
+    spool_dir: str | None = None,
 ) -> None:
     """Main loop for the worker subprocess.
 
@@ -285,6 +287,7 @@ def worker_main(
             root,
             allow_network=policy.needs_network(),
             allow_host_fs=policy.needs_host_fs(),
+            writable=(spool_dir,) if spool_dir is not None else (),
         )
 
         sandbox = Sandbox(
@@ -348,8 +351,13 @@ def worker_main(
                     echo=msg.echo,
                     keep=msg.keep,
                 )
-                safe_ns, dropped = partition_namespace(result.namespace)
-                safe_ns = safe_ns or {}
+                spooled = None
+                if spool_dir is not None:
+                    spooled, dropped = spool_namespace(result.namespace, spool_dir)
+                    safe_ns: dict[str, Any] = {}
+                else:
+                    safe_ns, dropped = partition_namespace(result.namespace)
+                    safe_ns = safe_ns or {}
                 err = result.error
                 # Decided on the error as raised: one that can't be pickled
                 # is replaced by a stand-in below, but its run still failed
@@ -394,6 +402,7 @@ def worker_main(
                         prints=filter_prints(result.prints),
                         stderr=result.stderr,
                         dropped=(*result.dropped, *dropped),
+                        spooled=spooled,
                     )
                 )
                 reclaim = memory_failed
@@ -401,7 +410,7 @@ def worker_main(
                 conn.send(WorkerErrorMsg(message=traceback.format_exc()))
             # Nothing of this execution is wanted once its result is sent,
             # and a name bound here would hold it until the next one is.
-            msg = ns = exec_modules = result = safe_ns = err = None
+            msg = ns = exec_modules = result = safe_ns = spooled = err = None
             if reclaim:
                 # What the code built usually holds itself (a function's
                 # globals are its module), so only a collection frees it.

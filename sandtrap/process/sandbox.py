@@ -6,8 +6,10 @@ import asyncio
 import errno
 import multiprocessing
 import os
+import shutil
 import signal
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -38,6 +40,7 @@ from .protocol import (
     WorkerErrorMsg,
     partition_namespace,
 )
+from .spool import SpooledNamespace
 
 # Type alias for RPC handler callables registered with the sandbox.
 # A handler receives (method_name, args, kwargs) and returns the
@@ -656,6 +659,7 @@ class ProcessSandbox:
         close_fds: bool = False,
         start_method: Literal["fork", "spawn", "forkserver"] | None = None,
         preload_grants: bool = False,
+        spool: bool | str | os.PathLike[str] = False,
     ) -> None:
         _validate_mode(mode)
         # None means "whatever is safest here" — forkserver on POSIX. Validate
@@ -693,6 +697,14 @@ class ProcessSandbox:
         self._echo = echo
         self._close_fds = close_fds
         self._rpc_handlers: dict[str, RpcHandler] = dict(rpc_handlers or {})
+        if not isinstance(spool, (bool, str, os.PathLike)):
+            raise TypeError(
+                "spool must be True, False, or a directory to spool under, "
+                f"not {type(spool).__name__}"
+            )
+        self._spool = spool
+        self._spool_dir: str | None = None
+        self._spool_finalizer: weakref.finalize | None = None
 
         # Bridge non-IsolatedFS filesystems over RPC. Fork inheritance
         # would hand the worker a divergent COPY of an in-memory fs
@@ -785,6 +797,7 @@ class ProcessSandbox:
                 self._snapshot_prints,
                 self._echo,
                 inherited_fds,
+                self._ensure_spool_dir(),
             ),
             daemon=True,
         )
@@ -905,6 +918,28 @@ class ProcessSandbox:
             self._conn = None
         self._process = None
 
+    def _ensure_spool_dir(self) -> str | None:
+        """The directory this sandbox's results spool to, created on first
+        use: ``None`` with spooling off. Mode 0700, and never under the
+        sandbox's own filesystem, since the parent unpickles what is in
+        it. A real path, as Seatbelt matches resolved paths."""
+        if not self._spool or self._spool_dir is not None:
+            return self._spool_dir
+        base = None if self._spool is True else os.fspath(self._spool)
+        self._spool_dir = os.path.realpath(
+            tempfile.mkdtemp(prefix="sandtrap-spool-", dir=base)
+        )
+        self._spool_finalizer = weakref.finalize(
+            self, shutil.rmtree, self._spool_dir, ignore_errors=True
+        )
+        return self._spool_dir
+
+    def _remove_spool_dir(self) -> None:
+        if self._spool_finalizer is not None:
+            self._spool_finalizer()  # removes the directory, once
+        self._spool_finalizer = None
+        self._spool_dir = None
+
     def shutdown(self) -> None:
         """Shut down the worker process cleanly."""
         self._started = False  # exec() raises again until re-entered
@@ -919,6 +954,8 @@ class ProcessSandbox:
                 self._process.kill()
                 self._process.join(timeout=2.0)
         self._cleanup()
+        # Values never read go with it: their results say so if asked.
+        self._remove_spool_dir()
 
     # ------------------------------------------------------------------
     # Execution
@@ -1047,8 +1084,14 @@ class ProcessSandbox:
                 )
 
             if isinstance(msg, ResultMsg):
+                namespace: Mapping[str, Any] = msg.namespace
+                sizes: dict[str, int] = {}
+                if msg.spooled is not None and self._spool_dir is not None:
+                    namespace = SpooledNamespace(self._spool_dir, msg.spooled)
+                    sizes = namespace.sizes
                 result = ExecResult(
-                    namespace=msg.namespace,
+                    namespace=namespace,
+                    sizes=sizes,
                     stdout=msg.stdout,
                     stderr=msg.stderr,
                     error=msg.error,
@@ -1189,6 +1232,7 @@ def _worker_entry(
     snapshot_prints: bool = False,
     echo: Literal["none", "last", "all"] = "none",
     inherited_fds: tuple[int, ...] = (),
+    spool_dir: str | None = None,
 ) -> None:
     """Entry point for the worker process (target of multiprocessing.Process)."""
     # Everything before worker_main installs its own reporting must report
@@ -1223,4 +1267,13 @@ def _worker_entry(
             pass
         return
 
-    worker_main(conn, policy, filesystem, mode, isolation, snapshot_prints, echo)
+    worker_main(
+        conn,
+        policy,
+        filesystem,
+        mode,
+        isolation,
+        snapshot_prints,
+        echo,
+        spool_dir=spool_dir,
+    )

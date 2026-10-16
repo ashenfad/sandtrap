@@ -14,6 +14,7 @@ def apply_isolation(
     *,
     allow_network: bool = False,
     allow_host_fs: bool = False,
+    writable: tuple[str, ...] = (),
 ) -> IsolationStatus:
     """Apply platform-appropriate kernel-level isolation.
 
@@ -37,6 +38,9 @@ def apply_isolation(
     allow_host_fs:
         If True, skip kernel-level filesystem restriction (the policy
         has registrations that need host filesystem access).
+    writable:
+        Directories the worker itself writes to besides *root*, such as
+        a spool directory; kept writable when *root* restricts the rest.
     """
     # Recorded whatever the mode: the caller asked what this worker was built
     # with, and "no kernel restrictions were requested" doesn't answer whether
@@ -53,11 +57,19 @@ def apply_isolation(
 
     if sys.platform == "linux":
         _apply_linux(
-            status, root, allow_network=allow_network, allow_host_fs=allow_host_fs
+            status,
+            root,
+            allow_network=allow_network,
+            allow_host_fs=allow_host_fs,
+            writable=writable,
         )
     elif sys.platform == "darwin":
         _apply_darwin(
-            status, root, allow_network=allow_network, allow_host_fs=allow_host_fs
+            status,
+            root,
+            allow_network=allow_network,
+            allow_host_fs=allow_host_fs,
+            writable=writable,
         )
     # Other platforms: no kernel-level isolation available — status
     # keeps its default None flags, so ``degraded`` reports True.
@@ -70,6 +82,7 @@ def _apply_linux(
     *,
     allow_network: bool = False,
     allow_host_fs: bool = False,
+    writable: tuple[str, ...] = (),
 ) -> None:
     """Apply Landlock + seccomp on Linux, recording what took effect."""
     from . import landlock, seccomp
@@ -83,7 +96,7 @@ def _apply_linux(
     # Landlock first (filesystem restriction), then seccomp (syscall filter).
     # Order matters: Landlock setup requires syscalls that seccomp may block.
     if root is not None and not allow_host_fs:
-        status.landlock = landlock.apply(root)
+        status.landlock = landlock.apply(root, writable=writable)
     status.seccomp = seccomp.apply(allow_network=allow_network)
 
 
@@ -93,10 +106,14 @@ def _apply_darwin(
     *,
     allow_network: bool = False,
     allow_host_fs: bool = False,
+    writable: tuple[str, ...] = (),
 ) -> None:
     """Apply Seatbelt on macOS, recording what took effect."""
     from . import seatbelt
 
     status.seatbelt = seatbelt.apply(
-        root, allow_network=allow_network, allow_host_fs=allow_host_fs
+        root,
+        allow_network=allow_network,
+        allow_host_fs=allow_host_fs,
+        writable=writable,
     )

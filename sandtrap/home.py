@@ -24,6 +24,7 @@ from __future__ import annotations
 import io
 import itertools
 import pickle
+import re
 import types
 from typing import Any
 
@@ -32,6 +33,7 @@ __all__ = [
     "PREFIX",
     "SandboxObjectError",
     "check_sendable",
+    "dump_sendable",
     "is_sandbox_module",
 ]
 
@@ -95,3 +97,55 @@ def check_sendable(obj: Any) -> bytes:
     if PREFIX.encode() in raw:  # by reference, the name is in the bytes
         _Refusing(io.BytesIO()).dump(obj)
     return raw
+
+
+class _Discard:
+    """A file that keeps nothing: what the refusing pickler writes to when
+    only its refusal is wanted."""
+
+    def write(self, data: Any) -> int:
+        return len(memoryview(data))
+
+
+_PREFIX_BYTES = PREFIX.encode()
+_PREFIX_RE = re.compile(re.escape(_PREFIX_BYTES))
+
+
+class _Scanning:
+    """Passes writes through to ``file``, noting whether the bytes written
+    contain a sandbox module's name, a match split across two writes
+    included. ``re`` reads any buffer in place, so nothing is copied."""
+
+    def __init__(self, file: Any) -> None:
+        self._file = file
+        self._tail = b""
+        self.found = False
+
+    def write(self, data: Any) -> int:
+        view = memoryview(data).cast("B")
+        if not self.found:
+            keep = len(_PREFIX_BYTES) - 1
+            if _PREFIX_RE.search(self._tail + bytes(view[:keep])) or (
+                _PREFIX_RE.search(view)
+            ):
+                self.found = True
+            self._tail = (
+                bytes(view[-keep:])
+                if len(view) >= keep
+                else (self._tail + bytes(view))[-keep:]
+            )
+        return self._file.write(view)
+
+
+def dump_sendable(obj: Any, file: Any) -> None:
+    """Pickle ``obj`` to ``file`` as :func:`check_sendable` checks it, a
+    piece at a time rather than as one ``bytes``. Uses the highest
+    protocol, under which a large buffer (``bytes``, ``bytearray``, an
+    array's data) goes to ``file`` as it is; older protocols copy a
+    ``bytearray`` into a ``bytes`` first. Raises :class:`SandboxObjectError`
+    when ``obj`` holds a class or function of a sandbox's own, after part
+    of the pickle may already have been written; the caller discards it."""
+    scanning = _Scanning(file)
+    pickle.dump(obj, scanning, protocol=pickle.HIGHEST_PROTOCOL)
+    if scanning.found:  # by reference, the name is in the bytes
+        _Refusing(_Discard()).dump(obj)

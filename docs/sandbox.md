@@ -121,6 +121,7 @@ Both `exec()` and `aexec()` return an `ExecResult`:
 | `ticks` | `int` | Number of checkpoint ticks consumed |
 | `prints` | `list[tuple[Any, ...]]` | Raw `print()` args, deep-copied at call time (empty unless `snapshot_prints=True`) |
 | `dropped` | `tuple[str, ...]` | Names missing from `namespace`: values that could not be pickled out of a process worker ([details](process.md#namespace-serialization)), or everything withheld after a `MemoryError` |
+| `sizes` | `dict[str, int]` | Each value's pickled size, known before any is read, when a process sandbox [spools](process.md#spooling-results-to-files) its results; empty otherwise |
 
 The namespace excludes sandbox internals (`__builtins__`, `__st_*` gates, registered functions/classes, `print`). If user code reassigns a registered name (e.g., `print = 42`), the new value is included.
 
