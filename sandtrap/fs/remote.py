@@ -23,9 +23,12 @@ from __future__ import annotations
 import io
 import os
 import posixpath
+import sys
 from typing import Any
 
 from monkeyfs.virtualfile import open_file
+
+from ..errors import lost_write_error
 
 
 class RemoteFSMarker:
@@ -157,10 +160,10 @@ class RemoteFS:
             # A written file reaches the parent only on flush or close,
             # so a parent filesystem that refuses writes refuses it
             # there — and a handle dropped without an explicit close is
-            # closed by the garbage collector, where that refusal is
-            # swallowed and the write silently lost. Ask up front
+            # closed by the garbage collector, where that refusal can
+            # only fail the execution after the fact. Ask up front
             # instead, so the answer arrives while the caller can still
-            # see it — the moment the in-process path raises too.
+            # act on it — the moment the in-process path raises too.
             if not self._can_write(path):
                 raise PermissionError(f"cannot open {path!r} for writing")
 
@@ -347,8 +350,37 @@ class _PushOnClose:
 
     def close(self) -> None:  # type: ignore[override]
         if not self.closed and self._writable:  # type: ignore[attr-defined]
-            self._push()
+            try:
+                self._push()
+            except BaseException:
+                # The caller has been told; a later finalizer that fails
+                # the same way has nothing new to report.
+                self._close_raised = True
+                raise
         super().close()  # type: ignore[misc]
+
+    def __del__(self, _is_finalizing: Any = sys.is_finalizing) -> None:
+        """Push an unclosed file's content when it is garbage collected.
+
+        Defined here rather than left to ``io``'s finalizer, which calls
+        ``close()`` but discards a failure before Python 3.13 (outside
+        development mode). A push that fails raises :class:`StLostWrite`
+        to ``sys.unraisablehook``, where the execution that dropped the
+        file picks it up. It stays quiet while the interpreter shuts down,
+        and when an explicit ``close()`` already raised the failure.
+        """
+        if self.closed:  # type: ignore[attr-defined]
+            return
+        reported = getattr(self, "_close_raised", False)
+        try:
+            if getattr(self, "_writable", False):
+                self._push()
+        except Exception as e:
+            if reported or _is_finalizing():
+                return
+            raise lost_write_error(self._path, e) from e
+        finally:
+            super().close()  # type: ignore[misc]
 
     def __reduce__(self):
         """Bound to the worker's RPC connection — can't cross the

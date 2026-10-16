@@ -21,6 +21,17 @@ f.close()
 
 When a filesystem is provided, all calls to `open()`, `os.stat()`, `os.listdir()`, `os.path.exists()`, `os.mkdir()`, `os.remove()`, `os.rename()`, `os.getcwd()`, `os.chdir()`, `os.path.isfile()`, `os.path.isdir()`, `os.path.realpath()`, `os.path.expanduser()`, `pathlib.Path.touch()`, and more route through the VFS. Interception is powered by [monkeyfs](https://github.com/ashenfad/monkeyfs), which sandtrap uses as a dependency.
 
+### Writes lost at an implicit close
+
+A file the code never closes (`open(p, "w").write(x)`) is saved when its last reference goes, as a real file is. If that save fails -- the filesystem refuses the write, a quota is full -- the code has already moved on, so the failure can't be raised where it wrote. The execution fails instead:
+
+- If it had no error of its own, `result.error` is `StLostWrite`, an `StError` and an `OSError`, whose `filename` is the file's path, whose `errno` is the failure's (`EIO` when it has none), and whose `__cause__` is the exception the save raised. Any further lost write is a note on it.
+- If it had already failed, its error stays, with a note naming each lost file (`add_note`). Python 3.10 has no `add_note`: the note goes on `__notes__` all the same, and is also written to `result.stderr`, since 3.10's tracebacks don't show it.
+
+An explicit `close()` or `with` block still raises the failure into the code, and a save that succeeds changes nothing. This holds for `exec` and `aexec` at every isolation level, for files over a `VirtualFS` or any other non-`IsolatedFS` filesystem. In-process, it needs a monkeyfs that reports the loss (one with `monkeyfs.LostWriteError`); an older one discards it. Files over `IsolatedFS` are real files, finalized by Python's `io` module, and aren't covered.
+
+A loss is charged to the execution whose context finalized the file, through `sys.unraisablehook`: sandtrap puts one hook in front of whatever hook is installed and passes on everything that isn't a lost write. So a file still open when the execution ends -- bound in `result.namespace`, or held by a failed execution's traceback -- fails nothing when it is collected later: that loss goes to the previous hook, which by default prints it to stderr. The same goes for a file in a reference cycle, which is saved whenever the cyclic garbage collector runs, possibly during another execution, which it then fails. Close files explicitly to keep the failure where it happened.
+
 ### Library data files
 
 Granted libraries can still read their own bundled data while a VFS is
