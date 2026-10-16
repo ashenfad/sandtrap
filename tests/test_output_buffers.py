@@ -7,7 +7,9 @@ half, with a marker counting what was left out between them.
 
 from __future__ import annotations
 
+import collections
 import random
+import time
 
 import pytest
 
@@ -112,3 +114,89 @@ def test_a_policy_from_before_stdout_keep_keeps_the_tail():
         result = sb.exec("for i in range(100):\n    print(i)\n")
     assert result.stdout.startswith(TailBuffer._TRUNCATION_MARKER)
     assert result.stdout.endswith("99\n")
+
+
+class _ShortLen(str):
+    """A string that reports less than it holds."""
+
+    def __len__(self):
+        return 1
+
+
+@pytest.mark.parametrize("cls", [TailBuffer, EndsBuffer])
+def test_a_string_that_misstates_its_length_is_measured_by_its_content(cls):
+    buf = cls(100)
+    buf.write(_ShortLen("x" * 10_000))
+    value = buf.getvalue()
+    assert len(value) < 200
+    assert "x" * 50 in value
+
+
+@pytest.mark.parametrize("cls", [TailBuffer, EndsBuffer])
+def test_only_strings_are_written(cls):
+    with pytest.raises(TypeError, match="string argument expected"):
+        cls(100).write(b"bytes")
+
+
+def test_a_code_misstating_its_length_cannot_pass_the_cap():
+    """End to end: sandboxed code writes such a string to sys.stdout."""
+    policy = Policy(timeout=30.0, max_stdout=100)
+    with sandbox(policy) as sb:
+        result = sb.exec(
+            "import sys\n"
+            "class Short(str):\n"
+            "    def __len__(self):\n"
+            "        return 1\n"
+            "sys.stdout.write(Short('x' * 100_000))\n",
+            argv=["x"],
+        )
+    assert result.error is None, result.error
+    assert len(result.stdout) < 200
+
+
+class _YieldingDeque(collections.deque):
+    """A deque that lets other threads run just after an item is read, as a
+    thread switch at the worst moment would."""
+
+    def __getitem__(self, index):
+        item = super().__getitem__(index)
+        time.sleep(1e-5)  # between reading the front and acting on it
+        return item
+
+
+@pytest.mark.parametrize("cls", [TailBuffer, EndsBuffer])
+def test_concurrent_writers_keep_the_accounting(cls):
+    """Writers from several threads (output routed from threads the code
+    starts) trim the same buffer; each trim must see the others whole."""
+    import threading
+
+    buf = cls(1_000)
+    buf._chunks = _YieldingDeque()
+    errors = []
+
+    def write(tag):
+        try:
+            for i in range(2_000):
+                # lengths that differ, so a trim that removes the wrong
+                # chunk shows in the accounting
+                buf.write(tag * (i % 13 + 1) + "\n")
+        except Exception as e:  # noqa: BLE001 - any failure is the finding
+            errors.append(e)
+
+    threads = [threading.Thread(target=write, args=(t,)) for t in "abcdefgh"]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    assert buf._size == sum(len(c) for c in buf._chunks)
+    assert buf._size <= buf._max
+
+
+def test_empty_writes_do_not_grow_the_head():
+    buf = EndsBuffer(100)
+    for _ in range(10_000):
+        buf.write("")
+    assert buf._head == []
+    buf.write("abc")
+    assert buf.getvalue() == "abc"
