@@ -7,6 +7,7 @@ import copyreg
 import functools
 import pydoc
 import sys
+import threading
 from contextlib import contextmanager
 from io import StringIO
 from typing import Any, Iterator
@@ -293,7 +294,9 @@ class TailBuffer:
     When the total written exceeds *max_chars*, earlier output is discarded
     and a truncation marker is prepended on read. Output is held as a queue
     of the chunks written and trimmed from the front, so a write costs what
-    it writes, not what the buffer holds.
+    it writes, not what the buffer holds. Writes may come from several
+    threads (output routed from threads the code starts), so they are
+    serialized.
     """
 
     _TRUNCATION_MARKER = "... [earlier output truncated]\n"
@@ -303,10 +306,16 @@ class TailBuffer:
         self._chunks: collections.deque[str] = collections.deque()
         self._size = 0
         self._dropped = 0
+        self._lock = threading.Lock()
 
     def write(self, text: str) -> None:
+        text = _exact_text(text)
         if not text:
             return
+        with self._lock:
+            self._write(text)
+
+    def _write(self, text: str) -> None:
         self._chunks.append(text)
         self._size += len(text)
         if self._max is not None and self._size > self._max:
@@ -329,8 +338,10 @@ class TailBuffer:
         return "".join(self._chunks)
 
     def getvalue(self) -> str:
-        content = self._kept()
-        if self._dropped:
+        with self._lock:
+            content = self._kept()
+            dropped = self._dropped
+        if dropped:
             return self._TRUNCATION_MARKER + content
         return content
 
@@ -351,21 +362,37 @@ class EndsBuffer(TailBuffer):
         self._head: list[str] = []
         self._head_size = 0
 
-    def write(self, text: str) -> None:
+    def _write(self, text: str) -> None:
         if self._head_max is not None and self._head_size < self._head_max:
             take = text[: self._head_max - self._head_size]
             self._head.append(take)
             self._head_size += len(take)
             text = text[len(take) :]
-        super().write(text)
+            if not text:
+                return
+        super()._write(text)
 
     def getvalue(self) -> str:
-        head = "".join(self._head)
-        if self._dropped:
-            return (
-                f"{head}\n... [{self._dropped} characters omitted] ...\n{self._kept()}"
-            )
-        return head + self._kept()
+        with self._lock:
+            head = "".join(self._head)
+            tail = self._kept()
+            dropped = self._dropped
+        if dropped:
+            return f"{head}\n... [{dropped} characters omitted] ...\n{tail}"
+        return head + tail
+
+
+def _exact_text(text: Any) -> str:
+    """``text`` as an exact ``str``, refusing anything else as StringIO does.
+
+    A subclass is copied to a plain string first, at C level, so its own
+    ``__len__`` or slicing can't misstate how much is being kept.
+    """
+    if type(text) is str:
+        return text
+    if not isinstance(text, str):
+        raise TypeError(f"string argument expected, got '{type(text).__name__}'")
+    return str.__str__(text)
 
 
 OUTPUT_KEEPS = ("tail", "ends")
