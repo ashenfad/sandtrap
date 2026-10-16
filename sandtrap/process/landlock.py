@@ -24,8 +24,9 @@ def available() -> bool:
         return False
 
 
-def apply(root: str) -> bool:
-    """Restrict filesystem access to *root* via Landlock.
+def apply(root: str, *, writable: tuple[str, ...] = ()) -> bool:
+    """Restrict filesystem access to *root*, and the *writable*
+    directories the worker writes to itself, via Landlock.
 
     Returns True if restrictions were applied, False if Landlock is
     unavailable (missing package, unsupported kernel, etc.).
@@ -47,6 +48,8 @@ def apply(root: str) -> bool:
         # Deny all filesystem access except within root
         rs = Ruleset()
         rs.allow(root)
+        for path in writable:
+            rs.allow(path)
         rs.apply()
         return True
     except OSError as exc:

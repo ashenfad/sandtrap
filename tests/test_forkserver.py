@@ -395,7 +395,7 @@ def test_seccomp_backend_is_imported_before_landlock_restricts_the_fs():
         patch.object(
             landlock_module,
             "apply",
-            side_effect=lambda root: order.append("landlock.apply") or True,
+            side_effect=lambda root, **_: order.append("landlock.apply") or True,
         ),
         patch.object(
             seccomp_module,

@@ -444,6 +444,27 @@ The `modules` mapping of [per-exec modules](sandbox.md#per-exec-modules) rides t
 
 Sandbox-defined functions and classes are plain objects and pickle no better than any other locally-defined function, so they do not come back from the worker. Code an agent should be able to reuse in a later turn belongs in a module on the filesystem, which it can import again: see [VFS imports](filesystem.md).
 
+## Spooling results to files
+
+By default the whole result crosses the pipe as one pickled message, which the parent receives in full before it can look at any of it: a 200MB value costs the parent about 550MB (Linux) to 930MB (macOS) of peak memory. `spool=True` changes how values cross:
+
+```python
+with sandbox(Policy(), isolation="process", spool=True) as sb:
+    result = sb.exec("table = load()\nsummary = describe(table)\n")
+
+result.sizes               # {"table": 209715213, "summary": 412} -- nothing read yet
+result.namespace["summary"]  # read now, from its own file
+```
+
+- **The worker writes each value to a file of its own**, streaming it: a large buffer goes from the worker's memory to the file as it is. A value whose pickle is 64KiB or less rides the pipe instead, so a result of a few numbers makes no files.
+- **The parent knows every size before reading anything** (`result.sizes`), and `result.namespace` reads a value when it is first asked for. `in`, `len` and iteration read nothing; a value read once is kept and its file removed. Reading it costs the value itself, with no receive buffer: the 200MB value above costs the parent about 200MB.
+- **Files of values never read are removed** when the result is let go, or when the sandbox exits; reading one after that raises `sandtrap.process.SpoolClosedError`. Read what you need while the sandbox is open.
+- **Each value is pickled on its own**, so two names bound to one object come back as two copies.
+
+The directory is created for the sandbox, mode 0700, in the system temporary directory; `spool="/some/dir"` creates it there instead (`/dev/shm` keeps it in memory on Linux). It is never inside the sandbox's own filesystem: the parent unpickles what is in it, and reads only files the worker named in its reply. Under kernel isolation with an `IsolatedFS` root, Landlock and Seatbelt keep this one directory writable alongside the root.
+
+Spooling covers the result namespace. Print snapshots and the error still ride the pipe, and so does what the code sends the host while it runs (RPC calls, bridged filesystem writes). In-process sandboxes ignore `spool`: their result holds the values themselves.
+
 ## Cross-process resources via RPC
 
 The namespace is pickled into the worker, so any container that holds host-side state (database connections, caches with threading locks, file handles) can't cross the boundary intact. Sandtrap provides a worker-to-parent RPC channel for these cases.

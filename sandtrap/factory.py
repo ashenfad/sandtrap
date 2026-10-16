@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -25,6 +26,7 @@ def sandbox(
     close_fds: bool = False,
     start_method: Literal["fork", "spawn", "forkserver"] | None = None,
     preload_grants: bool = False,
+    spool: "bool | str | os.PathLike[str]" = False,
 ) -> Sandbox | ProcessSandbox:
     """Create a sandbox with the specified isolation level.
 
@@ -110,6 +112,15 @@ def sandbox(
         worker goes from ~235ms and ~113MB to ~14ms and ~29MB. It is also
         process-global and first-use-wins — see ``ProcessSandbox`` and
         ``docs/process.md``.
+    spool:
+        Only meaningful for process / kernel isolation. ``True`` has the
+        worker write each result value to a file of its own, in a private
+        temporary directory, and send only names and sizes:
+        ``result.sizes`` is known before anything is read, and
+        ``result.namespace`` reads a value when it is first asked for. A
+        path spools under that directory instead (``/dev/shm`` keeps it in
+        memory on Linux). Ignored for ``isolation="none"``, whose result
+        holds the values themselves.
     """
     if isolation == "none":
         return Sandbox(
@@ -137,4 +148,5 @@ def sandbox(
         close_fds=close_fds,
         start_method=start_method,
         preload_grants=preload_grants,
+        spool=spool,
     )

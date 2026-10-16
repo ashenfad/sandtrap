@@ -57,6 +57,13 @@ _FS_RESTRICTED = """\
   (subpath "/usr"))
 """
 
+# A directory the worker writes to itself (a spool directory), one per
+# WRITABLE_<n> parameter.
+_FS_WRITABLE = """\
+(allow file-read* file-write*
+  (subpath (param "{key}")))
+"""
+
 # Filesystem: unrestricted (policy has host_fs_access registrations).
 _FS_OPEN = """\
 (allow file-read* file-write*)
@@ -90,6 +97,7 @@ def apply(
     *,
     allow_network: bool = False,
     allow_host_fs: bool = False,
+    writable: tuple[str, ...] = (),
 ) -> bool:
     """Apply a Seatbelt profile.
 
@@ -102,6 +110,10 @@ def apply(
         If True, allow network operations through the Seatbelt profile.
     allow_host_fs:
         If True, do not restrict filesystem access.
+    writable:
+        Directories the worker writes to itself, kept writable when
+        *root* restricts the rest. Real paths: Seatbelt matches the
+        resolved path, so ``/var/...`` must be given as ``/private/var/...``.
 
     Returns True if the profile was applied, False if unavailable.
     """
@@ -120,6 +132,9 @@ def apply(
     restrict_fs = root is not None and not allow_host_fs
     profile = _HEADER
     profile += _FS_RESTRICTED if restrict_fs else _FS_OPEN
+    if restrict_fs:
+        for i in range(len(writable)):
+            profile += _FS_WRITABLE.format(key=f"WRITABLE_{i}")
     profile += _NETWORK_ALLOW if allow_network else _NETWORK_DENY
 
     # Build NULL-terminated key/value parameter array
@@ -128,6 +143,8 @@ def apply(
         params["SANDBOX_ROOT"] = root
         params["PYTHON_BASE"] = os.path.realpath(sys.base_prefix)
         params["PYTHON_VENV"] = os.path.realpath(sys.prefix)
+        for i, path in enumerate(writable):
+            params[f"WRITABLE_{i}"] = path
     n = len(params)
     arr = (ctypes.c_char_p * (n * 2 + 1))()
     for i, (k, v) in enumerate(params.items()):

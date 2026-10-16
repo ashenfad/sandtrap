@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`spool=` on `ProcessSandbox`** writes each result value to a file of its
+  own; `result.sizes` is known before anything is read, and
+  `result.namespace` reads a value on first access (#66).
 - **`keep=` on `exec` and `aexec`** names the bindings `result.namespace`
   carries; a process worker leaves the rest behind unpickled (#66).
 

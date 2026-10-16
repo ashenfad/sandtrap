@@ -334,7 +334,11 @@ class IsolationStatus:
 class ExecResult:
     """Result of a sandbox execution."""
 
-    namespace: dict[str, Any] = field(default_factory=dict)
+    namespace: Mapping[str, Any] = field(default_factory=dict)
+    """What the code bound. A ``dict`` of the values themselves, except
+    under a spooling process sandbox, where it is a
+    :class:`~sandtrap.process.spool.SpooledNamespace` that reads each value
+    when it is first asked for."""
     stdout: str = ""
     """``sys.stdout`` output produced during the execution: sandboxed
     ``print`` calls plus host-side writes to the real ``sys.stdout`` on
@@ -365,6 +369,11 @@ class ExecResult:
     finds a variable gone can say *which* one and why, rather than
     reading the absence as a bug.  Names left out by ``keep`` are not
     listed: the caller asked for them to be left out."""
+    sizes: dict[str, int] = field(default_factory=dict)
+    """Each ``namespace`` value's pickled size in bytes, known before any
+    value is read, when a process sandbox spooled the result; empty
+    otherwise. Lets a caller refuse or skip a value by its size without
+    paying to read it."""
 
 
 class Sandbox:
