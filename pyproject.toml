@@ -50,6 +50,14 @@ test = [
     # Two import tests exercise lazy submodule resolution against PIL, the
     # canonical namespace-package-style layout; undeclared, they skip.
     "pillow",
+    "reprobate>=0.1.5",
+]
+# render_prints: print values rendered as they are printed. 0.1.5 imports a
+# library's renderers only when one of its objects is rendered; earlier
+# releases import numpy, pandas and the rest on `import reprobate`, which every
+# worker process would pay.
+render = [
+    "reprobate>=0.1.5",
 ]
 # Kernel mode on LINUX only: seccomp + Landlock bindings. macOS needs nothing
 # (Seatbelt ships with the OS), and isolation="process" needs nothing anywhere

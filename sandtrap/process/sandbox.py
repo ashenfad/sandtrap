@@ -21,6 +21,7 @@ from typing import Any, Literal
 
 from ..errors import StForkUnsafe, StPolicyNotPortable
 from ..policy import Policy
+from ..prints import PrintRendering
 from ..sandbox import (
     ExecResult,
     IsolationStatus,
@@ -29,6 +30,7 @@ from ..sandbox import (
     _validate_keep,
     _validate_mode,
     _validate_modules,
+    _validate_render_prints,
 )
 from .protocol import (
     ExecMsg,
@@ -679,8 +681,10 @@ class ProcessSandbox:
         start_method: Literal["fork", "spawn", "forkserver"] | None = None,
         preload_grants: bool = False,
         spool: bool | str | os.PathLike[str] = False,
+        render_prints: PrintRendering | None = None,
     ) -> None:
         _validate_mode(mode)
+        _validate_render_prints(render_prints)
         # None means "whatever is safest here" — forkserver on POSIX. Validate
         # rather than defer: an unavailable method is a construction mistake,
         # and discovering it inside a worker start would report as a worker
@@ -708,6 +712,7 @@ class ProcessSandbox:
         self._allow_degraded = allow_degraded
         self._isolation_status: IsolationStatus | None = None
         self._snapshot_prints = snapshot_prints
+        self._render_prints = render_prints
         # Validate here too — an invalid value would otherwise surface
         # inside the forked worker as a wrapped "Worker failed to
         # initialise" RuntimeError at first exec, instead of a clean
@@ -819,6 +824,7 @@ class ProcessSandbox:
                 self._echo,
                 inherited_fds,
                 self._ensure_spool_dir(),
+                self._render_prints,
             ),
             daemon=True,
         )
@@ -1118,6 +1124,8 @@ class ProcessSandbox:
                     error=msg.error,
                     ticks=msg.ticks,
                     prints=msg.prints,
+                    rendered_prints=msg.rendered_prints,
+                    print_count=msg.print_count,
                     isolation=self._isolation_status,
                     dropped=msg.dropped,
                 )
@@ -1254,6 +1262,7 @@ def _worker_entry(
     echo: Literal["none", "last", "all"] = "none",
     inherited_fds: tuple[int, ...] = (),
     spool_dir: str | None = None,
+    render_prints: Any = None,
 ) -> None:
     """Entry point for the worker process (target of multiprocessing.Process)."""
     # Everything before worker_main installs its own reporting must report
@@ -1297,4 +1306,5 @@ def _worker_entry(
         snapshot_prints,
         echo,
         spool_dir=spool_dir,
+        render_prints=render_prints,
     )
