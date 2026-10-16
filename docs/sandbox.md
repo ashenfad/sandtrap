@@ -254,10 +254,13 @@ StError
 ├── StValidationError   # invalid AST (before execution)
 ├── StTimeout           # wall-clock timeout exceeded
 ├── StTickLimit         # tick limit exceeded
-└── StCancelled         # sandbox.cancel() called
+├── StCancelled         # sandbox.cancel() called
+└── StLostWrite         # a file closed implicitly failed to save (also an OSError)
 ```
 
 `MemoryError` (stdlib) is raised when the memory limit is exceeded. Reporting one must not cost more memory, so a result whose error is a `MemoryError` carries no namespace and no print snapshots, whatever `keep` says. `result.dropped` names what was withheld; `stdout`, `stderr` and the error with its traceback come back as usual. The execution's module is released at once rather than kept registered for the next executions.
+
+`StLostWrite` is described under [Writes lost at an implicit close](filesystem.md#writes-lost-at-an-implicit-close).
 
 ```python
 from sandtrap import StError, StValidationError, StTimeout, StTickLimit, StCancelled

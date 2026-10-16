@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A write lost when its file is closed implicitly fails the execution** (#73).
+  `result.error` is the new `StLostWrite` naming the file, or a note on the
+  execution's own error.
 - **A finished execution no longer outlives its result.** A process worker
   held the last result until the next one; in-process, a failed `exec`'s
   values waited for the cyclic GC.

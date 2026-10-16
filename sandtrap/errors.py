@@ -1,7 +1,9 @@
 """sandtrap error types and traceback utilities."""
 
+import errno
 import os
 import types
+from typing import Any
 
 _SBLITE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -65,6 +67,59 @@ class StPolicyNotPortable(StError, ValueError):
     def __init__(self, message: str, problems: tuple = ()):
         self.problems = problems
         super().__init__(message)
+
+
+class StLostWrite(StError, OSError):
+    """A file's content was lost when the file was closed implicitly.
+
+    A file the code leaves for garbage collection rather than closing
+    (``open(p, "w").write(x)``) saves its content from a finalizer, where a
+    failure cannot reach the code. When that save fails during an
+    execution, the execution fails: this is its error when nothing else
+    went wrong, and otherwise its own error carries a note for each lost
+    file. ``filename`` is the file's path, ``errno`` is the failure's
+    (``EIO`` when it has none), and ``__cause__`` is the exception the save
+    raised.
+
+    Subclasses ``OSError`` as well as ``StError``: closing the file
+    explicitly would have raised the save's ``OSError`` into the code, and
+    ``except OSError`` around an execution's error should match either way.
+    """
+
+    def __reduce__(self) -> Any:
+        # A pickled exception drops its __cause__, and a process worker's
+        # error crosses by pickle. Carried in the state, it is set again
+        # as the copy is unpickled.
+        reduced = super().__reduce__()
+        state = dict(reduced[2]) if len(reduced) > 2 and reduced[2] else {}
+        if self.__cause__ is not None:
+            state["__cause__"] = self.__cause__
+        return (reduced[0], reduced[1], state)
+
+
+def lost_write_error(path: str, cause: BaseException) -> StLostWrite:
+    """The error reporting that *path*'s content was lost to *cause*."""
+    error = StLostWrite(
+        getattr(cause, "errno", None) or errno.EIO,
+        f"content lost when the file was closed implicitly ({_reason(cause)})",
+        path,
+    )
+    error.__cause__ = cause
+    return error
+
+
+def lost_write_note(path: str, cause: BaseException) -> str:
+    """One line saying that *path*'s content was lost to *cause*."""
+    return (
+        f"content of {path!r} was lost when the file was closed implicitly "
+        f"({_reason(cause)})"
+    )
+
+
+def _reason(cause: BaseException) -> str:
+    if isinstance(cause, OSError) and cause.strerror:
+        return cause.strerror
+    return f"{type(cause).__name__}: {cause}"
 
 
 class StValidationError(StError):

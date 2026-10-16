@@ -17,6 +17,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from . import lost_writes
 from .builtins import (
     TailBuffer,
     _FrozenBuiltins,
@@ -996,7 +997,7 @@ class Sandbox:
         home = ns.get("__name__")
 
         error = None
-        with ExitStack() as stack:
+        with lost_writes.collecting() as lost, ExitStack() as stack:
             self._enter_sandbox_context(
                 stack,
                 print_fn=ns["print"],
@@ -1010,6 +1011,7 @@ class Sandbox:
                 if isinstance(e, KeyboardInterrupt):
                     raise  # Real Ctrl-C from host
                 error = strip_internal_frames(e)
+        error = lost_writes.settle(error, lost.close(), stderr_buf)
 
         gates["__st_in_exec__"][0] = False
 
@@ -1164,7 +1166,7 @@ class Sandbox:
 
         error = None
         result_locals: dict[str, Any] = {}
-        with ExitStack() as stack:
+        with lost_writes.collecting() as lost, ExitStack() as stack:
             self._enter_sandbox_context(
                 stack,
                 print_fn=ns["print"],
@@ -1187,6 +1189,7 @@ class Sandbox:
                     raise  # Real Ctrl-C from host
                 error = strip_internal_frames(e)
                 result_locals = ns.get("__st_local_capture__", {})
+        error = lost_writes.settle(error, lost.close(), stderr_buf)
 
         # The body ran inside a function, so what it defined is local
         # there: put it in the module, as an exec would have it, for
