@@ -20,8 +20,10 @@ __all__ = ["PrintRendering"]
 class PrintRendering:
     """Render each print's values with reprobate as the print is made.
 
-    ``per_print`` is how many characters one print's rendering may take;
-    its values share it, each getting at least 40. ``limit`` is how many
+    ``per_print`` is how many characters one print's rendering may take,
+    whatever it prints: its values share it, each getting at least 40,
+    and values past the budget are counted (``...N more``) rather than
+    rendered, so the work is bounded by it too. ``limit`` is how many
     prints are rendered: later ones are only counted
     (``ExecResult.print_count``), so the work and the memory are bounded
     however much the code prints.
@@ -63,8 +65,39 @@ class PrintRenderer:
         self.count += 1
         if len(self.rendered) >= self._rendering.limit:
             return
-        per_value = max(40, self._rendering.per_print // max(1, len(args)))
-        self.rendered.append(" ".join(_render(value, per_value) for value in args))
+        self.rendered.append(_render_print(args, self._rendering.per_print))
+
+
+#: Once a value is shown, fewer characters than this say nothing useful
+#: about the next one: what is left goes to the marker counting it instead.
+_MIN_ROOM = 8
+
+
+def _render_print(args: tuple[Any, ...], per_print: int) -> str:
+    """One print's values, space-joined within ``per_print`` characters.
+
+    Values are rendered only while room is left, so a print of many
+    values costs work in proportion to the budget, not to their number;
+    those left over are counted in a ``...N more`` marker where it fits.
+    """
+    count = len(args)
+    share = max(40, per_print // max(1, count))
+    parts: list[str] = []
+    used = -1  # no separator before the first value
+    for i, value in enumerate(args):
+        # leave room for the marker that would count the values after this
+        after = count - i - 1
+        reserve = len(f" ...{after} more") if after else 0
+        room = per_print - used - 1 - reserve
+        if room < 1 or (parts and room < _MIN_ROOM):
+            break
+        text = _render(value, min(share, room))
+        parts.append(text)
+        used += 1 + len(text)
+    left = count - len(parts)
+    if left:
+        parts.append(f"...{left} more")
+    return " ".join(parts)[:per_print]
 
 
 def _render(value: Any, budget: int) -> str:
