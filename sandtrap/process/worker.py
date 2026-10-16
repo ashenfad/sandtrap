@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import importlib
 import pickle
 import signal
@@ -316,6 +317,7 @@ def worker_main(
             break
 
         if isinstance(msg, ExecMsg):
+            reclaim = False
             try:
                 # Replace any RpcProxyMarker placeholders with live
                 # proxies bound to this worker's connection before
@@ -344,6 +346,7 @@ def worker_main(
                     stdin=msg.stdin,
                     argv=msg.argv,
                     echo=msg.echo,
+                    keep=msg.keep,
                 )
                 safe_ns, dropped = partition_namespace(result.namespace)
                 safe_ns = safe_ns or {}
@@ -386,8 +389,18 @@ def worker_main(
                         ticks=result.ticks,
                         prints=filter_prints(result.prints),
                         stderr=result.stderr,
-                        dropped=dropped,
+                        dropped=(*result.dropped, *dropped),
                     )
                 )
+                reclaim = isinstance(err, MemoryError)
             except BaseException:
                 conn.send(WorkerErrorMsg(message=traceback.format_exc()))
+            # Nothing of this execution is wanted once its result is sent,
+            # and a name bound here would hold it until the next one is.
+            msg = ns = exec_modules = result = safe_ns = err = None
+            if reclaim:
+                # What the code built usually holds itself (a function's
+                # globals are its module), so only a collection frees it.
+                # After a memory failure the next execution needs that
+                # memory back.
+                gc.collect()

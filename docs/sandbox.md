@@ -120,9 +120,24 @@ Both `exec()` and `aexec()` return an `ExecResult`:
 | `error` | `BaseException \| None` | Runtime error, or `None` on success |
 | `ticks` | `int` | Number of checkpoint ticks consumed |
 | `prints` | `list[tuple[Any, ...]]` | Raw `print()` args, deep-copied at call time (empty unless `snapshot_prints=True`) |
-| `dropped` | `tuple[str, ...]` | Names missing from `namespace` because the value could not be pickled out of a process worker; always empty in-process ([details](process.md#namespace-serialization)) |
+| `dropped` | `tuple[str, ...]` | Names missing from `namespace`: values that could not be pickled out of a process worker ([details](process.md#namespace-serialization)), or everything withheld after a `MemoryError` |
 
 The namespace excludes sandbox internals (`__builtins__`, `__st_*` gates, registered functions/classes, `print`). If user code reassigns a registered name (e.g., `print = 42`), the new value is included.
+
+### Choosing what comes back
+
+`keep` names the bindings `result.namespace` carries. Without it, every one comes back:
+
+```python
+result = sandbox.exec("rows = load()
+summary = len(rows)
+", keep=("summary",))
+result.namespace  # {"summary": ...} -- rows stayed behind
+```
+
+Under `isolation="process"` / `"kernel"` the worker applies `keep` before pickling anything, so a scratch value the caller never reads costs no serialization and no transfer. A kept name the code never bound is simply absent, and isn't listed in `dropped`. A bare string is refused (`keep="ui"` would mean the names `u` and `i`); write `keep=("ui",)`.
+
+`keep` bounds the result only. What the code sends the host while it runs, such as a host object's method call or a write through a [bridged filesystem](process.md#virtualfs-in-memory--bridged-over-rpc), crosses as it always does.
 
 ### stdout / stderr capture
 
@@ -241,7 +256,7 @@ StError
 └── StCancelled         # sandbox.cancel() called
 ```
 
-`MemoryError` (stdlib) is raised when the memory limit is exceeded.
+`MemoryError` (stdlib) is raised when the memory limit is exceeded. Reporting one must not cost more memory, so a result whose error is a `MemoryError` carries no namespace and no print snapshots, whatever `keep` says. `result.dropped` names what was withheld; `stdout`, `stderr` and the error with its traceback come back as usual. The execution's module is released at once rather than kept registered for the next executions.
 
 ```python
 from sandtrap import StError, StValidationError, StTimeout, StTickLimit, StCancelled

@@ -434,7 +434,11 @@ result.namespace["kept"]  # 7
 result.dropped            # ("handle",) -- a lambda does not pickle
 ```
 
-A name in `dropped` is not in `namespace` -- the value could not cross the boundary -- and the tuple is what lets a caller say *which* variable is missing and why, rather than reading the absence as a bug. It is always empty under `isolation="none"`, which returns the live namespace and drops nothing.
+A name in `dropped` is not in `namespace` -- the value could not cross the boundary -- and the tuple is what lets a caller say *which* variable is missing and why, rather than reading the absence as a bug. Under `isolation="none"`, which returns the live namespace, it is empty except after a `MemoryError` (see below).
+
+Every returned value is pickled in the worker and unpickled in the parent, which briefly holds the message as well as the values. Pass [`keep`](sandbox.md#choosing-what-comes-back) to name the bindings you will read: the worker leaves the rest behind unpickled, and an unpicklable value outside `keep` isn't listed in `dropped`, since nothing tried to send it. `keep` bounds only the result. RPC traffic during the run (a cached value, a file written through a bridged filesystem) and what the parent allocates to receive it are not covered.
+
+A result whose error is a `MemoryError` carries no namespace and no print snapshots, so reporting the failure never pickles what caused it. `dropped` names what was withheld. The worker then collects garbage before the next execution, so it gets the failed run's memory back.
 
 The `modules` mapping of [per-exec modules](sandbox.md#per-exec-modules) rides the same pipe and takes the same filter, one module's attributes at a time; a dropped attribute warns as `Module attribute host.fn skipped`. A live parent-side object goes in it as an `RpcProxyMarker`, exactly as it would as a namespace entry, and the worker substitutes a proxy before the module object is built -- so the module's attribute *is* the proxy, and the agent's `host.obj.method()` reaches the real object here.
 
