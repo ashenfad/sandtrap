@@ -69,6 +69,11 @@ class StPolicyNotPortable(StError, ValueError):
         super().__init__(message)
 
 
+class RpcChannelClosed(RuntimeError):
+    """A host call from a worker that has stopped serving its parent: the
+    worker is shutting down, and the parent no longer answers."""
+
+
 class StLostWrite(StError, OSError):
     """A file's content was lost when the file was closed implicitly.
 

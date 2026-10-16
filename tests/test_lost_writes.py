@@ -165,6 +165,63 @@ def test_explicit_close_still_raises_into_the_code(isolation, runner, unraisable
     assert unraisable == []
 
 
+@pytest.mark.parametrize(
+    "change",
+    ["f.write('y' * 10)", "f.writelines(['y', 'z'])", "f.truncate(2048)"],
+    ids=["write", "writelines", "truncate"],
+)
+@pytest.mark.parametrize("isolation", ISOLATIONS)
+def test_a_change_after_a_failed_close_is_lost_if_dropped(isolation, change):
+    """A failed close() reported the content it held; content changed
+    after it was never reported, so losing it fails the execution."""
+    fs = QuotaFS({})
+    with _sandbox(isolation, fs) as sb:
+        result = sb.exec(
+            "f = open('/f.txt', 'w')\n"
+            "f.write('x' * 4096)\n"
+            "try:\n"
+            "    f.close()\n"
+            "except OSError:\n"
+            "    pass\n"
+            f"{change}\n"
+            "del f\n"
+        )
+    assert isinstance(result.error, StLostWrite), result.error
+    assert result.error.filename == "/f.txt"
+
+
+@pytest.mark.parametrize("isolation", ("process", "kernel"))
+def test_a_failed_flush_is_not_reported_again(isolation):
+    """flush() pushes in a worker; a failure it raised was the code's to
+    handle, and the same content lost at finalization is not charged
+    again."""
+    fs = QuotaFS({})
+    with _sandbox(isolation, fs) as sb:
+        result = sb.exec(
+            "f = open('/f.txt', 'w')\n"
+            "f.write('x' * 4096)\n"
+            "try:\n"
+            "    f.flush()\n"
+            "except OSError:\n"
+            "    print('flush refused')\n"
+            "del f\n"
+        )
+    assert result.error is None, result.error
+    assert result.stdout == "flush refused\n"
+
+
+@pytest.mark.parametrize("isolation", ("process", "kernel"))
+def test_writelines_and_truncate_need_a_writable_file(isolation):
+    fs = QuotaFS({})
+    fs.write("/r.txt", b"abc")
+    with _sandbox(isolation, fs) as sb:
+        lines = sb.exec("open('/r.txt').writelines(['x'])\n")
+        cut = sb.exec("open('/r.txt').truncate(1)\n")
+    for result in (lines, cut):
+        assert type(result.error).__name__ == "UnsupportedOperation", result.error
+    assert fs.read("/r.txt") == b"abc"
+
+
 @pytest.mark.parametrize("runner", RUNNERS)
 @pytest.mark.parametrize("isolation", ISOLATIONS)
 def test_successful_implicit_close_is_unchanged(isolation, runner):
@@ -294,3 +351,18 @@ def test_cause_without_errno_reports_eio():
 
     assert error.errno == errno.EIO
     assert "RuntimeError: backend down" in str(error)
+
+
+@pytest.mark.parametrize("isolation", ("process", "kernel"))
+def test_an_open_file_does_not_hold_up_shutdown(isolation):
+    """A file still open when the sandbox closes is finalized as the worker
+    exits, after the parent has stopped answering host calls: its push is
+    refused at once instead of waiting to be killed."""
+    import time
+
+    fs = QuotaFS({})
+    with _sandbox(isolation, fs) as sb:
+        result = sb.exec("f = open('/f.txt', 'w')\nf.write('abc')\n")
+        assert result.error is None, result.error
+        started = time.monotonic()
+    assert time.monotonic() - started < 2.0
