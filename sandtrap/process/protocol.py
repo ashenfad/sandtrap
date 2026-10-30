@@ -164,7 +164,9 @@ class ResultMsg:
 class HostTimeMsg:
     """The worker's clock stopped (``paused``) or started again: a host
     call is outstanding, and its time is not the execution's. The parent
-    holds its own deadline for the worker while the clock is stopped."""
+    holds its own deadline for the worker while the clock is stopped.
+    Only the running execution's clock is reported, and a pause still open
+    when the execution ends is closed then."""
 
     paused: bool
 

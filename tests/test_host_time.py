@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import multiprocessing
+import threading
 import time
 
 import pytest
 
 from sandtrap import MemberSpec, Policy, RpcProxyMarker, Sandbox, host_time, sandbox
-from sandtrap.clock import HostClock, observe_pauses
+from sandtrap.clock import HostClock, observe_pauses, set_clock_scope
 from sandtrap.errors import StTimeout
 from sandtrap.process import sandbox as process_sandbox
 
@@ -41,6 +43,19 @@ def block(seconds: float) -> str:
     """A host call left on the clock, which no checkpoint can interrupt."""
     time.sleep(seconds)
     return "done"
+
+
+def leave_a_host_call_running(delay: float, seconds: float) -> None:
+    """Start a thread that keeps this execution's clock and, *delay*
+    seconds on, makes a host call of *seconds* on it."""
+
+    def later() -> None:
+        time.sleep(delay)
+        with host_time():
+            time.sleep(seconds)
+
+    context = contextvars.copy_context()
+    threading.Thread(target=context.run, args=(later,), daemon=True).start()
 
 
 def _policy(**cls_kwargs) -> Policy:
@@ -199,7 +214,7 @@ async def test_a_cancelled_aexec_settles_its_code_first():
 
 def test_a_clock_tells_its_observer_once_per_pause():
     seen = []
-    observe_pauses(seen.append)
+    observe_pauses(lambda scope, paused: seen.append(paused))
     try:
         clock = HostClock([100.0])
         clock.enter()
@@ -209,6 +224,21 @@ def test_a_clock_tells_its_observer_once_per_pause():
     finally:
         observe_pauses(None)
     assert seen == [True, False]
+
+
+def test_a_clock_is_reported_under_the_scope_it_was_made_in():
+    seen = []
+    observe_pauses(lambda scope, paused: seen.append((scope, paused)))
+    set_clock_scope("first")
+    try:
+        clock = HostClock([100.0])
+        set_clock_scope("second")
+        clock.enter()
+        clock.exit()
+    finally:
+        observe_pauses(None)
+        set_clock_scope(None)
+    assert seen == [("first", True), ("first", False)]
 
 
 @pytest.mark.parametrize("override", [None, 0.3])
@@ -235,3 +265,19 @@ def test_the_wait_resumes_after_a_host_call(monkeypatch):
         elapsed = time.monotonic() - start
     assert "unresponsive" in str(result.error)
     assert elapsed < 1.0 + TIMEOUT + 0.1 + 2.0
+
+
+def test_an_earlier_executions_clock_does_not_hold_this_ones_wait(monkeypatch):
+    """A thread left running with an earlier execution's clock can pause
+    it while a later execution runs; the later execution's wait goes on."""
+    monkeypatch.setattr(process_sandbox, "_UNRESPONSIVE_GRACE", 0.1)
+    policy = Policy(timeout=TIMEOUT)
+    policy.fn(leave_a_host_call_running)
+    policy.fn(block)
+    with sandbox(policy, isolation="process") as sb:
+        assert sb.exec("leave_a_host_call_running(0.2, 30.0)").error is None
+        start = time.monotonic()
+        result = sb.exec("block(3.0)")
+        elapsed = time.monotonic() - start
+    assert "unresponsive" in str(result.error)
+    assert elapsed < 2.5

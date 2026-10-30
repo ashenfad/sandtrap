@@ -9,10 +9,11 @@ import signal
 import threading
 import traceback
 import uuid
+from contextlib import contextmanager
 from multiprocessing.connection import Connection
-from typing import Any, Callable, Literal, Mapping
+from typing import Any, Callable, Iterator, Literal, Mapping
 
-from ..clock import host_time, observe_pauses
+from ..clock import host_time, observe_pauses, set_clock_scope
 from ..errors import RpcChannelClosed
 from ..home import check_sendable
 from .protocol import (
@@ -31,8 +32,8 @@ from .protocol import (
 from .spool import spool_namespace
 
 _send_lock = threading.Lock()
-"""Held for each message sent while an execution runs, so a clock message
-from one thread never lands inside another thread's call."""
+"""Held for each message the worker sends once its loop runs, so a clock
+message from one thread never lands inside another thread's message."""
 
 _channel = {"open": True}
 """Whether the worker still serves its parent's answers to host calls.
@@ -346,14 +347,45 @@ def worker_main(
 
     conn.send(ReadyMsg(isolation=isolation_status))
 
-    def _tell_parent(paused: bool) -> None:
-        if not _channel["open"]:
-            return
-        try:
-            with _send_lock:
+    def _send(message: Any) -> None:
+        with _send_lock:
+            conn.send(message)
+
+    # The running execution, and whether its clock is stopped as far as
+    # the parent knows. Only that execution's clock reaches the parent: a
+    # pause from an earlier one's (kept by a thread or a callback) would
+    # hold the wrong execution's wait.
+    running: dict[str, Any] = {"scope": None, "paused": False}
+
+    def _tell_parent(scope: object, paused: bool) -> None:
+        with _send_lock:
+            if scope is None or scope is not running["scope"]:
+                return
+            running["paused"] = paused
+            try:
                 conn.send(HostTimeMsg(paused=paused))
-        except OSError:
-            pass  # the parent is gone; the call's own failure says so
+            except OSError:
+                pass  # the parent is gone; the call's own failure says so
+
+    @contextmanager
+    def _execution() -> Iterator[None]:
+        scope = object()
+        set_clock_scope(scope)
+        running["scope"] = scope
+        try:
+            yield
+        finally:
+            with _send_lock:
+                running["scope"] = None
+                if running["paused"]:
+                    # A host call still out as the execution ends: the
+                    # parent's wait covers the result from here.
+                    running["paused"] = False
+                    try:
+                        conn.send(HostTimeMsg(paused=False))
+                    except OSError:
+                        pass
+            set_clock_scope(None)
 
     observe_pauses(_tell_parent)
 
@@ -389,17 +421,18 @@ def worker_main(
                     if msg.modules is not None
                     else None
                 )
-                result = sandbox.exec(
-                    msg.source,
-                    namespace=ns,
-                    modules=exec_modules,
-                    stdin=msg.stdin,
-                    argv=msg.argv,
-                    echo=msg.echo,
-                    keep=msg.keep,
-                    # getattr: a parent older than the field sends none
-                    timeout=getattr(msg, "timeout", None),
-                )
+                with _execution():
+                    result = sandbox.exec(
+                        msg.source,
+                        namespace=ns,
+                        modules=exec_modules,
+                        stdin=msg.stdin,
+                        argv=msg.argv,
+                        echo=msg.echo,
+                        keep=msg.keep,
+                        # getattr: a parent older than the field sends none
+                        timeout=getattr(msg, "timeout", None),
+                    )
                 spooled = None
                 if spool_dir is not None:
                     spooled, dropped = spool_namespace(result.namespace, spool_dir)
@@ -442,7 +475,7 @@ def worker_main(
                         if isinstance(tb_text, str):
                             fallback._st_traceback_text = tb_text
                         err = fallback
-                conn.send(
+                _send(
                     ResultMsg(
                         namespace=safe_ns,
                         stdout=result.stdout,
@@ -458,7 +491,7 @@ def worker_main(
                 )
                 reclaim = memory_failed
             except BaseException:
-                conn.send(WorkerErrorMsg(message=traceback.format_exc()))
+                _send(WorkerErrorMsg(message=traceback.format_exc()))
             # Nothing of this execution is wanted once its result is sent,
             # and a name bound here would hold it until the next one is.
             msg = ns = exec_modules = result = safe_ns = spooled = err = None
