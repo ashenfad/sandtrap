@@ -8,6 +8,7 @@ import copy
 import inspect
 import itertools
 import linecache
+import math
 import sys
 import time
 import types
@@ -105,6 +106,21 @@ def _validate_keep(keep: Any) -> "frozenset[str] | None":
         if not isinstance(name, str):
             raise TypeError(f"keep names must be strings, got {name!r}")
     return names
+
+
+def _validate_timeout(timeout: Any) -> "float | None":
+    """A per-exec ``timeout`` as a float, or ``None`` to keep the
+    policy's. It can change the budget but not remove it, so only a
+    positive, finite number of seconds is taken."""
+    if timeout is None:
+        return None
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+        raise TypeError(
+            f"timeout must be a number of seconds, not {type(timeout).__name__}"
+        )
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError(f"timeout must be positive and finite, got {timeout!r}")
+    return float(timeout)
 
 
 def _validate_modules(
@@ -806,6 +822,7 @@ class Sandbox:
         stdin: Any = None,
         argv: "list[str] | None" = None,
         modules: Mapping[str, Mapping[str, Any]] | None = None,
+        timeout: float | None = None,
     ) -> tuple[
         Any,
         str,
@@ -856,6 +873,7 @@ class Sandbox:
             _start_rss=start_rss,
             _filesystem=self.filesystem,
             _sandbox_sys=sandbox_sys,
+            _timeout=timeout,
         )
         prints_list = [] if self.snapshot_prints else None
         renderer = (
@@ -989,6 +1007,7 @@ class Sandbox:
         argv: "list[str] | None" = None,
         echo: 'Literal["none", "last", "all"] | None' = None,
         keep: "Collection[str] | None" = None,
+        timeout: "float | None" = None,
     ) -> ExecResult:
         """Execute source code synchronously in the sandbox.
 
@@ -1028,6 +1047,11 @@ class Sandbox:
         call, a file write through a bridged filesystem) crosses as it
         always did.
 
+        ``timeout`` replaces the policy's wall-clock budget for this call
+        only (``None`` keeps it): a positive, finite number of seconds.
+        A callback the code hands the host keeps the budget of the
+        execution that made it.
+
         When the execution fails with a ``MemoryError``, the result
         carries no namespace and no print snapshots, whatever ``keep``
         says: ``result.dropped`` names what was withheld, and stdout,
@@ -1036,6 +1060,7 @@ class Sandbox:
         if echo is not None:
             _validate_echo(echo)
         keep = _validate_keep(keep)
+        timeout = _validate_timeout(timeout)
         _validate_modules(self.policy, modules)
         prepared = self._parse_and_rewrite(source, echo=echo)
         if isinstance(prepared, ExecResult):
@@ -1058,7 +1083,7 @@ class Sandbox:
                 prints_list,
                 renderer,
             ) = self._compile_and_setup(
-                tree, rewriter, source, namespace, stdin, argv, modules
+                tree, rewriter, source, namespace, stdin, argv, modules, timeout
             )
         except SyntaxError as e:
             return ExecResult(error=_await_hint(e, tree))
@@ -1117,12 +1142,15 @@ class Sandbox:
         argv: "list[str] | None" = None,
         echo: 'Literal["none", "last", "all"] | None' = None,
         keep: "Collection[str] | None" = None,
+        timeout: "float | None" = None,
     ) -> ExecResult:
         """Execute source code asynchronously in the sandbox. See
-        :meth:`exec` for ``modules``/``stdin``/``argv``/``echo``/``keep``."""
+        :meth:`exec` for ``modules``/``stdin``/``argv``/``echo``/``keep``/
+        ``timeout``."""
         if echo is not None:
             _validate_echo(echo)
         keep = _validate_keep(keep)
+        timeout = _validate_timeout(timeout)
         _validate_modules(self.policy, modules)
         prepared = self._parse_and_rewrite(source, echo=echo)
         if isinstance(prepared, ExecResult):
@@ -1208,7 +1236,7 @@ class Sandbox:
                 prints_list,
                 renderer,
             ) = self._compile_and_setup(
-                tree, rewriter, source, namespace, stdin, argv, modules
+                tree, rewriter, source, namespace, stdin, argv, modules, timeout
             )
         except SyntaxError as e:
             return ExecResult(error=e)
@@ -1245,6 +1273,7 @@ class Sandbox:
 
         error = None
         result_locals: dict[str, Any] = {}
+        budget = self.policy.timeout if timeout is None else timeout
         with lost_writes.collecting() as lost, ExitStack() as stack:
             self._enter_sandbox_context(
                 stack,
@@ -1257,12 +1286,12 @@ class Sandbox:
                 exec(code, ns)  # noqa: S102
                 coro = ns["__st_aexec__"]()
                 result_locals = await _within_timeout(
-                    coro, self.policy.timeout, gates["__st_host_clock__"]
+                    coro, budget, gates["__st_host_clock__"]
                 )
                 if result_locals is None:
                     result_locals = {}
             except asyncio.TimeoutError:
-                error = StTimeout(f"Execution exceeded {self.policy.timeout}s timeout")
+                error = StTimeout(f"Execution exceeded {budget}s timeout")
             except BaseException as e:
                 if isinstance(e, KeyboardInterrupt):
                     raise  # Real Ctrl-C from host

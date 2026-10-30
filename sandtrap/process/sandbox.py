@@ -31,6 +31,7 @@ from ..sandbox import (
     _validate_mode,
     _validate_modules,
     _validate_render_prints,
+    _validate_timeout,
 )
 from .protocol import (
     ExecMsg,
@@ -664,6 +665,22 @@ class ProcessSandbox:
         shortfall on ``ExecResult.isolation``.  Ignored for
         ``isolation="none"`` (a bare process boundary requests no kernel
         restrictions, so there's nothing to fall short of).
+    on_worker_start:
+        Called with this sandbox each time a worker starts: the first, and
+        every replacement after a crash, a kill or a shutdown and re-entry.
+        It runs in this process once the worker has reported ready and its
+        isolation has been checked, and before any other execution reaches
+        that worker, so what it does through :meth:`exec` is in place for
+        every execution the worker serves. ``exec(..., timeout=...)`` gives
+        it a budget of its own. :attr:`generation` says which worker it is
+        preparing.
+
+        If it raises, the worker is killed and the exception propagates from
+        whatever started the worker: entering the context, or the
+        :meth:`exec` that replaced a dead one. The next execution starts a
+        fresh worker and calls it again. A worker that dies while the hook
+        runs is not replaced inside it; the hook's executions report the
+        death, and the start fails.
     """
 
     def __init__(
@@ -682,8 +699,14 @@ class ProcessSandbox:
         preload_grants: bool = False,
         spool: bool | str | os.PathLike[str] = False,
         render_prints: PrintRendering | None = None,
+        on_worker_start: Callable[[ProcessSandbox], None] | None = None,
     ) -> None:
         _validate_mode(mode)
+        if on_worker_start is not None and not callable(on_worker_start):
+            raise TypeError(
+                "on_worker_start must be callable, not "
+                f"{type(on_worker_start).__name__}"
+            )
         _validate_render_prints(render_prints)
         # None means "whatever is safest here" — forkserver on POSIX. Validate
         # rather than defer: an unavailable method is a construction mistake,
@@ -748,14 +771,22 @@ class ProcessSandbox:
         self._process: multiprocessing.Process | None = None
         self._conn: multiprocessing.connection.Connection | None = None
         self._started = False
+        self._on_worker_start = on_worker_start
+        self._generation = 0
+        self._in_start_hook = False
 
     # ------------------------------------------------------------------
     # Context manager
     # ------------------------------------------------------------------
 
     def __enter__(self) -> ProcessSandbox:
-        self._ensure_worker()
+        # Started first: the start hook executes on the worker it prepares.
         self._started = True
+        try:
+            self._ensure_worker()
+        except BaseException:
+            self._started = False
+            raise
         return self
 
     def __exit__(self, *exc: Any) -> None:
@@ -765,10 +796,20 @@ class ProcessSandbox:
     # Worker lifecycle
     # ------------------------------------------------------------------
 
+    @property
+    def generation(self) -> int:
+        """How many workers this sandbox has started: ``0`` before the
+        first, and one more for each that replaced it. A worker's
+        ``on_worker_start`` call sees that worker's number."""
+        return self._generation
+
     def _ensure_worker(self) -> None:
         """Spawn the worker process if not already running."""
         if self._process is not None and self._process.is_alive():
             return
+        if self._in_start_hook:
+            # Replacing it here would call the hook again, inside itself.
+            raise RuntimeError("Worker process died while on_worker_start ran")
 
         # Clean up dead worker if needed
         if self._process is not None:
@@ -894,6 +935,24 @@ class ProcessSandbox:
         # that drops the field.
         self._isolation_status = msg.isolation
         self._verify_isolation(msg.isolation)
+        self._generation += 1
+        if self._on_worker_start is not None:
+            self._run_start_hook(self._on_worker_start)
+
+    def _run_start_hook(self, hook: Callable[[ProcessSandbox], None]) -> None:
+        """Call the start hook on the worker just started. A hook that
+        raises, or returns with the worker dead, fails the start, and
+        the worker goes with it."""
+        self._in_start_hook = True
+        try:
+            hook(self)
+            if self._process is None or not self._process.is_alive():
+                raise RuntimeError("Worker process died while on_worker_start ran")
+        except BaseException:
+            self._kill()
+            raise
+        finally:
+            self._in_start_hook = False
 
     def _verify_isolation(self, status: IsolationStatus | None) -> None:
         """Accept, warn about, or refuse the isolation the worker reported.
@@ -998,6 +1057,7 @@ class ProcessSandbox:
         argv: list[str] | None = None,
         echo: Literal["none", "last", "all"] | None = None,
         keep: Collection[str] | None = None,
+        timeout: float | None = None,
     ) -> ExecResult:
         """Execute source code in the sandboxed subprocess.
 
@@ -1015,12 +1075,19 @@ class ProcessSandbox:
         :meth:`sandtrap.Sandbox.exec`. The worker applies it before
         pickling anything, so a value left out never crosses the pipe.
 
+        ``timeout`` replaces the policy's wall-clock budget for this call
+        only -- see :meth:`sandtrap.Sandbox.exec`. The wait for an
+        unresponsive worker follows it.
+
         If a previous execution killed the worker (segfault, OOM,
         seccomp violation), a fresh worker is spawned transparently —
-        a crash costs the crashing turn, not the sandbox."""
+        a crash costs the crashing turn, not the sandbox. A fresh
+        worker is prepared by ``on_worker_start`` before this
+        execution reaches it."""
         if echo is not None:
             _validate_echo(echo)  # fail here, not as worker-error noise
         keep = _validate_keep(keep)  # ditto
+        timeout = _validate_timeout(timeout)  # ditto
         _validate_modules(self._policy, modules)  # ditto
         if not self._started:
             raise RuntimeError(
@@ -1060,11 +1127,12 @@ class ProcessSandbox:
                 echo=echo,
                 modules=safe_modules,
                 keep=keep,
+                timeout=timeout,
             )
         )
-        return self._await_result()
+        return self._await_result(self._policy.timeout if timeout is None else timeout)
 
-    def _await_result(self) -> ExecResult:
+    def _await_result(self, timeout: float) -> ExecResult:
         """Receive messages from the worker until execution finishes.
 
         Dispatches RPC calls (``RpcCallMsg``) inline by invoking the
@@ -1083,7 +1151,7 @@ class ProcessSandbox:
         # an RPC call — host-side handler latency shouldn't count
         # against the sandbox timeout.
         assert self._conn is not None  # checked by caller
-        deadline = time.monotonic() + self._policy.timeout + 5.0
+        deadline = time.monotonic() + timeout + 5.0
         while True:
             now = time.monotonic()
             if now >= deadline:
@@ -1214,6 +1282,7 @@ class ProcessSandbox:
         argv: list[str] | None = None,
         echo: Literal["none", "last", "all"] | None = None,
         keep: Collection[str] | None = None,
+        timeout: float | None = None,
     ) -> ExecResult:
         """Execute source code asynchronously in the sandboxed subprocess.
 
@@ -1223,6 +1292,7 @@ class ProcessSandbox:
         if echo is not None:
             _validate_echo(echo)  # fail on the calling task, not in the executor
         keep = _validate_keep(keep)  # ditto
+        timeout = _validate_timeout(timeout)  # ditto
         _validate_modules(self._policy, modules)  # ditto
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
@@ -1235,6 +1305,7 @@ class ProcessSandbox:
                 argv=argv,
                 echo=echo,
                 keep=keep,
+                timeout=timeout,
             ),
         )
 

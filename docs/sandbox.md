@@ -284,6 +284,17 @@ from sandtrap import StError, StValidationError, StTimeout, StTickLimit, StCance
 
 All errors appear on `result.error`. Check `isinstance(result.error, StValidationError)` to distinguish code that was rejected before execution from code that failed at runtime.
 
+### A budget for one execution
+
+`exec()`/`aexec()` accept `timeout=`, which replaces the policy's wall-clock budget for that call only (`None`, the default, keeps it). It can lengthen or shorten the budget but not remove it, so only a positive, finite number of seconds is taken:
+
+```python
+result = sb.exec(setup_source, timeout=120.0)   # this call alone gets two minutes
+result = sb.exec("while True: pass")            # back to the policy's
+```
+
+A callback the code hands the host keeps the budget of the execution that made it.
+
 ## Cancellation
 
 Cancel a running execution from another thread:

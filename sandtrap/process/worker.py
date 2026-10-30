@@ -379,6 +379,8 @@ def worker_main(
                     argv=msg.argv,
                     echo=msg.echo,
                     keep=msg.keep,
+                    # getattr: a parent older than the field sends none
+                    timeout=getattr(msg, "timeout", None),
                 )
                 spooled = None
                 if spool_dir is not None:
