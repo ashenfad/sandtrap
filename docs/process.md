@@ -229,6 +229,7 @@ If using `VirtualFS` or another non-`IsolatedFS` filesystem, there's no host pat
 - An idle worker observes EOF and exits if the parent process disappears, even while a later worker remains busy. Under `start_method="fork"` this needs care, since each child inherits copies of every active Sandtrap control endpoint and closes them; a worker that inherited nothing has none to close
 - `shutdown()` sends a clean shutdown message; `__exit__` calls `shutdown()` automatically
 - `sb.generation` counts the workers started: `0` before the first, and one more for each replacement
+- A worker still running five seconds past its execution's timeout is killed as unresponsive. Time in a host call (a `host_time` registration or an RPC to the parent) doesn't count toward that wait: the worker tells the parent when its clock stops and starts again. A host call that never returns is therefore never killed by this wait; bound it in the host, or call `shutdown()`
 
 ### Preparing every worker
 

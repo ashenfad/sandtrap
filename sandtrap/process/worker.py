@@ -6,16 +6,18 @@ import gc
 import importlib
 import pickle
 import signal
+import threading
 import traceback
 import uuid
 from multiprocessing.connection import Connection
 from typing import Any, Callable, Literal, Mapping
 
-from ..clock import host_time
+from ..clock import host_time, observe_pauses
 from ..errors import RpcChannelClosed
 from ..home import check_sendable
 from .protocol import (
     ExecMsg,
+    HostTimeMsg,
     ReadyMsg,
     ResultMsg,
     RpcCallMsg,
@@ -27,6 +29,10 @@ from .protocol import (
     partition_namespace,
 )
 from .spool import spool_namespace
+
+_send_lock = threading.Lock()
+"""Held for each message sent while an execution runs, so a clock message
+from one thread never lands inside another thread's call."""
 
 _channel = {"open": True}
 """Whether the worker still serves its parent's answers to host calls.
@@ -81,15 +87,16 @@ class RpcProxy:
         # parent failing to read the call (sandtrap.home)
         check_sendable((args, kwargs))
         call_id = uuid.uuid4().hex
-        self._conn.send(
-            RpcCallMsg(
-                call_id=call_id,
-                target=self._target,
-                method=method,
-                args=args,
-                kwargs=kwargs,
+        with _send_lock:
+            self._conn.send(
+                RpcCallMsg(
+                    call_id=call_id,
+                    target=self._target,
+                    method=method,
+                    args=args,
+                    kwargs=kwargs,
+                )
             )
-        )
         msg = self._conn.recv()
         if not isinstance(msg, RpcReturnMsg):
             raise RuntimeError(
@@ -338,6 +345,17 @@ def worker_main(
         return
 
     conn.send(ReadyMsg(isolation=isolation_status))
+
+    def _tell_parent(paused: bool) -> None:
+        if not _channel["open"]:
+            return
+        try:
+            with _send_lock:
+                conn.send(HostTimeMsg(paused=paused))
+        except OSError:
+            pass  # the parent is gone; the call's own failure says so
+
+    observe_pauses(_tell_parent)
 
     while True:
         try:

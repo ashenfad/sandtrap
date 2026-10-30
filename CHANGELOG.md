@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   execution reaches it; a hook that raises kills the worker and fails the
   start. `ProcessSandbox.generation` counts the workers started.
 
+### Fixed
+
+- **A long host call in a process worker no longer gets it killed as
+  unresponsive.** The parent waited the execution's timeout plus five
+  seconds and counted time in a `host_time` call the worker made, though
+  the worker's own clock didn't. The worker now tells the parent when its
+  clock stops and starts again, and the parent's wait stops with it.
+
 ## 0.5.1 - 2026-10-16
 
 ### Added

@@ -9,8 +9,9 @@ import time
 import pytest
 
 from sandtrap import MemberSpec, Policy, RpcProxyMarker, Sandbox, host_time, sandbox
-from sandtrap.clock import HostClock
+from sandtrap.clock import HostClock, observe_pauses
 from sandtrap.errors import StTimeout
+from sandtrap.process import sandbox as process_sandbox
 
 _CTX = multiprocessing.get_context("fork")
 
@@ -34,6 +35,12 @@ class Slow:
     async def await_(self, seconds: float = WAIT) -> str:
         await asyncio.sleep(seconds)
         return "done"
+
+
+def block(seconds: float) -> str:
+    """A host call left on the clock, which no checkpoint can interrupt."""
+    time.sleep(seconds)
+    return "done"
 
 
 def _policy(**cls_kwargs) -> Policy:
@@ -188,3 +195,43 @@ async def test_a_cancelled_aexec_settles_its_code_first():
     except asyncio.CancelledError:
         pass
     assert log == ["settled"]
+
+
+def test_a_clock_tells_its_observer_once_per_pause():
+    seen = []
+    observe_pauses(seen.append)
+    try:
+        clock = HostClock([100.0])
+        clock.enter()
+        clock.enter()
+        clock.exit()
+        clock.exit()
+    finally:
+        observe_pauses(None)
+    assert seen == [True, False]
+
+
+@pytest.mark.parametrize("override", [None, 0.3])
+def test_host_time_in_a_worker_holds_the_parents_wait(monkeypatch, override):
+    """The parent waits for a worker as long as the execution's timeout and
+    a grace; a host call in the worker is off the clock, so it is off that
+    wait too, or a healthy worker is killed as unresponsive."""
+    monkeypatch.setattr(process_sandbox, "_UNRESPONSIVE_GRACE", 0.1)
+    with sandbox(_policy(host_time=True), isolation="process") as sb:
+        result = sb.exec("a = h.wait(1.0)", namespace={"h": Slow()}, timeout=override)
+    assert result.error is None, result.error
+    assert result.namespace["a"] == "done"
+
+
+def test_the_wait_resumes_after_a_host_call(monkeypatch):
+    """Time held for a host call is refunded once; a worker that then stops
+    answering is still killed."""
+    monkeypatch.setattr(process_sandbox, "_UNRESPONSIVE_GRACE", 0.1)
+    policy = _policy(host_time=True)
+    policy.fn(block)
+    with sandbox(policy, isolation="process") as sb:
+        start = time.monotonic()
+        result = sb.exec("h.wait(1.0)\nblock(30.0)", namespace={"h": Slow()})
+        elapsed = time.monotonic() - start
+    assert "unresponsive" in str(result.error)
+    assert elapsed < 1.0 + TIMEOUT + 0.1 + 2.0
