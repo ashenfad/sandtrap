@@ -35,6 +35,7 @@ from ..sandbox import (
 )
 from .protocol import (
     ExecMsg,
+    HostTimeMsg,
     ReadyMsg,
     ResultMsg,
     RpcCallMsg,
@@ -53,6 +54,10 @@ RpcHandler = Callable[[str, tuple, dict], Any]
 
 # Timeout (seconds) waiting for worker to become ready
 _READY_TIMEOUT = 30.0
+
+# How long past its timeout an execution's worker is waited for before it
+# is killed as unresponsive (stuck serializing its result, say).
+_UNRESPONSIVE_GRACE = 5.0
 
 # Parent-side control connections owned by live Sandtrap workers. A later
 # fork inherits these endpoints, so each new child must close its copies or
@@ -1147,14 +1152,16 @@ class ProcessSandbox:
         # Poll with a deadline so we don't hang forever if the worker
         # becomes unresponsive (e.g., stuck serializing the result).
         # Grace period covers IPC overhead after the sandbox timeout
-        # fires.  Reset the deadline whenever we successfully process
-        # an RPC call — host-side handler latency shouldn't count
-        # against the sandbox timeout.
+        # fires. Host time is not the execution's, so the deadline
+        # moves with it: it is held while the worker's clock is stopped
+        # (a host call in the worker, an RPC included), and pushed back
+        # by exactly that long when it starts again.
         assert self._conn is not None  # checked by caller
-        deadline = time.monotonic() + timeout + 5.0
+        deadline = time.monotonic() + timeout + _UNRESPONSIVE_GRACE
+        paused_at: float | None = None
         while True:
             now = time.monotonic()
-            if now >= deadline:
+            if paused_at is None and now >= deadline:
                 self._kill()
                 return ExecResult(
                     error=RuntimeError("Worker process became unresponsive")
@@ -1167,7 +1174,9 @@ class ProcessSandbox:
                     return ExecResult(
                         error=RuntimeError("Worker process died during execution")
                     )
-            elif not self._conn.poll(min(1.0, deadline - now)):
+            elif not self._conn.poll(
+                1.0 if paused_at is not None else min(1.0, deadline - now)
+            ):
                 continue
 
             try:
@@ -1200,16 +1209,27 @@ class ProcessSandbox:
                 return result
             if isinstance(msg, WorkerErrorMsg):
                 return ExecResult(error=RuntimeError(f"Worker error:\n{msg.message}"))
+            if isinstance(msg, HostTimeMsg):
+                if msg.paused:
+                    if paused_at is None:
+                        paused_at = time.monotonic()
+                elif paused_at is not None:
+                    deadline += time.monotonic() - paused_at
+                    paused_at = None
+                continue
             if isinstance(msg, RpcCallMsg):
                 # Extend the deadline by the handler's wall-clock
                 # duration so host-side time isn't charged to the
                 # worker's exec budget — but only by that exact
                 # amount.  Resetting the deadline to a fresh
                 # ``timeout + grace`` window would let a worker spam
-                # RPC calls and dodge the wall-clock limit.
+                # RPC calls and dodge the wall-clock limit. A worker
+                # whose clock is stopped for the call is already
+                # refunded when it starts again.
                 rpc_start = time.monotonic()
                 self._dispatch_rpc(msg)
-                deadline += time.monotonic() - rpc_start
+                if paused_at is None:
+                    deadline += time.monotonic() - rpc_start
                 continue
 
             warnings.warn(

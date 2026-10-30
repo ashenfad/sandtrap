@@ -15,9 +15,20 @@ import functools
 import inspect
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import Any
+
+_pause_observer: Callable[[bool], None] | None = None
+
+
+def observe_pauses(observer: Callable[[bool], None] | None) -> None:
+    """Have *observer* told, with ``True`` and then ``False``, each time a
+    clock in this process stops and starts counting again. A process
+    worker installs one so its parent's wait for the worker stops with
+    the clock. Called under the clock's lock, so the two arrive in order."""
+    global _pause_observer
+    _pause_observer = observer
 
 
 class HostClock:
@@ -43,13 +54,18 @@ class HostClock:
         with self._lock:
             if self._depth == 0:
                 self._entered = time.monotonic()
+                if _pause_observer is not None:
+                    _pause_observer(True)
             self._depth += 1
 
     def exit(self) -> None:
         with self._lock:
             self._depth -= 1
-            if self._depth == 0 and self._start[0] is not None:
-                self._start[0] += time.monotonic() - self._entered
+            if self._depth == 0:
+                if self._start[0] is not None:
+                    self._start[0] += time.monotonic() - self._entered
+                if _pause_observer is not None:
+                    _pause_observer(False)
 
     def remaining(self, timeout: float) -> float | None:
         """Seconds left, or None while paused (the deadline is moving)."""
