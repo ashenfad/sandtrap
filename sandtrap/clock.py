@@ -19,16 +19,27 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import Any
 
-_pause_observer: Callable[[bool], None] | None = None
+_pause_observer: Callable[[object, bool], None] | None = None
+_clock_scope: object = None
 
 
-def observe_pauses(observer: Callable[[bool], None] | None) -> None:
+def observe_pauses(observer: Callable[[object, bool], None] | None) -> None:
     """Have *observer* told, with ``True`` and then ``False``, each time a
-    clock in this process stops and starts counting again. A process
-    worker installs one so its parent's wait for the worker stops with
-    the clock. Called under the clock's lock, so the two arrive in order."""
+    clock in this process stops and starts counting again, along with the
+    scope the clock was made under (see :func:`set_clock_scope`). A process
+    worker installs one so its parent's wait for the worker stops with the
+    clock. Called under the clock's lock, so the two arrive in order."""
     global _pause_observer
     _pause_observer = observer
+
+
+def set_clock_scope(scope: object) -> None:
+    """Mark the clocks made from now on as *scope*'s. A clock outlives its
+    execution wherever a thread or a callback kept it, so the observer is
+    told whose clock paused, and can ignore one that isn't the running
+    execution's."""
+    global _clock_scope
+    _clock_scope = scope
 
 
 class HostClock:
@@ -42,6 +53,7 @@ class HostClock:
 
     def __init__(self, start_box: list[float | None]) -> None:
         self._start = start_box
+        self._scope = _clock_scope
         self._depth = 0
         self._entered = 0.0
         self._lock = threading.Lock()
@@ -55,7 +67,7 @@ class HostClock:
             if self._depth == 0:
                 self._entered = time.monotonic()
                 if _pause_observer is not None:
-                    _pause_observer(True)
+                    _pause_observer(self._scope, True)
             self._depth += 1
 
     def exit(self) -> None:
@@ -65,7 +77,7 @@ class HostClock:
                 if self._start[0] is not None:
                     self._start[0] += time.monotonic() - self._entered
                 if _pause_observer is not None:
-                    _pause_observer(False)
+                    _pause_observer(self._scope, False)
 
     def remaining(self, timeout: float) -> float | None:
         """Seconds left, or None while paused (the deadline is moving)."""
