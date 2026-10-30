@@ -112,6 +112,8 @@ class ExecMsg:
     keep: frozenset[str] | None = None
     """The names the result namespace carries; ``None`` for every one.
     Applied in the worker, so a name left out is never pickled."""
+    timeout: float | None = None
+    """This execution's wall-clock budget; ``None`` keeps the policy's."""
 
 
 @dataclass

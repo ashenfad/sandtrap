@@ -476,12 +476,15 @@ def make_gates(
     _start_rss: int | None = None,
     _filesystem: Any = None,
     _sandbox_sys: Any = None,
+    _timeout: float | None = None,
 ) -> dict[str, Any]:
     """Create the set of gate functions for a given policy.
 
     Returns a dict of gate function names to implementations,
     suitable for injection into the execution namespace.
+    ``_timeout`` replaces the policy's timeout for these gates.
     """
+    timeout = policy.timeout if _timeout is None else _timeout
     # Gate dict — populated at the end, but closures reference it so
     # VFS module compilation can inject the same gates.
     gates: dict[str, Any] = {}
@@ -987,11 +990,11 @@ def make_gates(
         # not the code's. Ticks still count it.
         if (
             _start_time_box[0] is not None
-            and policy.timeout is not None
+            and timeout is not None
             and not _host_clock.paused
         ):
-            if time.monotonic() - _start_time_box[0] > policy.timeout:
-                raise StTimeout(f"Execution exceeded {policy.timeout}s timeout")
+            if time.monotonic() - _start_time_box[0] > timeout:
+                raise StTimeout(f"Execution exceeded {timeout}s timeout")
         if _memory_box[0] is not None and _memory_box[1] is not None:
             if get_rss_bytes() - _memory_box[1] > _memory_box[0]:
                 raise MemoryError(

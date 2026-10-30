@@ -228,6 +228,27 @@ If using `VirtualFS` or another non-`IsolatedFS` filesystem, there's no host pat
 - If the worker crashes (OOM, SIGKILL, seccomp violation), the next `exec()` automatically spawns a new one
 - An idle worker observes EOF and exits if the parent process disappears, even while a later worker remains busy. Under `start_method="fork"` this needs care, since each child inherits copies of every active Sandtrap control endpoint and closes them; a worker that inherited nothing has none to close
 - `shutdown()` sends a clean shutdown message; `__exit__` calls `shutdown()` automatically
+- `sb.generation` counts the workers started: `0` before the first, and one more for each replacement
+
+### Preparing every worker
+
+What an execution leaves in a worker (a granted module's state, an imported library's setup) lasts until that worker goes, and a replacement after a crash starts without it. `on_worker_start` is called with the sandbox each time a worker starts, the first and every replacement, once the worker has reported ready and its isolation has been checked and before any other execution reaches it. What it does through `exec` is therefore in place for every execution that worker serves:
+
+```python
+def prepare(sb):
+    result = sb.exec("import client_lib\nclient_lib.load_metadata()", timeout=60.0)
+    if result.error is not None:
+        raise RuntimeError(f"worker setup failed: {result.error}")
+
+with sandbox(policy, isolation="process", on_worker_start=prepare) as sb:
+    sb.exec(user_code)   # always on a prepared worker
+```
+
+The setup runs as sandboxed code under the same policy as any other execution, so it reaches what the policy grants and nothing more. `timeout=` gives it a budget of its own without touching the policy's.
+
+If the hook raises, the worker is killed and the exception propagates from whatever started the worker: entering the context, or the `exec()` that replaced a dead one. Nothing is marked prepared, and the next execution starts a fresh worker and calls the hook again. A worker that dies while the hook runs is not replaced inside it; the hook's executions report the death and the start fails. The broker is never involved: unlike `preload_grants`, nothing the hook does runs before a worker exists, so it may start threads or open connections.
+
+Under `isolation="none"` there is no worker, and the `sandbox()` factory refuses the hook.
 
 ### Host file descriptors
 

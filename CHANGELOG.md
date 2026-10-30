@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- **`timeout=` on `exec` and `aexec`** replaces the policy's wall-clock
+  budget for one execution; a process worker's unresponsive-worker wait
+  follows it.
+- **`on_worker_start=` on `ProcessSandbox` and `sandbox()`** is called each
+  time a worker starts, the first and every replacement, before any other
+  execution reaches it; a hook that raises kills the worker and fails the
+  start. `ProcessSandbox.generation` counts the workers started.
+
 ## 0.5.1 - 2026-10-16
 
 ### Added

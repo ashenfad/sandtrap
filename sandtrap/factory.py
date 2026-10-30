@@ -29,6 +29,7 @@ def sandbox(
     preload_grants: bool = False,
     spool: "bool | str | os.PathLike[str]" = False,
     render_prints: PrintRendering | None = None,
+    on_worker_start: Callable[[ProcessSandbox], None] | None = None,
 ) -> Sandbox | ProcessSandbox:
     """Create a sandbox with the specified isolation level.
 
@@ -129,8 +130,20 @@ def sandbox(
         bounded text instead of ``snapshot_prints``' deep copies, so nothing
         is copied and, out of a worker, only text crosses. Needs
         ``sandtrap[render]``.
+    on_worker_start:
+        Only for process / kernel isolation: called with the sandbox each
+        time a worker starts, before any other execution reaches it, so a
+        replacement after a crash is prepared like the first. See
+        :class:`~sandtrap.process.sandbox.ProcessSandbox` for the full
+        contract. Refused for ``isolation="none"``, which has no worker to
+        prepare.
     """
     if isolation == "none":
+        if on_worker_start is not None:
+            raise ValueError(
+                'on_worker_start needs a worker; isolation="none" runs in '
+                "this process and has none to prepare"
+            )
         return Sandbox(
             policy,
             mode=mode,
@@ -159,4 +172,5 @@ def sandbox(
         preload_grants=preload_grants,
         spool=spool,
         render_prints=render_prints,
+        on_worker_start=on_worker_start,
     )
