@@ -15,7 +15,7 @@ from contextlib import ExitStack
 from typing import Any
 
 from .builtins import _FrozenBuiltins, make_safe_builtins
-from .clock import HostClock, current_clock, wrap_host_time
+from .clock import HostClock, current_clock, host_time, wrap_host_time
 from .errors import StCancelled, StTickLimit, StTimeout
 from .fs import current_fs, suspend
 from .net.context import allow_network, network_allowed
@@ -129,6 +129,104 @@ def _static_introspection_value(obj: Any, attr: str) -> Any:
         return _REFUSED
 
 
+def _enter_grants(
+    stack: ExitStack,
+    network_access: bool = False,
+    host_fs_access: bool = False,
+    is_host_time: bool = False,
+) -> None:
+    """Hold the given grants until *stack* closes."""
+    if network_access:
+        stack.enter_context(allow_network())
+    if host_fs_access:
+        stack.enter_context(suspend())
+    if is_host_time:
+        stack.enter_context(host_time())
+
+
+def _member_grants(reg: Any, member_name: str) -> tuple[bool, bool, bool]:
+    """``(network_access, host_fs_access, host_time)`` for one member of a
+    registration: its own flags, each widened by a ``configure`` entry for
+    *member_name*. All False without a registration."""
+    if reg is None:
+        return False, False, False
+    network = getattr(reg, "network_access", False)
+    host_fs = getattr(reg, "host_fs_access", False)
+    # getattr: registrations pickled by older versions lack host_time.
+    is_host_time = getattr(reg, "host_time", False)
+    configure = getattr(reg, "configure", None)
+    if configure and member_name in configure:
+        spec = configure[member_name]
+        network = network or spec.network_access
+        host_fs = host_fs or spec.host_fs_access
+        is_host_time = is_host_time or getattr(spec, "host_time", False)
+    return network, host_fs, is_host_time
+
+
+_type_mro = type.__dict__["__mro__"].__get__
+_type_dict = type.__dict__["__dict__"].__get__
+
+
+def _type_attr(tp: type, name: str) -> Any:
+    """*name* as the class dicts along *tp*'s MRO define it, or
+    ``_MISSING``. Reads the dicts only: no descriptor, no metaclass hook."""
+    for klass in _type_mro(tp):
+        found = _type_dict(klass).get(name, _MISSING)
+        if found is not _MISSING:
+            return found
+    return _MISSING
+
+
+# `__getattribute__` implementations that run nothing of the host's to find
+# an attribute, short of the found descriptor's own `__get__`.
+_PLAIN_GETATTRIBUTE = (
+    object.__dict__["__getattribute__"],
+    type.__dict__["__getattribute__"],
+    types.ModuleType.__dict__["__getattribute__"],
+)
+
+# Descriptor types whose `__get__` only binds or reads a slot, in C: reading
+# one through an instance or a class runs nothing of the host's.
+_BINDING_DESCRIPTORS = (
+    types.FunctionType,
+    types.BuiltinFunctionType,
+    types.MethodDescriptorType,
+    types.ClassMethodDescriptorType,
+    types.WrapperDescriptorType,
+    types.MemberDescriptorType,
+    staticmethod,
+)
+
+
+def _resolution_runs_code(obj: Any, attr: str) -> bool:
+    """Could ``getattr(obj, attr)`` run code the host wrote?
+
+    Answered without running any. True for a type with a
+    ``__getattribute__`` of its own, for a name stored nowhere (a
+    ``__getattr__`` may answer for it), and for a descriptor whose
+    ``__get__`` may call out: ``property``, ``cached_property``, a C-level
+    getter. False for a stored value, and for a function or slot the read
+    only binds or reads. A doubtful case answers True, which costs only a
+    grant held while nothing needed it.
+    """
+    getattribute = _type_attr(type(obj), "__getattribute__")
+    if not any(getattribute is plain for plain in _PLAIN_GETATTRIBUTE):
+        return True
+    try:
+        found = inspect.getattr_static(obj, attr)
+    except Exception:
+        return True
+    kind = type(found)
+    if any(kind is binding for binding in _BINDING_DESCRIPTORS):
+        return False
+    if kind is classmethod:
+        # Up to Python 3.12, a classmethod's __get__ hands a wrapped
+        # descriptor to that descriptor's own __get__ (a classmethod
+        # property); a wrapped function it only binds.
+        return type(found.__func__) is not types.FunctionType
+    return _type_attr(kind, "__get__") is not _MISSING
+
+
 def wrap_privileged(
     fn: Any,
     *,
@@ -141,19 +239,12 @@ def wrap_privileged(
     the await: its body runs when awaited, not when called, so a grant
     held only around the call is gone before the body needs it.
     """
-
-    def _granted(stack: ExitStack) -> None:
-        if network_access:
-            stack.enter_context(allow_network())
-        if host_fs_access:
-            stack.enter_context(suspend())
-
     if inspect.iscoroutinefunction(fn):
 
         @functools.wraps(fn)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             with ExitStack() as stack:
-                _granted(stack)
+                _enter_grants(stack, network_access, host_fs_access)
                 return await fn(*args, **kwargs)
 
         return async_wrapper
@@ -161,7 +252,7 @@ def wrap_privileged(
     @functools.wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         with ExitStack() as stack:
-            _granted(stack)
+            _enter_grants(stack, network_access, host_fs_access)
             return fn(*args, **kwargs)
 
     return wrapper
@@ -557,16 +648,7 @@ def make_gates(
         """Wrap *value* if its registration requires network or host-fs access."""
         if not callable(value) or reg is None:
             return value
-        needs_network = getattr(reg, "network_access", False)
-        needs_host_fs = getattr(reg, "host_fs_access", False)
-        # getattr: registrations pickled by older versions lack host_time.
-        is_host_time = getattr(reg, "host_time", False)
-        # Check per-member overrides
-        if hasattr(reg, "configure") and member_name in reg.configure:
-            spec = reg.configure[member_name]
-            needs_network = needs_network or spec.network_access
-            needs_host_fs = needs_host_fs or spec.host_fs_access
-            is_host_time = is_host_time or getattr(spec, "host_time", False)
+        needs_network, needs_host_fs, is_host_time = _member_grants(reg, member_name)
         if needs_network or needs_host_fs:
             value = wrap_privileged(
                 value,
@@ -593,8 +675,26 @@ def make_gates(
             raise AttributeError(
                 f"module '{obj.__name__}' has no attribute '{attr}'{loc}"
             )
-        if not policy.is_attr_allowed(obj, attr):
-            lineno = _caller_lineno()
+        reg = policy._find_registration_for(obj)
+        # A getter -- a property, a module's __getattr__ -- is host code the
+        # registration vouches for as it does the methods, so it runs under
+        # the grants a call of this member would, and so does the member
+        # check, which reads a module's attribute to see whether it is a
+        # submodule. A read that runs nothing takes none, which keeps a
+        # host_time registration's plain reads from pausing the clock.
+        grants = _member_grants(reg, attr)
+        if any(grants) and _resolution_runs_code(obj, attr):
+            with ExitStack() as stack:
+                _enter_grants(stack, *grants)
+                return _read_attr(obj, attr, reg)
+        return _read_attr(obj, attr, reg)
+
+    def _read_attr(obj: Any, attr: str, reg: Any) -> Any:
+        """The attribute gate past the per-execution modules: the member
+        check, then the read. Called only by __st_getattr__, so the
+        sandboxed frame is three up from _caller_lineno."""
+        if not policy._is_attr_allowed_for(reg, obj, attr):
+            lineno = _caller_lineno(3)
             loc = f" (line {lineno})" if lineno else ""
             raise AttributeError(
                 f"Attribute '{attr}' is not accessible on '{type(obj).__name__}'{loc}"
@@ -627,7 +727,7 @@ def make_gates(
             value = _static_introspection_value(obj, attr)
             if type(value) is str or (value is None and attr == "__doc__"):
                 return value
-            lineno = _caller_lineno()
+            lineno = _caller_lineno(3)
             loc = f" (line {lineno})" if lineno else ""
             raise AttributeError(
                 f"Attribute '{attr}' is not accessible on '{type(obj).__name__}'{loc}"
@@ -640,7 +740,7 @@ def make_gates(
             value = module_metadata(obj, attr)
             if value is not NO_METADATA:
                 return value
-            lineno = _caller_lineno()
+            lineno = _caller_lineno(3)
             loc = f" (line {lineno})" if lineno else ""
             raise AttributeError(
                 f"Attribute '{attr}' is not accessible on '{type(obj).__name__}'{loc}"
@@ -648,7 +748,6 @@ def make_gates(
 
         value = getattr(obj, attr)
         if callable(value):
-            reg = policy._find_registration_for(obj)
             return _maybe_wrap_privileged(value, reg, attr)
         return value
 
@@ -813,7 +912,6 @@ def make_gates(
 
         # Try policy first
         if policy.is_import_allowed(module_name):
-            value = policy.resolve_module_member(module_name, name)
             # Find effective registration by name to support submodules
             # of recursive registrations (e.g. from os.path import join
             # when only os is registered with recursive=True).
@@ -826,6 +924,14 @@ def make_gates(
                     if p_reg and p_reg.recursive:
                         reg = p_reg
                         break
+            # Resolving the name can run the module's own code (a module
+            # __getattr__, a submodule's first import), which runs under
+            # the member's grants as a getter does. A from-import resolves
+            # once per statement, so it takes them without first asking
+            # whether anything will run.
+            with ExitStack() as stack:
+                _enter_grants(stack, *_member_grants(reg, name))
+                value = policy.resolve_module_member(module_name, name)
             return _maybe_wrap_privileged(value, reg, name)
 
         # Try VFS modules

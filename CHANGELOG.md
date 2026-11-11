@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- **A registration's grants cover its getters** (#85): `network_access`,
+  `host_fs_access` and `host_time` now hold while a property getter, a
+  module's `__getattr__` or a from-import's lookup runs.
+- **A registered class's property getter runs once per read**, and not at
+  all when the policy refuses the member: the member check no longer reads
+  the attribute off a class or an instance.
+
 ## 0.5.2 - 2026-10-30
 
 ### Added
