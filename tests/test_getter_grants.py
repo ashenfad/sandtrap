@@ -263,6 +263,103 @@ def test_a_getter_the_policy_refuses_does_not_run(filters):
     assert obj.reads == []
 
 
+def _counting_module(name: str, answers: dict) -> tuple[types.ModuleType, list]:
+    """A module with ``fetch`` bound, and a ``__getattr__`` that records
+    each name it is asked for, notes whether the network was open to it,
+    and answers from *answers*."""
+    mod = types.ModuleType(name)
+    calls: list[tuple[str, bool]] = []
+
+    def __getattr__(attr: str):
+        try:
+            _resolve()
+            calls.append((attr, True))
+        except Exception:
+            calls.append((attr, False))
+        if attr in answers:
+            return answers[attr]
+        raise AttributeError(attr)
+
+    mod.fetch = lambda: "ok"
+    mod.__getattr__ = __getattr__
+    return mod, calls
+
+
+@pytest.mark.parametrize(
+    ("code", "error"),
+    [
+        ("import countmod\nv = countmod.secret", AttributeError),
+        ("from countmod import secret", ImportError),
+    ],
+)
+def test_a_module_name_the_policy_refuses_runs_nothing(code, error):
+    """The include list leaves `secret` out, so the module's __getattr__ is
+    not asked for it, with the module's grants or without them."""
+    mod, calls = _counting_module("countmod", {"secret": "s"})
+    policy = Policy()
+    policy.module(mod, name="countmod", include=["fetch"], network_access=True)
+    result = _exec(policy, code)
+    assert isinstance(result.error, error)
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "code", ["import countmod\nv = countmod.lazy", "from countmod import lazy as v"]
+)
+def test_a_module_getattr_runs_once_per_read_under_its_grant(code):
+    mod, calls = _counting_module("countmod", {"lazy": "value"})
+    policy = Policy()
+    policy.module(mod, name="countmod", network_access=True)
+    result = _exec(policy, code)
+    assert result.error is None
+    assert result.namespace["v"] == "value"
+    assert calls == [("lazy", True)]
+
+
+def _lazy_package() -> tuple[types.ModuleType, types.ModuleType]:
+    """A package that hands out its submodule only from __getattr__."""
+    child = types.ModuleType("lazypkg.child")
+    child.value = 1
+    parent, _ = _counting_module("lazypkg", {"child": child})
+    return parent, child
+
+
+def test_a_non_recursive_module_refuses_a_submodule_its_getattr_hands_out():
+    parent, _ = _lazy_package()
+    policy = Policy()
+    policy.module(parent, name="lazypkg")
+    result = _exec(policy, "import lazypkg\nsub = lazypkg.child")
+    assert isinstance(result.error, AttributeError)
+    assert "child" in str(result.error)
+
+
+def test_a_separately_registered_submodule_from_getattr_is_allowed():
+    parent, child = _lazy_package()
+    policy = Policy()
+    policy.module(parent, name="lazypkg")
+    policy.module(child, name="lazypkg.child")
+    result = _exec(policy, "import lazypkg\nv = lazypkg.child.value")
+    assert result.error is None
+    assert result.namespace["v"] == 1
+
+
+def test_a_name_outside_include_is_judged_by_what_the_module_binds():
+    """Outside the include list, a name passes only as a separately
+    registered object the module binds itself; one its __getattr__ would
+    hand out is refused without asking it."""
+    parent, child = _lazy_package()
+    policy = Policy()
+    policy.module(parent, name="lazypkg", include=["fetch"])
+    policy.module(child, name="lazypkg.child")
+    result = _exec(policy, "import lazypkg\nsub = lazypkg.child")
+    assert isinstance(result.error, AttributeError)
+
+    parent.child = child
+    result = _exec(policy, "import lazypkg\nv = lazypkg.child.value")
+    assert result.error is None
+    assert result.namespace["v"] == 1
+
+
 # -- what counts as running code ---------------------------------------------------
 
 
