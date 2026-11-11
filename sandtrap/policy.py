@@ -405,6 +405,16 @@ NO_METADATA = object()
 _ABSENT = object()
 
 
+def _submodule_exists(full_name: str) -> bool:
+    """Whether *full_name* names a submodule an import would find. Finding
+    it imports nothing new: the parent is already imported, and the
+    submodule's own code doesn't run."""
+    try:
+        return importlib.util.find_spec(full_name) is not None
+    except (ImportError, ValueError):
+        return False
+
+
 def module_metadata(module: Any, name: str) -> Any:
     """The value of one of ``MODULE_METADATA_DUNDERS`` on *module*, or
     ``NO_METADATA``.
@@ -1034,6 +1044,20 @@ class Policy:
         ):
             raise ImportError(f"'{member_name}' is not available from '{module_name}'")
 
+        # Submodule access bypasses the include/exclude filter (which
+        # is for top-level members), so gate it through the same
+        # ``is_import_allowed`` check that ``import X.Y`` would hit.
+        # Without this, agents could import any submodule the parent
+        # happens to expose — eagerly (``os.path`` is bound at import
+        # time) or lazily (``PIL.ImageDraw`` via importlib) — even
+        # when the parent registration is ``recursive=False``.
+        full_name = f"{module_name}.{member_name}"
+        refused = ImportError(
+            f"Submodule '{full_name}' is not allowed "
+            f"(register '{module_name}' with recursive=True or "
+            f"add '{full_name}' explicitly)."
+        )
+
         # Resolve the member from the actual module object.  Prefer
         # the eager attribute, fall back to importlib for submodules
         # that aren't yet bound on the parent (PIL-style packages
@@ -1042,27 +1066,23 @@ class Policy:
         module_obj = self.resolve_module(module_name)
         candidate = getattr(module_obj, member_name, _ABSENT)
         if candidate is _ABSENT:
+            # Unbound, the name can only be a submodule not yet imported,
+            # and importing one runs its top-level code: a submodule the
+            # policy refuses is refused before that, never after.
+            if not self.is_import_allowed(full_name):
+                if _submodule_exists(full_name):
+                    raise refused
+                raise ImportError(
+                    f"Module '{module_name}' has no attribute '{member_name}'"
+                )
             try:
-                candidate = importlib.import_module(f"{module_name}.{member_name}")
+                candidate = importlib.import_module(full_name)
             except ImportError:
                 raise ImportError(
                     f"Module '{module_name}' has no attribute '{member_name}'"
                 ) from None
 
-        # Submodule access bypasses the include/exclude filter (which
-        # is for top-level members), so gate it through the same
-        # ``is_import_allowed`` check that ``import X.Y`` would hit.
-        # Without this, agents could import any submodule the parent
-        # happens to expose — eagerly (``os.path`` is bound at import
-        # time) or lazily (``PIL.ImageDraw`` via importlib) — even
-        # when the parent registration is ``recursive=False``.
-        if isinstance(candidate, ModuleType):
-            full_name = f"{module_name}.{member_name}"
-            if not self.is_import_allowed(full_name):
-                raise ImportError(
-                    f"Submodule '{full_name}' is not allowed "
-                    f"(register '{module_name}' with recursive=True or "
-                    f"add '{full_name}' explicitly)."
-                )
+        if isinstance(candidate, ModuleType) and not self.is_import_allowed(full_name):
+            raise refused
 
         return candidate
