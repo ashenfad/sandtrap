@@ -790,8 +790,12 @@ class Policy:
 
     def is_attr_allowed(self, obj: Any, attr: str) -> bool:
         """Check if an attribute access is permitted by this policy."""
+        return self._is_attr_allowed_for(self._find_registration_for(obj), obj, attr)
+
+    def _is_attr_allowed_for(self, reg: Any, obj: Any, attr: str) -> bool:
+        """:meth:`is_attr_allowed`, given the registration
+        :meth:`_find_registration_for` returns for *obj*."""
         # Check registered module/class-specific rules first
-        reg = self._find_registration_for(obj)
         if reg is not None:
             # Check configure overrides
             if hasattr(reg, "configure") and attr in reg.configure:
@@ -814,6 +818,12 @@ class Policy:
                 # and the gate reads it as data or not at all.
                 if attr in MODULE_METADATA_DUNDERS and isinstance(obj, ModuleType):
                     return True
+                # The two checks below read the attribute to see what it
+                # is, on a module only. Reading one off a class or an
+                # instance can run a getter, and a check that runs one
+                # runs it ahead of the read it guards, outside that read's
+                # grants, and whether or not the read is then refused.
+                is_module = isinstance(obj, ModuleType)
                 quals = _qualified_names(obj, attr)
                 if not (
                     reg._include_pred(attr)
@@ -821,7 +831,7 @@ class Policy:
                 ):
                     # Before denying, check if the attribute is a separately
                     # registered submodule (e.g., os.path registered alongside os)
-                    sub_obj = getattr(obj, attr, None)
+                    sub_obj = getattr(obj, attr, None) if is_module else None
                     if (
                         sub_obj is not None
                         and self._find_registration_for(sub_obj) is not None
@@ -833,7 +843,7 @@ class Policy:
                 ):
                     return False
                 # Block submodule access on non-recursive module registrations
-                if not getattr(reg, "recursive", False):
+                if is_module and not getattr(reg, "recursive", False):
                     sub_obj = getattr(obj, attr, None)
                     if isinstance(sub_obj, ModuleType):
                         # Allow if the submodule is separately registered

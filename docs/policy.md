@@ -104,6 +104,11 @@ policy.cls(MyClass, host_fs_access=True)       # methods get real filesystem acc
 
 **Options**: `name`, `constructable`, `include`, `exclude`, `configure`, `host_fs_access`, `network_access`, `host_time`.
 
+A grant covers the host code that reading a member runs, as well as its calls:
+a property getter, or a module's `__getattr__`, runs under the grants a call of
+that member would get. A read that runs nothing, such as a stored value, takes
+none.
+
 ## Registering modules
 
 ```python
