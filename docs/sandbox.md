@@ -144,6 +144,8 @@ Under `isolation="process"` / `"kernel"` the worker applies `keep` before pickli
 
 `result.stdout` collects everything written to stdout during the execution: sandboxed `print` calls *and* host-side writes to the real `sys.stdout` made by registered library code — `df.info()` is the canonical case (it grabs `sys.stdout` internally, so the injected `print` never sees it). Both routes feed one buffer, so interleaving between `print` and library output is preserved. `result.stderr` is the same story for `sys.stderr`: the synthetic sandbox `sys.stderr` (when `stdin`/`argv` are given) plus host-side writes — `warnings.warn` output, a library's own diagnostics.
 
+A host-side `print` to some other stream goes to that stream: `print(..., file=sys.stderr)` lands in `result.stderr`, and a print into a buffer the library formats with (as `logging` does with a traceback) stays in that buffer. Sandboxed code's own `print` refuses `file=`.
+
 Host-side capture works by installing a router over the process's `sys.stdout`/`sys.stderr` (once, idempotent) that delegates to the active execution's buffer via a `ContextVar` and falls through to the real stream otherwise — the same pattern as the global `print` patch. Because routing is per-context rather than a global swap, concurrent executions in one process each get their own stream, and writes outside any execution reach the real streams untouched. The contextvar-propagating threading patches install alongside, so capture follows host libraries into threads they spawn.
 
 Host callbacks invoked from inside an execution inherit its routing — their console output lands in the result. A callback that wants the operator's real console instead (progress logging, sub-agent streaming) opts out per-write:

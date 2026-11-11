@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A getter runs once per read, and never for a member the policy
   refuses**: the member check judges the name without reading the
   attribute, and checks for a submodule on the value the read yields.
+- **Host code can print to a stream during an execution** (#84): a
+  `print(..., file=...)` from a granted library goes to that stream, so a
+  logged exception no longer fails the call. Sandboxed code's `print` still
+  refuses `file=`.
 
 ## 0.5.2 - 2026-10-30
 

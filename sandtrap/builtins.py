@@ -511,12 +511,25 @@ _print_installed = False
 
 
 def _patched_print(*args: Any, **kwargs: Any) -> None:
-    """Global print replacement that delegates to sandbox print when active."""
+    """Global print replacement that delegates to sandbox print when active.
+
+    Only host code calls this one: sandboxed code has the sandbox's print
+    as its builtin. So a print to a stream other than stdout is a host
+    library writing where it chose -- a buffer it formats into, as logging
+    does with a traceback, or ``sys.stderr``, which is routed to the
+    execution's capture -- and it goes there. A print to stdout, named or
+    by default, is the execution's output, and the sandbox's print takes
+    it.
+    """
     fn = _sandbox_print.get(None)
-    if fn is not None:
+    if fn is None:
+        _original_print(*args, **kwargs)
+        return
+    file = kwargs.pop("file", None)
+    if file is None or file is sys.stdout:
         fn(*args, **kwargs)
     else:
-        _original_print(*args, **kwargs)
+        _original_print(*args, file=file, **kwargs)
 
 
 def install_print() -> None:
