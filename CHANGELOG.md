@@ -12,9 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A registration's grants cover its getters** (#85): `network_access`,
   `host_fs_access` and `host_time` now hold while a property getter, a
   module's `__getattr__` or a from-import's lookup runs.
-- **A registered class's property getter runs once per read**, and not at
-  all when the policy refuses the member: the member check no longer reads
-  the attribute off a class or an instance.
+- **A getter runs once per read, and never for a member the policy
+  refuses**: the member check judges the name without reading the
+  attribute, and checks for a submodule on the value the read yields.
 
 ## 0.5.2 - 2026-10-30
 

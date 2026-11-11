@@ -675,26 +675,12 @@ def make_gates(
             raise AttributeError(
                 f"module '{obj.__name__}' has no attribute '{attr}'{loc}"
             )
+        # The name is judged before anything runs: a member the policy
+        # refuses never runs its getter, with grants or without.
         reg = policy._find_registration_for(obj)
-        # A getter -- a property, a module's __getattr__ -- is host code the
-        # registration vouches for as it does the methods, so it runs under
-        # the grants a call of this member would, and so does the member
-        # check, which reads a module's attribute to see whether it is a
-        # submodule. A read that runs nothing takes none, which keeps a
-        # host_time registration's plain reads from pausing the clock.
-        grants = _member_grants(reg, attr)
-        if any(grants) and _resolution_runs_code(obj, attr):
-            with ExitStack() as stack:
-                _enter_grants(stack, *grants)
-                return _read_attr(obj, attr, reg)
-        return _read_attr(obj, attr, reg)
-
-    def _read_attr(obj: Any, attr: str, reg: Any) -> Any:
-        """The attribute gate past the per-execution modules: the member
-        check, then the read. Called only by __st_getattr__, so the
-        sandboxed frame is three up from _caller_lineno."""
-        if not policy._is_attr_allowed_for(reg, obj, attr):
-            lineno = _caller_lineno(3)
+        allowed, check_value = policy._member_allowed(reg, obj, attr)
+        if not allowed:
+            lineno = _caller_lineno()
             loc = f" (line {lineno})" if lineno else ""
             raise AttributeError(
                 f"Attribute '{attr}' is not accessible on '{type(obj).__name__}'{loc}"
@@ -727,7 +713,7 @@ def make_gates(
             value = _static_introspection_value(obj, attr)
             if type(value) is str or (value is None and attr == "__doc__"):
                 return value
-            lineno = _caller_lineno(3)
+            lineno = _caller_lineno()
             loc = f" (line {lineno})" if lineno else ""
             raise AttributeError(
                 f"Attribute '{attr}' is not accessible on '{type(obj).__name__}'{loc}"
@@ -740,13 +726,30 @@ def make_gates(
             value = module_metadata(obj, attr)
             if value is not NO_METADATA:
                 return value
-            lineno = _caller_lineno(3)
+            lineno = _caller_lineno()
             loc = f" (line {lineno})" if lineno else ""
             raise AttributeError(
                 f"Attribute '{attr}' is not accessible on '{type(obj).__name__}'{loc}"
             )
 
-        value = getattr(obj, attr)
+        # A getter -- a property, a module's __getattr__ -- is host code the
+        # registration vouches for as it does the methods, so it runs under
+        # the grants a call of this member would. A read that runs nothing
+        # takes none, which keeps a host_time registration's plain reads
+        # from pausing the clock.
+        grants = _member_grants(reg, attr)
+        if any(grants) and _resolution_runs_code(obj, attr):
+            with ExitStack() as stack:
+                _enter_grants(stack, *grants)
+                value = getattr(obj, attr)
+        else:
+            value = getattr(obj, attr)
+        if check_value and not policy._member_value_allowed(value):
+            lineno = _caller_lineno()
+            loc = f" (line {lineno})" if lineno else ""
+            raise AttributeError(
+                f"Attribute '{attr}' is not accessible on '{type(obj).__name__}'{loc}"
+            )
         if callable(value):
             return _maybe_wrap_privileged(value, reg, attr)
         return value

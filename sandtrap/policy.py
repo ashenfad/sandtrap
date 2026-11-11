@@ -401,6 +401,9 @@ MODULE_METADATA_DUNDERS = frozenset({"__version__", "__author__", "__all__"})
 #: What :func:`module_metadata` answers when there is no readable value.
 NO_METADATA = object()
 
+# A getattr default that no attribute's value can be.
+_ABSENT = object()
+
 
 def module_metadata(module: Any, name: str) -> Any:
     """The value of one of ``MODULE_METADATA_DUNDERS`` on *module*, or
@@ -790,16 +793,27 @@ class Policy:
 
     def is_attr_allowed(self, obj: Any, attr: str) -> bool:
         """Check if an attribute access is permitted by this policy."""
-        return self._is_attr_allowed_for(self._find_registration_for(obj), obj, attr)
+        allowed, check_value = self._member_allowed(
+            self._find_registration_for(obj), obj, attr
+        )
+        if allowed and check_value:
+            return self._member_value_allowed(getattr(obj, attr, None))
+        return allowed
 
-    def _is_attr_allowed_for(self, reg: Any, obj: Any, attr: str) -> bool:
-        """:meth:`is_attr_allowed`, given the registration
-        :meth:`_find_registration_for` returns for *obj*."""
+    def _member_allowed(self, reg: Any, obj: Any, attr: str) -> tuple[bool, bool]:
+        """Whether the policy lets *attr* be read off *obj*, judged by name,
+        and whether the value the read yields must then pass
+        :meth:`_member_value_allowed` as well.
+
+        Runs nothing of the host's, so a name the policy refuses runs
+        nothing either: no getter, and no module ``__getattr__``. *reg* is
+        what :meth:`_find_registration_for` returns for *obj*.
+        """
         # Check registered module/class-specific rules first
         if reg is not None:
             # Check configure overrides
             if hasattr(reg, "configure") and attr in reg.configure:
-                return True  # Explicitly configured members are allowed
+                return True, False  # Explicitly configured members are allowed
 
             # Check include/exclude — against the bare attribute name and
             # its owner-qualified forms (dotted patterns).
@@ -813,16 +827,11 @@ class Policy:
                 # these four statically and refuses any answer that would
                 # take running host code to produce.
                 if attr in INTROSPECTION_DUNDERS:
-                    return True
+                    return True, False
                 # A module's metadata, likewise: it describes the module,
                 # and the gate reads it as data or not at all.
                 if attr in MODULE_METADATA_DUNDERS and isinstance(obj, ModuleType):
-                    return True
-                # The two checks below read the attribute to see what it
-                # is, on a module only. Reading one off a class or an
-                # instance can run a getter, and a check that runs one
-                # runs it ahead of the read it guards, outside that read's
-                # grants, and whether or not the read is then refused.
+                    return True, False
                 is_module = isinstance(obj, ModuleType)
                 quals = _qualified_names(obj, attr)
                 if not (
@@ -830,39 +839,47 @@ class Policy:
                     or any(reg._include_qual_pred(q) for q in quals)
                 ):
                     # Before denying, check if the attribute is a separately
-                    # registered submodule (e.g., os.path registered alongside os)
-                    sub_obj = getattr(obj, attr, None) if is_module else None
-                    if (
+                    # registered submodule (e.g., os.path registered alongside
+                    # os), as the module's own namespace binds it. Read
+                    # statically: a module's __getattr__ answering for the
+                    # name would be host code run for a name the filters
+                    # refuse.
+                    sub_obj = (
+                        inspect.getattr_static(obj, attr, None) if is_module else None
+                    )
+                    return (
                         sub_obj is not None
                         and self._find_registration_for(sub_obj) is not None
-                    ):
-                        return True
-                    return False
+                    ), False
                 if reg._exclude_pred(attr) or any(
                     reg._exclude_qual_pred(q) for q in quals
                 ):
-                    return False
-                # Block submodule access on non-recursive module registrations
-                if is_module and not getattr(reg, "recursive", False):
-                    sub_obj = getattr(obj, attr, None)
-                    if isinstance(sub_obj, ModuleType):
-                        # Allow if the submodule is separately registered
-                        if self._find_registration_for(sub_obj) is None:
-                            return False
-                return True
+                    return False, False
+                # A non-recursive module registration doesn't hand out its
+                # submodules, which only the value read can tell.
+                return True, is_module and not getattr(reg, "recursive", False)
 
         # Interpreter-internal attrs (frames, code objects, etc.)
         if attr in BLOCKED_INTERNAL_ATTRS:
-            return False
+            return False, False
         # Default dunder check
         if attr.startswith("__") and attr.endswith("__"):
             if attr in MODULE_METADATA_DUNDERS:
-                return isinstance(obj, ModuleType)
-            return attr in DEFAULT_ALLOWED_DUNDERS
+                return isinstance(obj, ModuleType), False
+            return attr in DEFAULT_ALLOWED_DUNDERS, False
         # Single-underscore private attrs blocked by default
         if attr.startswith("_"):
-            return False
-        return True
+            return False, False
+        return True, False
+
+    def _member_value_allowed(self, value: Any) -> bool:
+        """Whether a non-recursive module registration may hand out *value*,
+        read through a name :meth:`_member_allowed` let through: anything
+        but a submodule that is not registered itself."""
+        return (
+            not isinstance(value, ModuleType)
+            or self._find_registration_for(value) is not None
+        )
 
     def _find_registration_for(self, obj: Any) -> Any:
         """Find a policy registration that applies to the given object."""
@@ -1021,10 +1038,10 @@ class Policy:
         # the eager attribute, fall back to importlib for submodules
         # that aren't yet bound on the parent (PIL-style packages
         # whose __init__ doesn't eager-import their submodules).
+        # One read, so a module __getattr__ answering for the name runs once.
         module_obj = self.resolve_module(module_name)
-        if hasattr(module_obj, member_name):
-            candidate = getattr(module_obj, member_name)
-        else:
+        candidate = getattr(module_obj, member_name, _ABSENT)
+        if candidate is _ABSENT:
             try:
                 candidate = importlib.import_module(f"{module_name}.{member_name}")
             except ImportError:
