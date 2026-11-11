@@ -4,8 +4,10 @@ behind a from-import. And reading an attribute runs that code once, only
 for a member the policy lets through."""
 
 import functools
+import importlib
 import os
 import socket
+import sys
 import time
 import types
 
@@ -358,6 +360,56 @@ def test_a_name_outside_include_is_judged_by_what_the_module_binds():
     result = _exec(policy, "import lazypkg\nv = lazypkg.child.value")
     assert result.error is None
     assert result.namespace["v"] == 1
+
+
+@pytest.fixture
+def disk_package(tmp_path, monkeypatch):
+    """An importable package, ``diskpkg``, whose ``child`` submodule is not
+    imported by the package and, when its code runs, resolves a host
+    name (a gated network call) and records that it ran on the package."""
+    pkg = tmp_path / "diskpkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("ran = []\n")
+    (pkg / "child.py").write_text(
+        "import socket\n"
+        "import diskpkg\n"
+        "socket.getaddrinfo('127.0.0.1', 80, type=socket.SOCK_STREAM)\n"
+        "diskpkg.ran.append('child')\n"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    for name in ("diskpkg", "diskpkg.child"):
+        sys.modules.pop(name, None)
+    importlib.invalidate_caches()
+    package = importlib.import_module("diskpkg")
+    yield package
+    for name in ("diskpkg", "diskpkg.child"):
+        sys.modules.pop(name, None)
+
+
+def test_a_submodule_the_policy_refuses_is_never_imported(disk_package):
+    policy = Policy()
+    policy.module(disk_package, name="diskpkg", network_access=True)
+    result = _exec(policy, "from diskpkg import child")
+    assert isinstance(result.error, ImportError)
+    assert "is not allowed" in str(result.error)
+    assert disk_package.ran == []
+    assert "diskpkg.child" not in sys.modules
+
+
+def test_a_submodule_the_policy_allows_imports_under_the_grant(disk_package):
+    policy = Policy()
+    policy.module(disk_package, name="diskpkg", network_access=True, recursive=True)
+    result = _exec(policy, "from diskpkg import child")
+    assert result.error is None
+    assert disk_package.ran == ["child"]
+
+
+def test_a_missing_member_still_reads_as_missing(disk_package):
+    policy = Policy()
+    policy.module(disk_package, name="diskpkg")
+    result = _exec(policy, "from diskpkg import nothing")
+    assert isinstance(result.error, ImportError)
+    assert "has no attribute 'nothing'" in str(result.error)
 
 
 # -- what counts as running code ---------------------------------------------------

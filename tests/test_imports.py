@@ -245,6 +245,9 @@ def test_from_import_submodule_blocked_when_non_recursive_lazy():
     assert isinstance(result.error, ImportError), (
         f"expected ImportError, got: {result.error!r}"
     )
+    assert "is not allowed" in str(result.error)
+    # Refused before the import: the submodule's code never ran.
+    assert "PIL.ImageDraw" not in sys.modules
 
 
 def test_from_import_regular_member_unaffected_by_submodule_gate():
