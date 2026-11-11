@@ -8,6 +8,7 @@ through to the real stderr untouched.
 """
 
 import io
+import logging
 import sys
 import threading
 import warnings
@@ -83,6 +84,108 @@ def test_stderr_captured_even_when_code_raises():
     r = _sb(policy).exec("moan()\nraise ValueError('boom')")
     assert r.error is not None
     assert r.stderr == "pre-crash\n"
+
+
+# -- host prints to a named stream --------------------------------------------
+
+
+def test_a_host_print_to_a_buffer_writes_there():
+    policy = Policy(timeout=10, tick_limit=1_000_000)
+
+    @policy.fn
+    def render() -> str:
+        buf = io.StringIO()
+        print("into the buffer", file=buf)
+        return buf.getvalue()
+
+    r = _sb(policy).exec("text = render()")
+    assert r.error is None
+    assert r.namespace["text"] == "into the buffer\n"
+    assert r.stdout == ""
+
+
+def test_a_host_print_to_stderr_is_captured():
+    policy = Policy(timeout=10, tick_limit=1_000_000)
+
+    @policy.fn
+    def complain() -> None:
+        print("to stderr", file=sys.stderr)
+
+    r = _sb(policy).exec("complain()")
+    assert r.error is None
+    assert r.stderr == "to stderr\n"
+    assert r.stdout == ""
+
+
+def test_a_host_print_to_stdout_by_name_is_a_print():
+    """Naming stdout is the same print as leaving it to the default: it
+    reaches the snapshot as well as the captured text."""
+    policy = Policy(timeout=10, tick_limit=1_000_000)
+
+    @policy.fn
+    def say() -> None:
+        print("named", file=sys.stdout)
+        print("default")
+
+    r = Sandbox(policy, snapshot_prints=True).exec("say()")
+    assert r.error is None
+    assert r.stdout == "named\ndefault\n"
+    assert r.prints == [("named",), ("default",)]
+
+
+def test_sandboxed_print_to_a_stream_is_still_refused():
+    r = _sb().exec("import sys\nprint('x', file=sys.stderr)", stdin="")
+    assert isinstance(r.error, ValueError)
+    assert "file=" in str(r.error)
+
+
+def _log_a_handled_error(logger: logging.Logger) -> str:
+    try:
+        raise FileNotFoundError("no such file")
+    except OSError:
+        logger.warning("lookup failed", exc_info=True)
+    return "fallback"
+
+
+def _unhandled_logger(name: str) -> logging.Logger:
+    """A logger with no handler anywhere above it, so a record it takes
+    goes to logging's last-resort handler, which writes to sys.stderr."""
+    logger = logging.getLogger(name)
+    logger.propagate = False
+    return logger
+
+
+def log_with_no_handler() -> str:
+    return _log_a_handled_error(_unhandled_logger("sandtrap.tests.no_handler"))
+
+
+def test_a_logged_exception_reaches_its_handler():
+    """Formatting a record's traceback prints it into a buffer, which a
+    host library calling the logger must be able to do."""
+    buf = io.StringIO()
+    logger = _unhandled_logger("sandtrap.tests.handled")
+    handler = logging.StreamHandler(buf)
+    logger.addHandler(handler)
+    try:
+        policy = Policy(timeout=10, tick_limit=1_000_000)
+        policy.fn(lambda: _log_a_handled_error(logger), name="lookup")
+        r = _sb(policy).exec("value = lookup()")
+    finally:
+        logger.removeHandler(handler)
+    assert r.error is None
+    assert r.namespace["value"] == "fallback"
+    assert "lookup failed" in buf.getvalue()
+    assert "FileNotFoundError: no such file" in buf.getvalue()
+
+
+def test_a_logged_exception_with_no_handler_is_captured():
+    policy = Policy(timeout=10, tick_limit=1_000_000)
+    policy.fn(log_with_no_handler, name="lookup")
+    r = _sb(policy).exec("value = lookup()")
+    assert r.error is None
+    assert r.namespace["value"] == "fallback"
+    assert "lookup failed" in r.stderr
+    assert "FileNotFoundError: no such file" in r.stderr
 
 
 # -- the router itself -----------------------------------------------------
@@ -172,3 +275,15 @@ def test_process_isolation_stderr_crosses_boundary():
     assert r.error is None
     assert "over the wire" in r.stderr
     assert "over the wire" not in r.stdout
+
+
+def test_process_isolation_logged_exception_is_captured():
+    from sandtrap.process.sandbox import ProcessSandbox
+
+    policy = Policy(timeout=10.0)
+    policy.fn(log_with_no_handler, name="lookup")
+    with ProcessSandbox(policy) as ps:
+        r = ps.exec("value = lookup()")
+    assert r.error is None
+    assert r.namespace["value"] == "fallback"
+    assert "FileNotFoundError: no such file" in r.stderr
