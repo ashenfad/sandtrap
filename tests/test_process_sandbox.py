@@ -707,6 +707,41 @@ def test_shutdown_from_another_thread_ends_an_execution_with_an_error(root):
     assert results[0].error is not None
 
 
+def test_an_unresponsive_execution_kills_its_own_worker_only(root):
+    """At its deadline an execution kills the worker it was sent to, never
+    the one the sandbox holds by then (another thread may have shut its
+    worker down and started a new one)."""
+
+    class Worker:
+        killed = False
+
+        def is_alive(self):
+            return not self.killed
+
+        def kill(self):
+            self.killed = True
+
+        def join(self, timeout=None):
+            pass
+
+    class Silent:
+        def poll(self, timeout=0.0):
+            return False
+
+    from sandtrap.process.sandbox import _UNRESPONSIVE_GRACE
+
+    with ProcessSandbox(Policy(timeout=10.0), filesystem=IsolatedFS(root)) as ps:
+        ps.exec("x = 1")
+        current, current_conn = ps._process, ps._conn
+        own = Worker()
+        result = ps._await_result(Silent(), own, -_UNRESPONSIVE_GRACE - 1.0)
+        assert "unresponsive" in str(result.error)
+        assert own.killed
+        assert ps._process is current and ps._conn is current_conn
+        assert current.is_alive()
+        assert ps.exec("y = 2").namespace["y"] == 2
+
+
 def test_double_shutdown(root):
     """Calling shutdown() twice is safe."""
     ps = ProcessSandbox(Policy(timeout=10.0), filesystem=IsolatedFS(root))

@@ -1338,8 +1338,11 @@ class ProcessSandbox:
         while True:
             now = time.monotonic()
             if paused_at is None and now >= deadline:
-                if self._conn is conn:
-                    self._kill()
+                # This call's worker, whatever the sandbox holds by now.
+                if process is not None and process.is_alive():
+                    process.kill()
+                    process.join(timeout=2.0)
+                self._cleanup(conn)
                 return ExecResult(
                     error=RuntimeError("Worker process became unresponsive")
                 )
