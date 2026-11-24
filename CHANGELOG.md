@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- **A shutdown from another thread no longer breaks an execution in flight.**
+  `shutdown()` or `drain()` while another thread waits on an `exec()` used to
+  make that `exec()` raise (`AttributeError` or `OSError: handle is closed`);
+  it now returns an errored result, as it does for any worker that dies
+  mid-execution.
+
 ## 0.5.4 - 2026-11-24
 
 ### Added

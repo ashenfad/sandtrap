@@ -805,6 +805,9 @@ class ProcessSandbox:
         # Under supervise_tree, a Tree standing in for the worker's process.
         self._process: multiprocessing.Process | Tree | None = None
         self._conn: multiprocessing.connection.Connection | None = None
+        # An execution's wait and a shutdown from another thread may both
+        # clean up after the same worker; one closes its connection.
+        self._cleanup_lock = threading.Lock()
         self._started = False
         self._on_worker_start = on_worker_start
         self._generation = 0
@@ -1084,16 +1087,22 @@ class ProcessSandbox:
             self._process.join(timeout=2.0)
         self._cleanup()
 
-    def _cleanup(self) -> None:
-        """Close connection and reset state."""
-        if self._conn is not None:
-            try:
-                self._conn.close()
-            except OSError:
-                pass
-            _PARENT_CONNECTIONS.discard(self._conn)
-            self._conn = None
-        self._process = None
+    def _cleanup(self, conn: Any = None) -> None:
+        """Close connection and reset state. Given ``conn``, only while
+        that is still the sandbox's connection: a shutdown from another
+        thread may have cleaned up already, and a later worker's
+        connection may have taken its place."""
+        with self._cleanup_lock:
+            if conn is not None and self._conn is not conn:
+                return
+            if self._conn is not None:
+                try:
+                    self._conn.close()
+                except OSError:
+                    pass
+                _PARENT_CONNECTIONS.discard(self._conn)
+                self._conn = None
+            self._process = None
 
     def _ensure_spool_dir(self) -> str | None:
         """The directory this sandbox's results spool to, created on first
@@ -1252,7 +1261,10 @@ class ProcessSandbox:
                 "Use ProcessSandbox as a context manager to start it."
             )
         self._ensure_worker()  # respawns after a crash
-        if self._conn is None:
+        # This call's worker and connection, held from here on: a shutdown
+        # from another thread may clear the sandbox's own at any point.
+        conn, process = self._conn, self._process
+        if conn is None:
             raise RuntimeError("No connection to worker process")
 
         safe_ns, dropped_in = partition_namespace(namespace)
@@ -1275,21 +1287,29 @@ class ProcessSandbox:
                         stacklevel=2,
                     )
                 safe_modules[mod_name] = safe_attrs or {}
-        self._conn.send(
-            ExecMsg(
-                source=source,
-                namespace=safe_ns,
-                stdin=stdin,
-                argv=argv,
-                echo=echo,
-                modules=safe_modules,
-                keep=keep,
-                timeout=timeout,
+        try:
+            conn.send(
+                ExecMsg(
+                    source=source,
+                    namespace=safe_ns,
+                    stdin=stdin,
+                    argv=argv,
+                    echo=echo,
+                    modules=safe_modules,
+                    keep=keep,
+                    timeout=timeout,
+                )
             )
+        except OSError:
+            self._cleanup(conn)
+            return ExecResult(
+                error=RuntimeError("Worker process died during execution")
+            )
+        return self._await_result(
+            conn, process, self._policy.timeout if timeout is None else timeout
         )
-        return self._await_result(self._policy.timeout if timeout is None else timeout)
 
-    def _await_result(self, timeout: float) -> ExecResult:
+    def _await_result(self, conn: Any, process: Any, timeout: float) -> ExecResult:
         """Receive messages from the worker until execution finishes.
 
         Dispatches RPC calls (``RpcCallMsg``) inline by invoking the
@@ -1308,36 +1328,34 @@ class ProcessSandbox:
         # moves with it: it is held while the worker's clock is stopped
         # (a host call in the worker, an RPC included), and pushed back
         # by exactly that long when it starts again.
-        assert self._conn is not None  # checked by caller
+        # ``conn`` and ``process`` are this call's worker, not the
+        # sandbox's fields: a shutdown from another thread may clear those
+        # while this waits, and the worker going that way is a death like
+        # any other.
         deadline = time.monotonic() + timeout + _UNRESPONSIVE_GRACE
         paused_at: float | None = None
+        died = ExecResult(error=RuntimeError("Worker process died during execution"))
         while True:
             now = time.monotonic()
             if paused_at is None and now >= deadline:
-                self._kill()
+                if self._conn is conn:
+                    self._kill()
                 return ExecResult(
                     error=RuntimeError("Worker process became unresponsive")
                 )
-            if not self._process or not self._process.is_alive():
-                if self._conn.poll(0.1):
-                    pass  # drain final message
-                else:
-                    self._cleanup()
-                    return ExecResult(
-                        error=RuntimeError("Worker process died during execution")
-                    )
-            elif not self._conn.poll(
-                1.0 if paused_at is not None else min(1.0, deadline - now)
-            ):
-                continue
-
             try:
-                msg = self._conn.recv()
+                if not process or not process.is_alive():
+                    if not conn.poll(0.1):  # else a final message to take
+                        self._cleanup(conn)
+                        return died
+                elif not conn.poll(
+                    1.0 if paused_at is not None else min(1.0, deadline - now)
+                ):
+                    continue
+                msg = conn.recv()
             except (EOFError, OSError):
-                self._cleanup()
-                return ExecResult(
-                    error=RuntimeError("Worker process died during execution")
-                )
+                self._cleanup(conn)
+                return died
 
             if isinstance(msg, ResultMsg):
                 namespace: Mapping[str, Any] = msg.namespace
@@ -1379,7 +1397,7 @@ class ProcessSandbox:
                 # whose clock is stopped for the call is already
                 # refunded when it starts again.
                 rpc_start = time.monotonic()
-                self._dispatch_rpc(msg)
+                self._dispatch_rpc(msg, conn)
                 if paused_at is None:
                     deadline += time.monotonic() - rpc_start
                 continue
@@ -1390,7 +1408,7 @@ class ProcessSandbox:
                 stacklevel=2,
             )
 
-    def _dispatch_rpc(self, msg: RpcCallMsg) -> None:
+    def _dispatch_rpc(self, msg: RpcCallMsg, conn: Any) -> None:
         """Invoke the named handler and send the result back.
 
         Errors from the handler are shipped to the worker as
@@ -1404,19 +1422,20 @@ class ProcessSandbox:
             err: BaseException = RuntimeError(
                 f"no rpc handler registered for target {msg.target!r}"
             )
-            self._send_rpc_return(msg.call_id, error=err)
+            self._send_rpc_return(conn, msg.call_id, error=err)
             return
 
         try:
             value = handler(msg.method, msg.args, msg.kwargs)
         except BaseException as exc:
-            self._send_rpc_return(msg.call_id, error=exc)
+            self._send_rpc_return(conn, msg.call_id, error=exc)
             return
 
-        self._send_rpc_return(msg.call_id, value=value)
+        self._send_rpc_return(conn, msg.call_id, value=value)
 
     def _send_rpc_return(
         self,
+        conn: Any,
         call_id: str,
         *,
         value: Any = None,
@@ -1430,16 +1449,15 @@ class ProcessSandbox:
         least gets a clear (if reduced) signal instead of the
         connection blocking on a half-sent buffer.
         """
-        assert self._conn is not None
         try:
-            self._conn.send(RpcReturnMsg(call_id=call_id, value=value, error=error))
+            conn.send(RpcReturnMsg(call_id=call_id, value=value, error=error))
         except (TypeError, AttributeError, Exception) as send_exc:  # noqa: BLE001
             fallback = RuntimeError(
                 f"rpc return for call_id={call_id!r} could not be serialized: "
                 f"{send_exc}"
             )
             try:
-                self._conn.send(RpcReturnMsg(call_id=call_id, error=fallback))
+                conn.send(RpcReturnMsg(call_id=call_id, error=fallback))
             except Exception:
                 # Connection itself is wedged; let the deadline kick in.
                 pass
