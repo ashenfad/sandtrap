@@ -11,6 +11,9 @@ forked worker rather than a second suite to write and keep in sync.
 
 Tests that are *about* fork inheritance mark themselves ``@pytest.mark.fork_only``
 and skip elsewhere.
+
+``--supervise-tree`` runs the process suite with every worker under a tree
+supervisor (Linux only), the same differential for ``supervise_tree=True``.
 """
 
 import pytest
@@ -25,6 +28,11 @@ def pytest_addoption(parser):
         choices=("default", *START_METHODS),
         help="How ProcessSandbox workers are created for this run. "
         "'default' leaves the shipped choice alone.",
+    )
+    parser.addoption(
+        "--supervise-tree",
+        action="store_true",
+        help="Run every ProcessSandbox with supervise_tree=True (Linux only).",
     )
 
 
@@ -51,6 +59,11 @@ def pytest_configure(config):
         "markers",
         "no_forkserver: builds a fake host by forking, which multiprocessing's "
         "forkserver state does not survive (see docs/forkserver-design.md)",
+    )
+    config.addinivalue_line(
+        "markers",
+        "no_supervise_tree: depends on a worker's parent being the process "
+        "that started it, which a tree supervisor stands between",
     )
 
 
@@ -85,6 +98,26 @@ def _apply_start_method(request, monkeypatch):
 
     def _init(self, *args, **kwargs):
         kwargs.setdefault("start_method", method)
+        original(self, *args, **kwargs)
+
+    monkeypatch.setattr(ProcessSandbox, "__init__", _init)
+
+
+@pytest.fixture(autouse=True)
+def _apply_supervise_tree(request, monkeypatch):
+    """Under ``--supervise-tree``, make every ProcessSandbox supervise its
+    workers' trees unless the test says otherwise."""
+    if not request.config.getoption("--supervise-tree"):
+        return
+    if request.node.get_closest_marker("no_supervise_tree"):
+        pytest.skip("test needs the worker's parent to be its host")
+
+    from sandtrap.process.sandbox import ProcessSandbox
+
+    original = ProcessSandbox.__init__
+
+    def _init(self, *args, **kwargs):
+        kwargs.setdefault("supervise_tree", True)
         original(self, *args, **kwargs)
 
     monkeypatch.setattr(ProcessSandbox, "__init__", _init)

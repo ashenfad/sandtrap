@@ -28,6 +28,8 @@ sb = sandbox(policy)
 - `allow_degraded` -- `isolation="kernel"` only; proceed with a warning rather than raising when the platform can't apply kernel restrictions.
 - `close_fds` -- neutralize ambient host file descriptors in the worker.
 
+`supervise_tree` (Linux only, with `tree_grace`) also needs a worker: it accounts for every process a worker starts, and `isolation="none"` refuses it rather than ignoring it. See [process.md](process.md#accounting-for-what-a-worker-starts).
+
 ## Context manager
 
 `sandbox()` returns objects that support `with`:

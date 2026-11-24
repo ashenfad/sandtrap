@@ -441,8 +441,10 @@ def test_idle_worker_exits_when_parent_process_disappears():
 # so the notification never arrives. A genuine semantic difference (see
 # docs/forkserver-design.md), not the inherited-broker-state bug: the
 # scenario it guards -- one worker's INHERITED endpoint suppressing
-# another's EOF -- cannot arise where nothing is inherited.
+# another's EOF -- cannot arise where nothing is inherited. Under a tree
+# supervisor the parent is the supervisor, for the same effect.
 @pytest.mark.no_forkserver
+@pytest.mark.no_supervise_tree
 def test_idle_worker_exits_while_later_worker_remains_busy():
     """Another worker's inherited endpoint must not suppress control EOF."""
     ctx = multiprocessing.get_context("fork")

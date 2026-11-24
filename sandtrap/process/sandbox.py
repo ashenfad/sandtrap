@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import errno
+import math
 import multiprocessing
 import os
 import shutil
@@ -45,6 +47,7 @@ from .protocol import (
     partition_namespace,
 )
 from .spool import SpooledNamespace
+from .tree import DrainResult, Tree, require_supervision, tree_entry
 
 # Type alias for RPC handler callables registered with the sandbox.
 # A handler receives (method_name, args, kwargs) and returns the
@@ -686,6 +689,18 @@ class ProcessSandbox:
         fresh worker and calls it again. A worker that dies while the hook
         runs is not replaced inside it; the hook's executions report the
         death, and the start fails.
+    supervise_tree:
+        Account for every process a worker starts (Linux only; elsewhere
+        :class:`~sandtrap.IsolationUnavailable` at construction). Each
+        worker runs under a supervisor of its own, forked from the same
+        broker, which adopts whatever the worker leaves behind. When the
+        worker exits, for any reason, the supervisor ends the rest of its
+        tree: ``SIGTERM``, then ``SIGKILL`` after ``tree_grace``.
+        :meth:`drain` stops the sandbox for good and confirms that every
+        worker's tree is gone.
+    tree_grace:
+        Seconds a process a worker left behind has between ``SIGTERM`` and
+        ``SIGKILL``. Only with ``supervise_tree``.
     """
 
     def __init__(
@@ -705,8 +720,21 @@ class ProcessSandbox:
         spool: bool | str | os.PathLike[str] = False,
         render_prints: PrintRendering | None = None,
         on_worker_start: Callable[[ProcessSandbox], None] | None = None,
+        supervise_tree: bool = False,
+        tree_grace: float = 1.0,
     ) -> None:
         _validate_mode(mode)
+        if isinstance(tree_grace, bool) or not isinstance(tree_grace, (int, float)):
+            raise TypeError(
+                "tree_grace must be a number of seconds, not "
+                f"{type(tree_grace).__name__}"
+            )
+        if not math.isfinite(tree_grace) or tree_grace < 0:
+            raise ValueError(
+                f"tree_grace must be non-negative and finite, got {tree_grace!r}"
+            )
+        if supervise_tree:
+            require_supervision()
         if on_worker_start is not None and not callable(on_worker_start):
             raise TypeError(
                 "on_worker_start must be callable, not "
@@ -773,18 +801,27 @@ class ProcessSandbox:
             self._rpc_handlers.setdefault(FS_RPC_TARGET, fs_rpc_handler(filesystem))
             self._worker_fs = RemoteFSMarker()
 
-        self._process: multiprocessing.Process | None = None
+        # Under supervise_tree, a Tree standing in for the worker's process.
+        self._process: multiprocessing.Process | Tree | None = None
         self._conn: multiprocessing.connection.Connection | None = None
         self._started = False
         self._on_worker_start = on_worker_start
         self._generation = 0
         self._in_start_hook = False
+        self._supervise_tree = supervise_tree
+        self._tree_grace = float(tree_grace)
+        # Every supervised worker's tree not yet confirmed gone, the current
+        # one included, and what the confirmed ones came to.
+        self._trees: list[Tree] = []
+        self._confirmed = DrainResult("confirmed")
+        self._drained = False
 
     # ------------------------------------------------------------------
     # Context manager
     # ------------------------------------------------------------------
 
     def __enter__(self) -> ProcessSandbox:
+        self._refuse_if_drained()
         # Started first: the start hook executes on the worker it prepares.
         self._started = True
         try:
@@ -808,10 +845,24 @@ class ProcessSandbox:
         ``on_worker_start`` call sees that worker's number."""
         return self._generation
 
+    @property
+    def worker_alive(self) -> bool:
+        """Whether this sandbox has a worker that is still running: the
+        next execution reaches it rather than starting a replacement."""
+        return self._process is not None and self._process.is_alive()
+
+    def _refuse_if_drained(self) -> None:
+        if self._drained:
+            raise RuntimeError(
+                "This sandbox has been drained and starts no more workers; "
+                "build a new one."
+            )
+
     def _ensure_worker(self) -> None:
         """Spawn the worker process if not already running."""
         if self._process is not None and self._process.is_alive():
             return
+        self._refuse_if_drained()
         if self._in_start_hook:
             # Replacing it here would call the hook again, inside itself.
             raise RuntimeError("Worker process died while on_worker_start ran")
@@ -819,6 +870,7 @@ class ProcessSandbox:
         # Clean up dead worker if needed
         if self._process is not None:
             self._cleanup()
+        self._fold_confirmed()
 
         # Two mechanisms below exist purely to undo fork inheritance, and both
         # are meaningless — descriptor neutralization is actively hazardous —
@@ -857,26 +909,32 @@ class ProcessSandbox:
                 _forkserver_preload_names(self._policy, self._preload_grants)
             )
         ctx = multiprocessing.get_context(self._start_method)
-        self._process = ctx.Process(
-            target=_worker_entry,
-            args=(
-                child_conn,
-                parent_connections,
-                self._policy,
-                self._worker_fs,
-                self._mode,
-                self._isolation,
-                self._snapshot_prints,
-                self._echo,
-                inherited_fds,
-                self._ensure_spool_dir(),
-                self._render_prints,
-            ),
-            daemon=True,
+        worker_args = (
+            child_conn,
+            parent_connections,
+            self._policy,
+            self._worker_fs,
+            self._mode,
+            self._isolation,
+            self._snapshot_prints,
+            self._echo,
+            inherited_fds,
+            self._ensure_spool_dir(),
+            self._render_prints,
         )
+        report_recv = report_send = None
+        if self._supervise_tree:
+            report_recv, report_send = ctx.Pipe(duplex=False)
+            process = ctx.Process(
+                target=tree_entry,
+                args=(report_send, self._tree_grace, *worker_args),
+                daemon=True,
+            )
+        else:
+            process = ctx.Process(target=_worker_entry, args=worker_args, daemon=True)
         try:
             try:
-                self._process.start()
+                process.start()
             except ChildProcessError:
                 # A broker pid inherited from a process we were forked from —
                 # it isn't our child, so multiprocessing's waitpid check fails.
@@ -884,15 +942,24 @@ class ProcessSandbox:
                 # Retried once: a second failure is a real problem, not stale
                 # bookkeeping.
                 _reset_inherited_forkserver()
-                self._process.start()
+                process.start()
         except BaseException as exc:
             _PARENT_CONNECTIONS.discard(parent_conn)
             parent_conn.close()
             child_conn.close()
-            self._process = None
+            for end in (report_recv, report_send):
+                if end is not None:
+                    end.close()
             if _refuses_workers(exc):
                 raise _no_process_isolation("start the worker process", exc) from exc
             raise
+        if report_send is not None:
+            report_send.close()  # only the supervisor writes reports
+            tree = Tree(process, report_recv)
+            self._trees.append(tree)
+            self._process = tree
+        else:
+            self._process = process
         if self._start_method == "forkserver":
             # First moment the broker's pid exists. Note what it loaded, so a
             # later sandbox asking for more can be told it won't get it — the
@@ -1048,6 +1115,71 @@ class ProcessSandbox:
         # Values never read go with it: their results say so if asked.
         self._remove_spool_dir()
 
+    def drain(self, timeout: float = 10.0) -> DrainResult:
+        """Stop this sandbox for good, and wait up to ``timeout`` seconds
+        for confirmation that every process its workers started is gone.
+
+        Needs ``supervise_tree=True``. The sandbox starts no worker after
+        this: entering it or executing raises. A running worker is shut
+        down as :meth:`shutdown` does (and killed if it doesn't go), then
+        each worker's supervisor ends what that worker left behind and
+        reports. ``timeout`` bounds the wait for those reports.
+
+        The result covers every worker the sandbox started, including
+        workers that crashed or were killed and replaced. ``"confirmed"``
+        means all of them are gone along with everything they started.
+        ``"timed_out"`` means some tree is still being ended: call
+        ``drain()`` again to wait longer. ``"lost_contact"`` means some
+        worker's supervisor died without confirming its tree, which no
+        later call can recover; treat whatever ran this sandbox as no
+        longer accountable. Processes this process started itself, an RPC
+        handler's included, are not covered.
+        """
+        if not self._supervise_tree:
+            raise RuntimeError(
+                "drain() confirms the processes a supervised sandbox's "
+                "workers started; construct the sandbox with supervise_tree=True"
+            )
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+            raise TypeError(
+                f"timeout must be a number of seconds, not {type(timeout).__name__}"
+            )
+        if not math.isfinite(timeout) or timeout < 0:
+            raise ValueError(
+                f"timeout must be non-negative and finite, got {timeout!r}"
+            )
+        deadline = time.monotonic() + timeout
+        self._drained = True
+        self.shutdown()
+        for tree in self._trees:
+            tree.wait_drained(max(deadline - time.monotonic(), 0.0))
+        self._fold_confirmed()
+        if any(tree.lost for tree in self._trees):
+            status = "lost_contact"
+        elif self._trees:
+            status = "timed_out"
+        else:
+            status = "confirmed"
+        return dataclasses.replace(self._confirmed, status=status)
+
+    def _fold_confirmed(self) -> None:
+        """Count the trees confirmed gone and stop tracking them."""
+        remaining = []
+        confirmed = self._confirmed
+        for tree in self._trees:
+            tree.is_alive()  # takes in reports already sent
+            if not tree.drained:
+                remaining.append(tree)
+                continue
+            confirmed = dataclasses.replace(
+                confirmed,
+                workers=confirmed.workers + 1,
+                helpers=confirmed.helpers + tree.helpers,
+                killed=confirmed.killed + tree.killed,
+            )
+        self._trees = remaining
+        self._confirmed = confirmed
+
     # ------------------------------------------------------------------
     # Execution
     # ------------------------------------------------------------------
@@ -1095,6 +1227,7 @@ class ProcessSandbox:
         timeout = _validate_timeout(timeout)  # ditto
         _validate_modules(self._policy, modules)  # ditto
         if not self._started:
+            self._refuse_if_drained()
             raise RuntimeError(
                 "Worker process is not running. "
                 "Use ProcessSandbox as a context manager to start it."
