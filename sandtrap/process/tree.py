@@ -100,6 +100,9 @@ class Tree:
         # while an execution's wait may be reading.
         self._lock = threading.Lock()
         self.worker_pid: int | None = None
+        # The worker's start time, with its pid, names it for good: the pid
+        # alone may be reused once the worker is reaped.
+        self._worker_start: int | None = None
         self.exitcode: int | None = None
         self.worker_exited = False
         self.drained = False
@@ -182,7 +185,7 @@ class Tree:
             return True  # not a report; nothing to take from it
         kind = message[0]
         if kind == "worker":
-            self.worker_pid = message[1]
+            self.worker_pid, self._worker_start = message[1], message[2]
         elif kind == "exit":
             self.exitcode = message[1]
             self.worker_exited = True
@@ -198,10 +201,9 @@ class Tree:
         if self.worker_pid is not None and not self.worker_exited:
             # Nothing supervises the worker now. Stop it rather than leave
             # it running unaccounted for; what it started stays unknown.
-            try:
-                os.kill(self.worker_pid, signal.SIGKILL)
-            except OSError:
-                pass
+            # Nothing holds its pid any more either, so it may have exited
+            # and been reaped, and another process may hold that pid now.
+            _kill_if_same(self.worker_pid, self._worker_start)
         # Its pipe closing means it has exited: collect its status, so it
         # isn't left a zombie of this process.
         self._supervisor.join(timeout=1.0)
@@ -218,6 +220,42 @@ class Tree:
             except OSError:
                 pass
             self._report = None
+
+
+def _start_time(pid: int) -> int | None:
+    """When process ``pid`` started, in clock ticks since boot, or None if
+    there is no such process. A pid and its start time name one process
+    for good."""
+    from monkeyfs import suspend
+
+    try:
+        with suspend(), open(f"/proc/{pid}/stat", "rb") as f:
+            stat = f.read()
+    except OSError:
+        return None
+    # The fields after the command name's last ')' start at the state, the
+    # third; the start time is the twenty-second.
+    return int(stat[stat.rfind(b")") + 2 :].split()[19])
+
+
+def _kill_if_same(pid: int, start: int | None) -> None:
+    """SIGKILL process ``pid`` only if it is still the one that started at
+    ``start``. The pidfd is taken before the check, so the process checked
+    is the one signalled. A kernel without pidfds (before 5.3) gets no
+    signal: a process that can't be told apart is left alone."""
+    if start is None:
+        return
+    try:
+        pidfd = os.pidfd_open(pid)
+    except OSError:
+        return  # gone already, or no pidfds here
+    try:
+        if _start_time(pid) == start:
+            signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+    except OSError:
+        pass
+    finally:
+        os.close(pidfd)
 
 
 # ----------------------------------------------------------------------
@@ -363,7 +401,9 @@ def tree_entry(
     worker["running"] = True
     signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
     os.close(gate_closed)
-    _send(report, ("worker", pid))
+    # Read while the worker can't have been reaped, since only the
+    # supervisor reaps it, so the start time is the worker's own.
+    _send(report, ("worker", pid, _start_time(pid)))
     try:
         os.write(gate_open, b"\0")
     except OSError:
