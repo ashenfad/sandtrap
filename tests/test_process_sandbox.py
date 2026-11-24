@@ -667,6 +667,46 @@ def test_shutdown_after_worker_killed(root):
     # __exit__ calls shutdown() — should not raise
 
 
+def test_shutdown_from_another_thread_ends_an_execution_with_an_error(root):
+    """An execution another thread is waiting on when shutdown() runs
+    returns an errored result, even when the shutdown has closed the
+    connection before the waiting thread reads it again."""
+    ps = ProcessSandbox(Policy(timeout=30.0), filesystem=IsolatedFS(root))
+    ps.__enter__()
+    conn = ps._conn
+    real_poll = multiprocessing.connection.Connection.poll
+    shutting_down = threading.Event()
+    shut_down = threading.Event()
+
+    def poll(self, timeout=0.0):
+        # Hold the waiting thread back until the shutdown is over.
+        if self is conn and shutting_down.is_set():
+            shut_down.wait(30)
+        return real_poll(self, timeout)
+
+    results, raised = [], []
+
+    def run():
+        try:
+            results.append(ps.exec("while True: pass"))
+        except BaseException as exc:  # noqa: BLE001 - the regression raised
+            raised.append(exc)
+
+    with patch.object(multiprocessing.connection.Connection, "poll", poll):
+        thread = threading.Thread(target=run)
+        thread.start()
+        time.sleep(0.5)  # the execution is running
+        shutting_down.set()
+        try:
+            ps.shutdown()
+        finally:
+            shut_down.set()
+        thread.join(timeout=30)
+    assert not thread.is_alive()
+    assert raised == []
+    assert results[0].error is not None
+
+
 def test_double_shutdown(root):
     """Calling shutdown() twice is safe."""
     ps = ProcessSandbox(Policy(timeout=10.0), filesystem=IsolatedFS(root))
