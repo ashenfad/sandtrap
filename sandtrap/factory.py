@@ -30,6 +30,8 @@ def sandbox(
     spool: "bool | str | os.PathLike[str]" = False,
     render_prints: PrintRendering | None = None,
     on_worker_start: Callable[[ProcessSandbox], None] | None = None,
+    supervise_tree: bool = False,
+    tree_grace: float = 1.0,
 ) -> Sandbox | ProcessSandbox:
     """Create a sandbox with the specified isolation level.
 
@@ -137,12 +139,26 @@ def sandbox(
         :class:`~sandtrap.process.sandbox.ProcessSandbox` for the full
         contract. Refused for ``isolation="none"``, which has no worker to
         prepare.
+    supervise_tree:
+        Only for process / kernel isolation, on Linux: each worker runs under
+        a supervisor that ends whatever the worker leaves behind when it
+        exits, and :meth:`ProcessSandbox.drain` confirms every worker's tree
+        is gone. See :class:`~sandtrap.process.sandbox.ProcessSandbox`.
+        Refused for ``isolation="none"``, whose code runs in this process.
+    tree_grace:
+        Seconds a process a supervised worker left behind has between
+        ``SIGTERM`` and ``SIGKILL``.
     """
     if isolation == "none":
         if on_worker_start is not None:
             raise ValueError(
                 'on_worker_start needs a worker; isolation="none" runs in '
                 "this process and has none to prepare"
+            )
+        if supervise_tree:
+            raise ValueError(
+                'supervise_tree needs a worker; isolation="none" runs in this '
+                "process, and what its code starts is this process's own"
             )
         return Sandbox(
             policy,
@@ -173,4 +189,6 @@ def sandbox(
         spool=spool,
         render_prints=render_prints,
         on_worker_start=on_worker_start,
+        supervise_tree=supervise_tree,
+        tree_grace=tree_grace,
     )

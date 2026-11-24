@@ -15,10 +15,12 @@ from .fs import FileSystem, IsolatedFS, VirtualFS
 from .policy import MemberSpec, Policy, PolicyProblem
 from .prints import PrintRendering
 from .process.protocol import RpcProxyMarker, rpc_surface
+from .process.tree import DrainResult
 from .sandbox import ExecResult, IsolationStatus, IsolationUnavailable
 from .sandbox import Sandbox as Sandbox
 
 __all__ = [
+    "DrainResult",
     "ExecResult",
     "FileSystem",
     "IsolatedFS",

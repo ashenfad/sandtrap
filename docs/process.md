@@ -48,6 +48,8 @@ All `sandbox()` parameters are documented in [sandbox.md](sandbox.md). The proce
 
 The last five are ignored under `isolation="none"`, so one config can drive every rung.
 
+`supervise_tree` (Linux only) and `tree_grace` account for every process a worker starts; see [Accounting for what a worker starts](#accounting-for-what-a-worker-starts). `isolation="none"` refuses `supervise_tree`, as it does `on_worker_start`.
+
 ## Running code
 
 ### Synchronous
@@ -229,6 +231,7 @@ If using `VirtualFS` or another non-`IsolatedFS` filesystem, there's no host pat
 - An idle worker observes EOF and exits if the parent process disappears, even while a later worker remains busy. Under `start_method="fork"` this needs care, since each child inherits copies of every active Sandtrap control endpoint and closes them; a worker that inherited nothing has none to close
 - `shutdown()` sends a clean shutdown message; `__exit__` calls `shutdown()` automatically
 - `sb.generation` counts the workers started: `0` before the first, and one more for each replacement
+- `sb.worker_alive` says whether the sandbox has a running worker, which the next execution reaches rather than replacing
 - A worker still running five seconds past its execution's timeout is killed as unresponsive. Time in a host call (a `host_time` registration or an RPC to the parent) doesn't count toward that wait: the worker tells the parent when its clock stops and starts again. A host call that never returns is therefore never killed by this wait; bound it in the host, or call `shutdown()`
 
 ### Preparing every worker
@@ -250,6 +253,41 @@ The setup runs as sandboxed code under the same policy as any other execution, s
 If the hook raises, the worker is killed and the exception propagates from whatever started the worker: entering the context, or the `exec()` that replaced a dead one. Nothing is marked prepared, and the next execution starts a fresh worker and calls the hook again. A worker that dies while the hook runs is not replaced inside it; the hook's executions report the death and the start fails. The broker is never involved: unlike `preload_grants`, nothing the hook does runs before a worker exists, so it may start threads or open connections.
 
 Under `isolation="none"` there is no worker, and the `sandbox()` factory refuses the hook.
+
+### Accounting for what a worker starts
+
+A worker can start processes of its own: a granted library's process pool, a headless browser it renders with, anything a host function launches. Under `isolation="process"` nothing stops it, and under Linux kernel isolation seccomp refuses `execve` but not `fork`. Such a process can outlive its worker, and neither `shutdown()` nor a replacement worker ends it.
+
+`supervise_tree=True` (Linux only) accounts for all of them:
+
+```python
+with sandbox(policy, isolation="process", supervise_tree=True) as sb:
+    sb.exec(job_code)
+    result = sb.drain(timeout=10.0)
+
+if not result.confirmed:
+    retire_this_host()  # what the job started can no longer be accounted for
+```
+
+Each worker runs under a supervisor of its own. The supervisor is forked from wherever the worker would have been (the broker, by default, so the worker still inherits what it preloaded), marks itself a child subreaper, and forks the worker. Anything the worker starts, even a process that double-forks into a session of its own, is reparented to the supervisor when its own parent exits. When the worker exits, for whatever reason (a shutdown, a crash, a kill for being unresponsive, a failed `on_worker_start`), the supervisor sends `SIGTERM` to everything left in its tree, waits `tree_grace` seconds (1 by default), sends `SIGKILL` to whatever remains, and repeats until it has no children at all. Then it reports and exits. The broker sees none of this, so it stays warm for the next sandbox.
+
+`drain(timeout=10.0)` ends the sandbox for good. It starts no worker afterwards: entering the sandbox or executing raises. It shuts the current worker down as `shutdown()` does, then waits up to `timeout` for every supervisor the sandbox started, replaced workers' included, and returns a `DrainResult`:
+
+| `status` | meaning |
+|---|---|
+| `"confirmed"` | every worker has exited, and everything each one started is gone |
+| `"timed_out"` | some tree is still being ended; call `drain()` again to wait longer |
+| `"lost_contact"` | a supervisor exited without confirming its tree, which nothing later recovers |
+
+`result.confirmed` is the first row. `workers`, `helpers` and `killed` count the confirmed trees, the processes they held when their worker exited, and how many of those needed `SIGKILL`.
+
+What it does not cover:
+
+- **Processes this process starts**, an RPC handler's included. They are yours to supervise.
+- **A worker that kills its own supervisor.** It runs as the same user, and nothing stops it. That shows up as `"lost_contact"`, and the worker is killed rather than left running unsupervised.
+- **Other platforms.** macOS has no subreaper, so `supervise_tree=True` raises `IsolationUnavailable` at construction.
+
+Supervision costs one more fork per worker, and one small process for each worker until its tree is gone. `cancel()` still reaches the worker: the supervisor passes the signal on.
 
 ### Host file descriptors
 

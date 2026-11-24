@@ -35,6 +35,11 @@ jobs:
       run: |
         pytest tests/ -v
 
+    - name: Run tests with every worker's tree supervised (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        pytest tests/ -q --supervise-tree
+
     - name: Run linter
       run: |
         ruff check sandtrap/
