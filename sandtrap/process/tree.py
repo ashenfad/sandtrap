@@ -299,10 +299,16 @@ def tree_entry(
     }
     originals = {sig: signal.signal(sig, handler) for sig, handler in handlers.items()}
     blocked = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGUSR1, signal.SIGTERM})
+    # The worker waits at this gate until the parent has its pid, so no
+    # code of the worker's runs while the supervisor is the only one who
+    # could stop it.
+    gate_closed, gate_open = os.pipe()
     try:
         pid = os.fork()
     except OSError as exc:
         signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
+        os.close(gate_closed)
+        os.close(gate_open)
         fail(f"could not start the worker: {exc}")
         return
 
@@ -311,6 +317,13 @@ def tree_entry(
             signal.signal(sig, handler)
         signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
         report.close()
+        os.close(gate_open)
+        try:
+            opened = os.read(gate_closed, 1)
+        finally:
+            os.close(gate_closed)
+        if not opened:
+            return  # the supervisor died first: nothing would supervise this
         try:
             if isinstance(worker_state, bytes):
                 worker_state = pickle.loads(worker_state)
@@ -349,6 +362,14 @@ def tree_entry(
     worker["pid"] = pid
     worker["running"] = True
     signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
+    os.close(gate_closed)
+    _send(report, ("worker", pid))
+    try:
+        os.write(gate_open, b"\0")
+    except OSError:
+        pass  # the worker is gone already; the wait below reaps it
+    finally:
+        os.close(gate_open)
 
     # The supervisor holds none of the worker's channels: the parent learns
     # of the worker's death from EOF on its control pipe, which a copy here
@@ -360,7 +381,6 @@ def tree_entry(
         except OSError:
             pass
 
-    _send(report, ("worker", pid))
     _send(report, ("exit", _wait_for_worker(worker)))
     helpers, killed = _end_tree(grace)
     _send(report, ("drained", helpers, killed))
