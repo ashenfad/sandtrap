@@ -256,6 +256,16 @@ def test_losing_the_supervisor_is_reported(helpers):
 
 
 @linux_only
+def test_a_worker_that_kills_its_supervisor_is_stopped():
+    with _supervised() as sb:
+        worker = _worker_pid(sb)
+        result = sb.exec("import tree_helpers\ntree_helpers.kill_supervisor()")
+        assert result.error is not None  # stopped, not left running
+        assert _wait_until(lambda: not _running(worker))
+        assert sb.drain().status == "lost_contact"
+
+
+@linux_only
 def test_a_drain_that_runs_out_of_time_can_be_resumed(helpers):
     with _supervised(tree_grace=10.0) as sb:
         pid = _spawn(sb, helpers, "1.0", "ignore_term=True")

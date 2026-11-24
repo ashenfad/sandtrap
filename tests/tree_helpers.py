@@ -29,3 +29,13 @@ def spawn(seconds, *, ignore_term=False, detach=False):
 
 def me():
     return os.getpid()
+
+
+def kill_supervisor():
+    """Kill this worker's parent, its supervisor, then stay busy."""
+    import signal
+    import time
+
+    os.kill(os.getppid(), signal.SIGKILL)
+    while True:
+        time.sleep(0.05)
