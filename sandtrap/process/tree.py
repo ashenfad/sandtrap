@@ -195,18 +195,20 @@ class Tree:
     def _lose(self) -> None:
         """The supervisor is gone without confirming the tree."""
         self.lost = True
-        if self.worker_pid is None:
-            # It died before naming a worker, so it was all there was of
-            # this one: its exit status is the one to describe.
-            self._supervisor.join(timeout=1.0)
-            self.exitcode = self._supervisor.exitcode
-        elif not self.worker_exited:
+        if self.worker_pid is not None and not self.worker_exited:
             # Nothing supervises the worker now. Stop it rather than leave
             # it running unaccounted for; what it started stays unknown.
             try:
                 os.kill(self.worker_pid, signal.SIGKILL)
             except OSError:
                 pass
+        # Its pipe closing means it has exited: collect its status, so it
+        # isn't left a zombie of this process.
+        self._supervisor.join(timeout=1.0)
+        if self.worker_pid is None:
+            # It died before naming a worker, so it was all there was of
+            # this one: its exit status is the one to describe.
+            self.exitcode = self._supervisor.exitcode
         self._close()
 
     def _close(self) -> None:
@@ -228,22 +230,20 @@ def tree_entry(
     grace: float,
     conn: Any,
     parent_connections: tuple[Any, ...],
-    policy: Any,
-    filesystem: Any,
-    mode: Any,
-    isolation: Any,
-    snapshot_prints: bool,
-    echo: Any,
     inherited_fds: tuple[int, ...],
-    spool_dir: str | None,
-    render_prints: Any,
+    worker_state: Any,
 ) -> None:
     """Target of a supervised worker's process: fork the worker from here,
     then supervise its tree.
 
+    ``worker_state`` is the rest of the worker's arguments, the policy
+    first: the tuple itself, or its pickle, which only the worker loads so
+    that nothing it imports is imported here first.
+
     Both sides return through the caller's bootstrap, so the worker exits
     exactly as an unsupervised one does, with the same exit status.
     """
+    import pickle
     import traceback
 
     from .protocol import WorkerErrorMsg
@@ -311,6 +311,26 @@ def tree_entry(
             signal.signal(sig, handler)
         signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
         report.close()
+        try:
+            if isinstance(worker_state, bytes):
+                worker_state = pickle.loads(worker_state)
+            (
+                policy,
+                filesystem,
+                mode,
+                isolation,
+                snapshot_prints,
+                echo,
+                _,
+                spool_dir,
+                render_prints,
+            ) = worker_state
+        except BaseException:
+            try:
+                conn.send(WorkerErrorMsg(message=traceback.format_exc()))
+            except BaseException:
+                pass  # the parent sees EOF and describes the exit
+            return
         _worker_entry(
             conn,
             parent_connections,

@@ -18,6 +18,7 @@ import traceback
 import warnings
 import weakref
 from collections.abc import Callable, Collection, Mapping
+from multiprocessing.reduction import ForkingPickler
 from types import ModuleType
 from typing import Any, Literal
 
@@ -925,9 +926,27 @@ class ProcessSandbox:
         report_recv = report_send = None
         if self._supervise_tree:
             report_recv, report_send = ctx.Pipe(duplex=False)
+            # The supervisor forks the worker, so it must not hold what the
+            # worker would import: unpickling a policy imports its grants,
+            # whose import-time threads or native state the fork would
+            # carry over. Under a non-fork start method that state crosses
+            # as bytes, which only the worker unpickles; under fork nothing
+            # is unpickled and this process's state is inherited anyway.
+            # The channels cross as themselves, since passing their
+            # descriptors is multiprocessing's to do.
+            worker_state: Any = worker_args[2:]
+            if self._start_method != "fork":
+                worker_state = bytes(ForkingPickler.dumps(worker_state))
             process = ctx.Process(
                 target=tree_entry,
-                args=(report_send, self._tree_grace, *worker_args),
+                args=(
+                    report_send,
+                    self._tree_grace,
+                    child_conn,
+                    parent_connections,
+                    inherited_fds,
+                    worker_state,
+                ),
                 daemon=True,
             )
         else:

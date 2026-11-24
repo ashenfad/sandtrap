@@ -15,7 +15,7 @@ import pytest
 from sandtrap import DrainResult, IsolationUnavailable, Policy, sandbox
 from sandtrap.process.sandbox import ProcessSandbox
 
-from . import tree_helpers
+from . import tree_helpers, tree_import_probe
 
 linux_only = pytest.mark.skipif(
     not sys.platform.startswith("linux"), reason="supervise_tree is Linux-only"
@@ -40,7 +40,7 @@ def _stat(pid):
     try:
         with open(f"/proc/{pid}/stat") as f:
             fields = f.read().rsplit(")", 1)[1].split()
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):  # gone, or going
         return None
     return fields[0], int(fields[1])
 
@@ -246,6 +246,9 @@ def test_losing_the_supervisor_is_reported(helpers):
         assert not result.confirmed
         # Nothing later recovers it.
         assert sb.drain(timeout=1.0).status == "lost_contact"
+        # The dead supervisor's status is collected, not left a zombie.
+        (tree,) = sb._trees
+        assert tree._supervisor.exitcode == -signal.SIGKILL
     # The worker is stopped rather than left unsupervised; what it started
     # is not accounted for.
     assert _wait_until(lambda: not _running(worker))
@@ -304,6 +307,22 @@ def test_drain_inside_and_after_the_block_agree():
         assert sb.exec("x = 1").error is None
     # shutdown() already stopped the worker; drain still confirms its tree.
     assert sb.drain() == DrainResult("confirmed", workers=1)
+
+
+@linux_only
+def test_grants_are_imported_by_the_worker_not_its_supervisor():
+    """A grant's import-time code runs in the process that imports it, and
+    a supervisor that imported one would fork the worker from that state."""
+    policy = _policy()
+    policy.module(tree_import_probe, name="probe")
+    with ProcessSandbox(policy, isolation="none", supervise_tree=True) as sb:
+        if sb._start_method == "fork":
+            pytest.skip("a forked worker inherits this process's imports")
+        result = sb.exec("import probe\nwhere = probe.where()")
+        assert result.error is None, result.error
+        sb.drain()
+    worker, imported_in = result.namespace["where"]
+    assert imported_in == worker
 
 
 @linux_only
