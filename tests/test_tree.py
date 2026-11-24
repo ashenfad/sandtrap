@@ -6,6 +6,7 @@ from __future__ import annotations
 import multiprocessing.forkserver
 import os
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -14,6 +15,7 @@ import pytest
 
 from sandtrap import DrainResult, IsolationUnavailable, Policy, sandbox
 from sandtrap.process.sandbox import ProcessSandbox
+from sandtrap.process.tree import Tree, _start_time
 
 from . import tree_helpers, tree_import_probe
 
@@ -263,6 +265,55 @@ def test_a_worker_that_kills_its_supervisor_is_stopped():
         assert result.error is not None  # stopped, not left running
         assert _wait_until(lambda: not _running(worker))
         assert sb.drain().status == "lost_contact"
+
+
+class _DeadSupervisor:
+    pid = None
+    exitcode = -signal.SIGKILL
+
+    def join(self, timeout=None):
+        pass
+
+
+class _Report:
+    """A report pipe that names a worker, then closes as a dead
+    supervisor's does."""
+
+    def __init__(self, *messages):
+        self._messages = list(messages)
+
+    def poll(self, timeout=0):
+        return True
+
+    def recv(self):
+        if self._messages:
+            return self._messages.pop(0)
+        raise EOFError
+
+    def close(self):
+        pass
+
+
+@linux_only
+@pytest.mark.parametrize("same", [True, False], ids=["worker", "reused-pid"])
+def test_a_lost_worker_is_killed_only_while_its_pid_names_it(same):
+    # The process at the reported pid: the worker itself, or another that
+    # took the pid after the worker was reaped, which started later.
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        start = _start_time(proc.pid)
+        reported = start if same else start - 1
+        tree = Tree(_DeadSupervisor(), _Report(("worker", proc.pid, reported)))
+        tree.wait_drained(timeout=1.0)
+        assert tree.lost
+        if same:
+            assert _wait_until(lambda: not _running(proc.pid))
+        else:
+            time.sleep(0.2)
+            assert _running(proc.pid)
+    finally:
+        proc.kill()
+        proc.wait()
 
 
 @linux_only

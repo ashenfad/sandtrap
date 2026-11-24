@@ -284,7 +284,7 @@ Each worker runs under a supervisor of its own. The supervisor is forked from wh
 What it does not cover:
 
 - **Processes this process starts**, an RPC handler's included. They are yours to supervise.
-- **A worker that kills its own supervisor.** It runs as the same user, and nothing stops it. That shows up as `"lost_contact"`, and the worker is killed rather than left running unsupervised.
+- **A worker that kills its own supervisor.** It runs as the same user, and nothing stops it. That shows up as `"lost_contact"`, and the worker is killed rather than left running unsupervised. The kill goes through a pidfd, after checking the process's start time, so it never reaches another process that has since taken the worker's pid. A kernel without pidfds (before 5.3) leaves the worker running.
 - **Other platforms.** macOS has no subreaper, so `supervise_tree=True` raises `IsolationUnavailable` at construction.
 
 Supervision costs one more fork per worker, and one small process for each worker until its tree is gone. `cancel()` still reaches the worker: the supervisor passes the signal on.
