@@ -5,8 +5,11 @@ from __future__ import annotations
 
 import asyncio
 import math
+import multiprocessing.connection
+import os
 import threading
 import time
+from unittest.mock import patch
 
 import pytest
 
@@ -24,6 +27,10 @@ RUNNERS = ("exec", "aexec")
 
 # Killing and reaping a worker, on a loaded CI machine.
 SLACK = 3.0
+
+# How long a stalled receive waits for more of its frame when nothing
+# ends it: far past any deadline these tests set.
+STALL = 10.0
 
 
 class Slow:
@@ -55,6 +62,24 @@ def _timed(sb, runner, source, **kwargs):
     start = time.monotonic()
     result = _run(sb, runner, source, **kwargs)
     return result, time.monotonic() - start
+
+
+def _patch_recv(sb, after):
+    """Patch ``Connection.recv`` so that, on ``sb``'s connection only, each
+    message received goes through ``after(conn, msg)`` before it is
+    returned."""
+    conn = sb._conn
+    real_recv = multiprocessing.connection.Connection.recv
+
+    def recv(self):
+        msg = real_recv(self)
+        return after(self, msg) if self is conn else msg
+
+    return patch.object(multiprocessing.connection.Connection, "recv", recv)
+
+
+def _watchdogs():
+    return [t for t in threading.enumerate() if t.name == "sandtrap-deadline"]
 
 
 @pytest.mark.parametrize("runner", RUNNERS)
@@ -106,6 +131,58 @@ def test_a_result_after_an_rpc_past_the_deadline_is_not_a_success(isolation):
     assert took >= 1.0
 
 
+def _received_late(conn, msg):
+    time.sleep(1.0)  # the receive returns its message past the deadline
+    return msg
+
+
+@pytest.mark.parametrize("isolation", ISOLATIONS)
+def test_a_result_received_past_the_deadline_is_not_a_success(isolation):
+    """A receive under way reads its frame to the end, however long that
+    takes; a result whose receipt ends past the deadline doesn't come back
+    as a success."""
+    with _sandbox(isolation) as sb:
+        with _patch_recv(sb, _received_late):
+            result, took = _timed(sb, "exec", "ok = True", deadline=0.3)
+        assert not sb.worker_alive
+    assert isinstance(result.error, StDeadline)
+    assert "ok" not in result.namespace
+    assert took < 1.0 + SLACK
+
+
+@pytest.mark.parametrize("isolation", ISOLATIONS)
+def test_a_spooled_result_received_past_the_deadline_leaves_no_files(isolation):
+    """A late result is discarded, and so are the files it spooled, which
+    nothing would read before the sandbox closes."""
+    with _sandbox(isolation, spool=True) as sb:
+        with _patch_recv(sb, _received_late):
+            result = sb.exec("ok = bytes(200_000)", deadline=0.3)
+        assert isinstance(result.error, StDeadline)
+        assert os.listdir(sb._spool_dir) == []
+
+
+def _stalled(conn, msg):
+    # The rest of the frame never comes: the receive waits on the pipe until
+    # the worker writes again, which it doesn't, or its end closes.
+    if conn.poll(STALL):
+        raise EOFError  # readable with nothing sent: the worker is gone
+    return msg
+
+
+@pytest.mark.parametrize("isolation", ISOLATIONS)
+def test_a_stalled_receive_ends_at_the_deadline(isolation):
+    """A receive whose frame stops arriving would wait for as long as the
+    worker lives; at the deadline the worker is killed, which ends it."""
+    with _sandbox(isolation) as sb:
+        with _patch_recv(sb, _stalled):
+            result, took = _timed(sb, "exec", "ok = True", deadline=0.5)
+        assert not sb.worker_alive
+    assert isinstance(result.error, StDeadline)
+    assert "ok" not in result.namespace
+    assert took < 0.5 + SLACK
+    assert _watchdogs() == []
+
+
 @pytest.mark.parametrize("runner", RUNNERS)
 @pytest.mark.parametrize("isolation", ISOLATIONS)
 def test_an_execution_within_its_deadline_keeps_its_worker(isolation, runner):
@@ -113,6 +190,7 @@ def test_an_execution_within_its_deadline_keeps_its_worker(isolation, runner):
         result = _run(sb, runner, "x = 1", deadline=10.0)
         assert result.error is None, result.error
         assert result.namespace["x"] == 1
+        assert _watchdogs() == []  # stopped with the call, not at its deadline
         generation = sb.generation
         assert _run(sb, runner, "y = 2").namespace["y"] == 2
         assert sb.generation == generation

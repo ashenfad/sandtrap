@@ -249,7 +249,7 @@ if isinstance(result.error, StDeadline):
 ```
 
 - It counts from when the code reaches the worker, and nothing pauses it: neither a blocking call nor host time.
-- At the deadline the worker is killed. The error is a `StDeadline`, a subclass of `StTimeout`, and the result carries no namespace. The next execution starts a fresh worker, as after a crash, so it pays for a worker start (and `on_worker_start`).
+- At the deadline the worker is killed, even part-way through sending its result. The error is a `StDeadline`, a subclass of `StTimeout`, and the result carries no namespace: a result that finishes arriving after the deadline is discarded, along with any files it spooled. The next execution starts a fresh worker, as after a crash, so it pays for a worker start (and `on_worker_start`).
 - An RPC handler runs in this process, in the execution's own wait, so the deadline can't interrupt one. It is enforced as soon as the handler returns: a late result is never returned as a success, but a slow handler delays the error. Bound host calls in the host.
 - The call returns once the worker has exited. Under `supervise_tree` it also waits for the worker's tree to be confirmed gone, up to `tree_grace` plus a second, so whatever the execution started has ended when the call returns; `drain()` accounts for a tree still being ended after that. Without `supervise_tree`, processes the worker started are left running.
 - The timeout still applies, and still stops code that reaches checkpoints, which keeps its worker. A deadline above the timeout is a backstop for code that doesn't.

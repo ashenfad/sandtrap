@@ -48,7 +48,7 @@ from .protocol import (
     WorkerErrorMsg,
     partition_namespace,
 )
-from .spool import SpooledNamespace
+from .spool import SpooledNamespace, discard_spooled
 from .tree import DrainResult, Tree, require_supervision, tree_entry
 
 # Type alias for RPC handler callables registered with the sandbox.
@@ -563,6 +563,65 @@ def _neutralize_inherited_fds(fds: tuple[int, ...]) -> None:
         finally:
             if devnull not in fds:
                 os.close(devnull)
+
+
+class _ReceiveWatchdog:
+    """Ends an execution's receive that is still blocked at its deadline.
+
+    A receive from the worker can block past any limit the waiting loop
+    checks: a frame that has started to arrive is read to its end. At the
+    deadline this kills the worker the execution was sent to, whose end of
+    the pipe then closes, so the receive ends with ``EOFError``.
+
+    One thread serves every receive of an execution. It acts only while a
+    receive is under way, so the worker is never killed during an RPC
+    handler, which runs between receives; and :meth:`begin` refuses to
+    start a receive at or past the deadline, so none goes unwatched.
+    :meth:`close` stops the thread and waits for it.
+    """
+
+    def __init__(self, process: Any, stop_at: float) -> None:
+        self._process = process
+        self._stop_at = stop_at
+        self._cond = threading.Condition()
+        self._receiving = False
+        self._closed = False
+        self._thread = threading.Thread(
+            target=self._run, name="sandtrap-deadline", daemon=True
+        )
+        self._thread.start()
+
+    def begin(self) -> bool:
+        """Mark a receive as started: ``False``, and nothing marked, at or
+        past the deadline."""
+        with self._cond:
+            if time.monotonic() >= self._stop_at:
+                return False
+            self._receiving = True
+            return True
+
+    def end(self) -> None:
+        with self._cond:
+            self._receiving = False
+
+    def close(self) -> None:
+        """Stop the thread and wait for it, so a kill it began has been
+        sent. Closing again does nothing more."""
+        with self._cond:
+            self._closed = True
+            self._cond.notify()
+        self._thread.join()
+
+    def _run(self) -> None:
+        with self._cond:
+            while not self._closed:
+                remaining = self._stop_at - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._cond.wait(remaining)
+            kill = self._receiving and not self._closed
+        if kill and self._process is not None:
+            self._process.kill()
 
 
 class ProcessSandbox:
@@ -1263,9 +1322,10 @@ class ProcessSandbox:
         granted library waiting on a socket, ``time.sleep``) runs on past
         it until the call returns. The deadline is kept by this process
         instead, and stops for neither that nor host time. A late result
-        is never returned as a success: an RPC handler runs here, in this
-        call's wait, so the deadline can't land during one, and is
-        enforced as soon as it returns.
+        is never returned as a success: one still arriving at the deadline
+        is cut off by the kill, and one received after it is discarded. An
+        RPC handler runs here, in this call's wait, so the deadline can't
+        land during one, and is enforced as soon as it returns.
 
         A call killed at its deadline returns once the worker has exited
         and, under ``supervise_tree``, once its supervisor confirms the
@@ -1372,86 +1432,124 @@ class ProcessSandbox:
         stop_at = None if deadline is None else time.monotonic() + deadline
         paused_at: float | None = None
         died = ExecResult(error=RuntimeError("Worker process died during execution"))
-        while True:
-            now = time.monotonic()
-            if stop_at is not None and now >= stop_at:
-                return self._kill_call(
-                    conn,
-                    process,
-                    StDeadline(
-                        f"Execution exceeded its {deadline}s deadline; "
-                        "its worker was killed"
-                    ),
-                )
-            if paused_at is None and now >= unresponsive_at:
-                return self._kill_call(
-                    conn, process, RuntimeError("Worker process became unresponsive")
-                )
-            wait = 1.0 if paused_at is not None else min(1.0, unresponsive_at - now)
-            if stop_at is not None:
-                wait = min(wait, stop_at - now)
-            try:
-                if not process or not process.is_alive():
-                    if not conn.poll(0.1):  # else a final message to take
-                        self._cleanup(conn)
-                        return died
-                elif not conn.poll(wait):
-                    continue
-                msg = conn.recv()
-            except (EOFError, OSError):
-                self._cleanup(conn)
-                return died
+        # A receive reads a frame to its end once it has begun, so with a
+        # deadline a watchdog stands by to end one still blocked when it
+        # passes. What a receive returns at or past the deadline is
+        # discarded, so a late result is never a success.
+        watchdog = None if stop_at is None else _ReceiveWatchdog(process, stop_at)
 
-            if isinstance(msg, ResultMsg):
-                namespace: Mapping[str, Any] = msg.namespace
-                sizes: dict[str, int] = {}
-                if msg.spooled is not None and self._spool_dir is not None:
-                    namespace = SpooledNamespace(self._spool_dir, msg.spooled)
-                    sizes = namespace.sizes
-                result = ExecResult(
-                    namespace=namespace,
-                    sizes=sizes,
-                    stdout=msg.stdout,
-                    stderr=msg.stderr,
-                    error=msg.error,
-                    ticks=msg.ticks,
-                    prints=msg.prints,
-                    rendered_prints=msg.rendered_prints,
-                    print_count=msg.print_count,
-                    isolation=self._isolation_status,
-                    dropped=msg.dropped,
-                )
-                return result
-            if isinstance(msg, WorkerErrorMsg):
-                return ExecResult(error=RuntimeError(f"Worker error:\n{msg.message}"))
-            if isinstance(msg, HostTimeMsg):
-                if msg.paused:
-                    if paused_at is None:
-                        paused_at = time.monotonic()
-                elif paused_at is not None:
-                    unresponsive_at += time.monotonic() - paused_at
-                    paused_at = None
-                continue
-            if isinstance(msg, RpcCallMsg):
-                # Extend the unresponsive limit by the handler's wall-clock
-                # duration so host-side time isn't charged to the
-                # worker's exec budget — but only by that exact
-                # amount.  Resetting the limit to a fresh
-                # ``timeout + grace`` window would let a worker spam
-                # RPC calls and dodge the wall-clock limit. A worker
-                # whose clock is stopped for the call is already
-                # refunded when it starts again.
-                rpc_start = time.monotonic()
-                self._dispatch_rpc(msg, conn)
-                if paused_at is None:
-                    unresponsive_at += time.monotonic() - rpc_start
-                continue
-
-            warnings.warn(
-                f"Unknown protocol message {type(msg).__name__!r}; ignoring",
-                RuntimeWarning,
-                stacklevel=2,
+        def late() -> ExecResult:
+            # The watchdog stops first, so nothing else signals the worker
+            # while it is killed and reaped here.
+            if watchdog is not None:
+                watchdog.close()
+            return self._kill_call(
+                conn,
+                process,
+                StDeadline(
+                    f"Execution exceeded its {deadline}s deadline; "
+                    "its worker was killed"
+                ),
             )
+
+        try:
+            while True:
+                now = time.monotonic()
+                if stop_at is not None and now >= stop_at:
+                    return late()
+                if paused_at is None and now >= unresponsive_at:
+                    return self._kill_call(
+                        conn,
+                        process,
+                        RuntimeError("Worker process became unresponsive"),
+                    )
+                wait = 1.0 if paused_at is not None else min(1.0, unresponsive_at - now)
+                if stop_at is not None:
+                    wait = min(wait, stop_at - now)
+                try:
+                    if not process or not process.is_alive():
+                        if not conn.poll(0.1):  # else a final message to take
+                            self._cleanup(conn)
+                            return died
+                    elif not conn.poll(wait):
+                        continue
+                    if watchdog is not None and not watchdog.begin():
+                        continue  # the deadline has passed
+                    try:
+                        msg = conn.recv()
+                    finally:
+                        if watchdog is not None:
+                            watchdog.end()
+                except (EOFError, OSError):
+                    if stop_at is not None and time.monotonic() >= stop_at:
+                        return late()  # the watchdog's kill, or late anyway
+                    self._cleanup(conn)
+                    return died
+                if stop_at is not None and time.monotonic() >= stop_at:
+                    self._discard_spooled(msg)
+                    return late()
+
+                if isinstance(msg, ResultMsg):
+                    namespace: Mapping[str, Any] = msg.namespace
+                    sizes: dict[str, int] = {}
+                    if msg.spooled is not None and self._spool_dir is not None:
+                        namespace = SpooledNamespace(self._spool_dir, msg.spooled)
+                        sizes = namespace.sizes
+                    result = ExecResult(
+                        namespace=namespace,
+                        sizes=sizes,
+                        stdout=msg.stdout,
+                        stderr=msg.stderr,
+                        error=msg.error,
+                        ticks=msg.ticks,
+                        prints=msg.prints,
+                        rendered_prints=msg.rendered_prints,
+                        print_count=msg.print_count,
+                        isolation=self._isolation_status,
+                        dropped=msg.dropped,
+                    )
+                    return result
+                if isinstance(msg, WorkerErrorMsg):
+                    return ExecResult(
+                        error=RuntimeError(f"Worker error:\n{msg.message}")
+                    )
+                if isinstance(msg, HostTimeMsg):
+                    if msg.paused:
+                        if paused_at is None:
+                            paused_at = time.monotonic()
+                    elif paused_at is not None:
+                        unresponsive_at += time.monotonic() - paused_at
+                        paused_at = None
+                    continue
+                if isinstance(msg, RpcCallMsg):
+                    # Extend the unresponsive limit by the handler's wall-clock
+                    # duration so host-side time isn't charged to the
+                    # worker's exec budget — but only by that exact
+                    # amount.  Resetting the limit to a fresh
+                    # ``timeout + grace`` window would let a worker spam
+                    # RPC calls and dodge the wall-clock limit. A worker
+                    # whose clock is stopped for the call is already
+                    # refunded when it starts again.
+                    rpc_start = time.monotonic()
+                    self._dispatch_rpc(msg, conn)
+                    if paused_at is None:
+                        unresponsive_at += time.monotonic() - rpc_start
+                    continue
+
+                warnings.warn(
+                    f"Unknown protocol message {type(msg).__name__!r}; ignoring",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+        finally:
+            if watchdog is not None:
+                watchdog.close()
+
+    def _discard_spooled(self, msg: Any) -> None:
+        """Remove the spooled files of a result that is never returned,
+        which nothing would read before the sandbox closes."""
+        if isinstance(msg, ResultMsg) and msg.spooled and self._spool_dir is not None:
+            discard_spooled(self._spool_dir, msg.spooled)
 
     def _kill_call(self, conn: Any, process: Any, error: BaseException) -> ExecResult:
         """End an execution that ran out of time with ``error``. It kills
