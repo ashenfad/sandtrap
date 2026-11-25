@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import threading
 import time
 
 import pytest
@@ -141,6 +142,53 @@ def test_the_timeout_still_stops_code_that_runs(isolation):
         assert not isinstance(result.error, StDeadline)
         assert sb.worker_alive
         assert sb.generation == generation
+
+
+@pytest.mark.parametrize("isolation", ISOLATIONS)
+def test_a_deadline_during_a_shutdown_from_another_thread(isolation):
+    """A shutdown waiting on the worker while the execution's deadline
+    kills it and clears the sandbox's fields finishes without an error."""
+    sb = _sandbox(isolation)
+    sb.__enter__()
+    cleaned = threading.Event()
+    real_cleanup = sb._cleanup
+
+    def cleanup(conn=None):
+        real_cleanup(conn)
+        if threading.current_thread() is not threading.main_thread():
+            cleaned.set()
+
+    class Held:
+        """The worker, whose wait in the shutdown ends only once the
+        execution has cleaned up after its deadline."""
+
+        def __init__(self, process):
+            self._process = process
+
+        def __getattr__(self, name):
+            return getattr(self._process, name)
+
+        def join(self, timeout=None):
+            self._process.join(timeout)
+            if threading.current_thread() is threading.main_thread():
+                cleaned.wait(10)
+
+    sb._cleanup = cleanup
+    sb._process = Held(sb._process)
+    results = []
+    thread = threading.Thread(
+        target=lambda: results.append(
+            sb.exec("import time\ntime.sleep(30)", deadline=0.5)
+        )
+    )
+    thread.start()
+    time.sleep(0.2)  # the worker is in the call
+    sb.shutdown()
+    thread.join(timeout=30)
+    assert cleaned.is_set()
+    assert not thread.is_alive()
+    assert isinstance(results[0].error, StDeadline)
+    assert not sb.worker_alive
 
 
 @pytest.mark.parametrize(

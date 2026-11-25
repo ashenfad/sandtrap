@@ -1135,16 +1135,20 @@ class ProcessSandbox:
     def shutdown(self) -> None:
         """Shut down the worker process cleanly."""
         self._started = False  # exec() raises again until re-entered
-        if self._conn is not None:
+        # Its own references: an execution another thread is waiting on
+        # can end the worker meanwhile (its deadline, say) and clear the
+        # sandbox's fields while this waits on it.
+        conn, process = self._conn, self._process
+        if conn is not None:
             try:
-                self._conn.send(ShutdownMsg())
+                conn.send(ShutdownMsg())
             except (OSError, BrokenPipeError):
                 pass
-        if self._process is not None:
-            self._process.join(timeout=5.0)
-            if self._process.is_alive():
-                self._process.kill()
-                self._process.join(timeout=2.0)
+        if process is not None:
+            process.join(timeout=5.0)
+            if process.is_alive():
+                process.kill()
+                process.join(timeout=2.0)
         self._cleanup()
         # Values never read go with it: their results say so if asked.
         self._remove_spool_dir()
