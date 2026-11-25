@@ -1325,7 +1325,8 @@ class ProcessSandbox:
         is never returned as a success: one still arriving at the deadline
         is cut off by the kill, and one received after it is discarded. An
         RPC handler runs here, in this call's wait, so the deadline can't
-        land during one, and is enforced as soon as it returns.
+        land during one, or while its return value is pickled and sent
+        back; it is enforced as soon as that is done.
 
         A call killed at its deadline returns once the worker has exited
         and, under ``supervise_tree``, once its supervisor confirms the
