@@ -22,13 +22,14 @@ from multiprocessing.reduction import ForkingPickler
 from types import ModuleType
 from typing import Any, Literal
 
-from ..errors import StForkUnsafe, StPolicyNotPortable
+from ..errors import StDeadline, StForkUnsafe, StPolicyNotPortable
 from ..policy import Policy
 from ..prints import PrintRendering
 from ..sandbox import (
     ExecResult,
     IsolationStatus,
     IsolationUnavailable,
+    _validate_deadline,
     _validate_echo,
     _validate_keep,
     _validate_mode,
@@ -62,6 +63,11 @@ _READY_TIMEOUT = 30.0
 # How long past its timeout an execution's worker is waited for before it
 # is killed as unresponsive (stuck serializing its result, say).
 _UNRESPONSIVE_GRACE = 5.0
+
+# How long past ``tree_grace`` a killed execution waits for its supervisor
+# to confirm the worker's tree is gone: the supervisor needs a round or two
+# after the SIGKILL, and a report.
+_TREE_SETTLE = 1.0
 
 # Parent-side control connections owned by live Sandtrap workers. A later
 # fork inherits these endpoints, so each new child must close its copies or
@@ -1223,6 +1229,7 @@ class ProcessSandbox:
         echo: Literal["none", "last", "all"] | None = None,
         keep: Collection[str] | None = None,
         timeout: float | None = None,
+        deadline: float | None = None,
     ) -> ExecResult:
         """Execute source code in the sandboxed subprocess.
 
@@ -1244,6 +1251,24 @@ class ProcessSandbox:
         only -- see :meth:`sandtrap.Sandbox.exec`. The wait for an
         unresponsive worker follows it.
 
+        ``deadline`` is a hard limit on this call, in seconds from when
+        the code reaches the worker (``None``, the default, sets none). At
+        the deadline the worker is killed and the result's error is a
+        :class:`~sandtrap.StDeadline`, which is a ``StTimeout``. The
+        timeout is checked as the code runs, so code blocked in a call (a
+        granted library waiting on a socket, ``time.sleep``) runs on past
+        it until the call returns. The deadline is kept by this process
+        instead, and stops for neither that nor host time. A late result
+        is never returned as a success: an RPC handler runs here, in this
+        call's wait, so the deadline can't land during one, and is
+        enforced as soon as it returns.
+
+        A call killed at its deadline returns once the worker has exited
+        and, under ``supervise_tree``, once its supervisor confirms the
+        worker's tree is gone or ``tree_grace`` plus a second has passed;
+        :meth:`drain` accounts for a tree still being ended. The next
+        execution starts a fresh worker, as after a crash.
+
         If a previous execution killed the worker (segfault, OOM,
         seccomp violation), a fresh worker is spawned transparently —
         a crash costs the crashing turn, not the sandbox. A fresh
@@ -1253,6 +1278,7 @@ class ProcessSandbox:
             _validate_echo(echo)  # fail here, not as worker-error noise
         keep = _validate_keep(keep)  # ditto
         timeout = _validate_timeout(timeout)  # ditto
+        deadline = _validate_deadline(deadline)  # ditto
         _validate_modules(self._policy, modules)  # ditto
         if not self._started:
             self._refuse_if_drained()
@@ -1306,54 +1332,66 @@ class ProcessSandbox:
                 error=RuntimeError("Worker process died during execution")
             )
         return self._await_result(
-            conn, process, self._policy.timeout if timeout is None else timeout
+            conn,
+            process,
+            self._policy.timeout if timeout is None else timeout,
+            deadline,
         )
 
-    def _await_result(self, conn: Any, process: Any, timeout: float) -> ExecResult:
+    def _await_result(
+        self, conn: Any, process: Any, timeout: float, deadline: float | None = None
+    ) -> ExecResult:
         """Receive messages from the worker until execution finishes.
 
         Dispatches RPC calls (``RpcCallMsg``) inline by invoking the
         registered handler and replying with ``RpcReturnMsg``.
-        Returns when ``ResultMsg`` arrives or the worker dies /
-        becomes unresponsive.
+        Returns when ``ResultMsg`` arrives, or the worker dies, becomes
+        unresponsive or outruns ``deadline`` (seconds from now).
 
         Unknown message types are warned-and-ignored so future
         protocol additions (e.g. streamed prints) don't break older
         parents.
         """
-        # Poll with a deadline so we don't hang forever if the worker
+        # Poll with a time limit so we don't hang forever if the worker
         # becomes unresponsive (e.g., stuck serializing the result).
         # Grace period covers IPC overhead after the sandbox timeout
-        # fires. Host time is not the execution's, so the deadline
-        # moves with it: it is held while the worker's clock is stopped
-        # (a host call in the worker, an RPC included), and pushed back
-        # by exactly that long when it starts again.
+        # fires. Host time is not the execution's, so that limit moves
+        # with it: it is held while the worker's clock is stopped (a
+        # host call in the worker, an RPC included), and pushed back by
+        # exactly that long when it starts again. The caller's deadline,
+        # if it set one, is a second limit that nothing moves.
         # ``conn`` and ``process`` are this call's worker, not the
         # sandbox's fields: a shutdown from another thread may clear those
         # while this waits, and the worker going that way is a death like
         # any other.
-        deadline = time.monotonic() + timeout + _UNRESPONSIVE_GRACE
+        unresponsive_at = time.monotonic() + timeout + _UNRESPONSIVE_GRACE
+        stop_at = None if deadline is None else time.monotonic() + deadline
         paused_at: float | None = None
         died = ExecResult(error=RuntimeError("Worker process died during execution"))
         while True:
             now = time.monotonic()
-            if paused_at is None and now >= deadline:
-                # This call's worker, whatever the sandbox holds by now.
-                if process is not None and process.is_alive():
-                    process.kill()
-                    process.join(timeout=2.0)
-                self._cleanup(conn)
-                return ExecResult(
-                    error=RuntimeError("Worker process became unresponsive")
+            if stop_at is not None and now >= stop_at:
+                return self._kill_call(
+                    conn,
+                    process,
+                    StDeadline(
+                        f"Execution exceeded its {deadline}s deadline; "
+                        "its worker was killed"
+                    ),
                 )
+            if paused_at is None and now >= unresponsive_at:
+                return self._kill_call(
+                    conn, process, RuntimeError("Worker process became unresponsive")
+                )
+            wait = 1.0 if paused_at is not None else min(1.0, unresponsive_at - now)
+            if stop_at is not None:
+                wait = min(wait, stop_at - now)
             try:
                 if not process or not process.is_alive():
                     if not conn.poll(0.1):  # else a final message to take
                         self._cleanup(conn)
                         return died
-                elif not conn.poll(
-                    1.0 if paused_at is not None else min(1.0, deadline - now)
-                ):
+                elif not conn.poll(wait):
                     continue
                 msg = conn.recv()
             except (EOFError, OSError):
@@ -1387,14 +1425,14 @@ class ProcessSandbox:
                     if paused_at is None:
                         paused_at = time.monotonic()
                 elif paused_at is not None:
-                    deadline += time.monotonic() - paused_at
+                    unresponsive_at += time.monotonic() - paused_at
                     paused_at = None
                 continue
             if isinstance(msg, RpcCallMsg):
-                # Extend the deadline by the handler's wall-clock
+                # Extend the unresponsive limit by the handler's wall-clock
                 # duration so host-side time isn't charged to the
                 # worker's exec budget — but only by that exact
-                # amount.  Resetting the deadline to a fresh
+                # amount.  Resetting the limit to a fresh
                 # ``timeout + grace`` window would let a worker spam
                 # RPC calls and dodge the wall-clock limit. A worker
                 # whose clock is stopped for the call is already
@@ -1402,7 +1440,7 @@ class ProcessSandbox:
                 rpc_start = time.monotonic()
                 self._dispatch_rpc(msg, conn)
                 if paused_at is None:
-                    deadline += time.monotonic() - rpc_start
+                    unresponsive_at += time.monotonic() - rpc_start
                 continue
 
             warnings.warn(
@@ -1410,6 +1448,21 @@ class ProcessSandbox:
                 RuntimeWarning,
                 stacklevel=2,
             )
+
+    def _kill_call(self, conn: Any, process: Any, error: BaseException) -> ExecResult:
+        """End an execution that ran out of time with ``error``. It kills
+        the worker the execution was sent to, never the one the sandbox
+        holds by then: a shutdown from another thread may have put a new
+        one in its place. Under ``supervise_tree`` it also waits, a little
+        past ``tree_grace``, for that worker's tree to be confirmed gone,
+        so what the execution started has ended when its result is back."""
+        if process is not None and process.is_alive():
+            process.kill()
+            process.join(timeout=2.0)
+        if isinstance(process, Tree):
+            process.wait_drained(self._tree_grace + _TREE_SETTLE)
+        self._cleanup(conn)
+        return ExecResult(error=error)
 
     def _dispatch_rpc(self, msg: RpcCallMsg, conn: Any) -> None:
         """Invoke the named handler and send the result back.
@@ -1462,7 +1515,7 @@ class ProcessSandbox:
             try:
                 conn.send(RpcReturnMsg(call_id=call_id, error=fallback))
             except Exception:
-                # Connection itself is wedged; let the deadline kick in.
+                # Connection itself is wedged; let the time limit kick in.
                 pass
 
     async def aexec(
@@ -1476,6 +1529,7 @@ class ProcessSandbox:
         echo: Literal["none", "last", "all"] | None = None,
         keep: Collection[str] | None = None,
         timeout: float | None = None,
+        deadline: float | None = None,
     ) -> ExecResult:
         """Execute source code asynchronously in the sandboxed subprocess.
 
@@ -1486,6 +1540,7 @@ class ProcessSandbox:
             _validate_echo(echo)  # fail on the calling task, not in the executor
         keep = _validate_keep(keep)  # ditto
         timeout = _validate_timeout(timeout)  # ditto
+        deadline = _validate_deadline(deadline)  # ditto
         _validate_modules(self._policy, modules)  # ditto
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
@@ -1499,6 +1554,7 @@ class ProcessSandbox:
                 echo=echo,
                 keep=keep,
                 timeout=timeout,
+                deadline=deadline,
             ),
         )
 

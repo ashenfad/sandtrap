@@ -273,6 +273,7 @@ All sandbox-specific errors inherit from `StError`:
 StError
 ├── StValidationError   # invalid AST (before execution)
 ├── StTimeout           # wall-clock timeout exceeded
+│   └── StDeadline      # a process worker outran its hard deadline and was killed
 ├── StTickLimit         # tick limit exceeded
 ├── StCancelled         # sandbox.cancel() called
 └── StLostWrite         # a file closed implicitly failed to save (also an OSError)

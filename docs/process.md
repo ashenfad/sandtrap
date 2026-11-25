@@ -232,7 +232,28 @@ If using `VirtualFS` or another non-`IsolatedFS` filesystem, there's no host pat
 - `shutdown()` sends a clean shutdown message; `__exit__` calls `shutdown()` automatically
 - `sb.generation` counts the workers started: `0` before the first, and one more for each replacement
 - `sb.worker_alive` says whether the sandbox has a running worker, which the next execution reaches rather than replacing
-- A worker still running five seconds past its execution's timeout is killed as unresponsive. Time in a host call (a `host_time` registration or an RPC to the parent) doesn't count toward that wait: the worker tells the parent when its clock stops and starts again. A host call that never returns is therefore never killed by this wait; bound it in the host, or call `shutdown()`
+- A worker still running five seconds past its execution's timeout is killed as unresponsive. Time in a host call (a `host_time` registration or an RPC to the parent) doesn't count toward that wait: the worker tells the parent when its clock stops and starts again. A host call that never returns is therefore never killed by this wait; bound it in the host, call `shutdown()`, or, for a host call made in the worker, set a deadline
+
+### A hard deadline
+
+The timeout is checked as the code runs: at checkpoints in the rewritten code, and at its awaits. Code blocked in a call that doesn't come back to it (a granted HTTP client waiting on a socket, `time.sleep`, a long loop inside a C extension) runs on past the timeout. If it returns at once after that call, nothing checks again, and the result comes back as a success however late it is.
+
+`deadline=` on `exec()` and `aexec()` is a limit this process keeps instead:
+
+```python
+from sandtrap import StDeadline
+
+result = sb.exec(handler_code, timeout=2.0, deadline=3.0)
+if isinstance(result.error, StDeadline):
+    ...  # the worker was killed three seconds in
+```
+
+- It counts from when the code reaches the worker, and nothing pauses it: neither a blocking call nor host time.
+- At the deadline the worker is killed. The error is a `StDeadline`, a subclass of `StTimeout`, and the result carries no namespace. The next execution starts a fresh worker, as after a crash, so it pays for a worker start (and `on_worker_start`).
+- An RPC handler runs in this process, in the execution's own wait, so the deadline can't interrupt one. It is enforced as soon as the handler returns: a late result is never returned as a success, but a slow handler delays the error. Bound host calls in the host.
+- The call returns once the worker has exited. Under `supervise_tree` it also waits for the worker's tree to be confirmed gone, up to `tree_grace` plus a second, so whatever the execution started has ended when the call returns; `drain()` accounts for a tree still being ended after that. Without `supervise_tree`, processes the worker started are left running.
+- The timeout still applies, and still stops code that reaches checkpoints, which keeps its worker. A deadline above the timeout is a backstop for code that doesn't.
+- Under `isolation="none"` there is no worker to kill, and `exec()` refuses `deadline=` with `ValueError`.
 
 ### Preparing every worker
 
