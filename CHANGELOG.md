@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `supervise_tree` it returns once its worker's tree is confirmed gone, or
   `tree_grace` plus a second has passed.
 
+### Fixed
+
+- **A shutdown no longer raises when the execution it waits on is killed.**
+  `shutdown()` or `drain()` from another thread raised `AttributeError` if
+  that execution's time ran out and its worker was killed during the wait.
+
 ## 0.5.5 - 2026-11-24
 
 ### Fixed
