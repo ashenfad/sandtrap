@@ -20,6 +20,16 @@ class StTimeout(StError):
     pass
 
 
+class StDeadline(StTimeout):
+    """Returned when a process worker outran its execution's ``deadline``
+    and was killed. Unlike the timeout, the deadline needs no checkpoint
+    to be reached and doesn't stop for host time, so it ends code blocked
+    in a call as well as code that runs. A subclass of :class:`StTimeout`,
+    so code that handles a timeout handles this too."""
+
+    pass
+
+
 class StCancelled(StError):
     """Raised when sandbox execution is cancelled externally."""
 

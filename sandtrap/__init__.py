@@ -2,6 +2,7 @@ from .builtins import passthrough_stdio
 from .clock import host_time
 from .errors import (
     StCancelled,
+    StDeadline,
     StError,
     StForkUnsafe,
     StLostWrite,
@@ -33,6 +34,7 @@ __all__ = [
     "RpcProxyMarker",
     "rpc_surface",
     "StCancelled",
+    "StDeadline",
     "StError",
     "StForkUnsafe",
     "StLostWrite",

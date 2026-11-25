@@ -112,15 +112,36 @@ def _validate_timeout(timeout: Any) -> "float | None":
     """A per-exec ``timeout`` as a float, or ``None`` to keep the
     policy's. It can change the budget but not remove it, so only a
     positive, finite number of seconds is taken."""
-    if timeout is None:
+    return _positive_seconds("timeout", timeout)
+
+
+def _validate_deadline(deadline: Any) -> "float | None":
+    """A per-exec ``deadline`` as a float, or ``None`` for none: a
+    positive, finite number of seconds."""
+    return _positive_seconds("deadline", deadline)
+
+
+def _positive_seconds(name: str, value: Any) -> "float | None":
+    if value is None:
         return None
-    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise TypeError(
-            f"timeout must be a number of seconds, not {type(timeout).__name__}"
+            f"{name} must be a number of seconds, not {type(value).__name__}"
         )
-    if not math.isfinite(timeout) or timeout <= 0:
-        raise ValueError(f"timeout must be positive and finite, got {timeout!r}")
-    return float(timeout)
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{name} must be positive and finite, got {value!r}")
+    return float(value)
+
+
+def _refuse_deadline(deadline: Any) -> None:
+    """An in-process sandbox has no worker to kill at a deadline."""
+    if deadline is not None:
+        raise ValueError(
+            "deadline needs a worker to kill, and an in-process sandbox runs "
+            "the code in this process, where nothing can stop it: use process "
+            "or kernel isolation, or timeout= for a budget the code is "
+            "checked against"
+        )
 
 
 def _validate_modules(
@@ -1008,6 +1029,7 @@ class Sandbox:
         echo: 'Literal["none", "last", "all"] | None' = None,
         keep: "Collection[str] | None" = None,
         timeout: "float | None" = None,
+        deadline: "float | None" = None,
     ) -> ExecResult:
         """Execute source code synchronously in the sandbox.
 
@@ -1052,6 +1074,10 @@ class Sandbox:
         A callback the code hands the host keeps the budget of the
         execution that made it.
 
+        ``deadline`` is refused here (``ValueError``): it kills the
+        worker the code runs in, and this sandbox has none. See
+        :meth:`ProcessSandbox.exec <sandtrap.process.sandbox.ProcessSandbox.exec>`.
+
         When the execution fails with a ``MemoryError``, the result
         carries no namespace and no print snapshots, whatever ``keep``
         says: ``result.dropped`` names what was withheld, and stdout,
@@ -1061,6 +1087,7 @@ class Sandbox:
             _validate_echo(echo)
         keep = _validate_keep(keep)
         timeout = _validate_timeout(timeout)
+        _refuse_deadline(deadline)
         _validate_modules(self.policy, modules)
         prepared = self._parse_and_rewrite(source, echo=echo)
         if isinstance(prepared, ExecResult):
@@ -1143,14 +1170,16 @@ class Sandbox:
         echo: 'Literal["none", "last", "all"] | None' = None,
         keep: "Collection[str] | None" = None,
         timeout: "float | None" = None,
+        deadline: "float | None" = None,
     ) -> ExecResult:
         """Execute source code asynchronously in the sandbox. See
         :meth:`exec` for ``modules``/``stdin``/``argv``/``echo``/``keep``/
-        ``timeout``."""
+        ``timeout``/``deadline``."""
         if echo is not None:
             _validate_echo(echo)
         keep = _validate_keep(keep)
         timeout = _validate_timeout(timeout)
+        _refuse_deadline(deadline)
         _validate_modules(self.policy, modules)
         prepared = self._parse_and_rewrite(source, echo=echo)
         if isinstance(prepared, ExecResult):

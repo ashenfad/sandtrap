@@ -13,7 +13,7 @@ import time
 
 import pytest
 
-from sandtrap import DrainResult, IsolationUnavailable, Policy, sandbox
+from sandtrap import DrainResult, IsolationUnavailable, Policy, StDeadline, sandbox
 from sandtrap.process.sandbox import ProcessSandbox
 from sandtrap.process.tree import Tree, _start_time
 
@@ -221,6 +221,43 @@ def test_a_cancelled_execution_reaches_the_worker_and_drains(helpers):
         result = sb.drain(timeout=10.0)
     assert result == DrainResult("confirmed", workers=1, helpers=1, killed=0)
     assert not _running(pid)
+
+
+@linux_only
+def test_a_call_killed_at_its_deadline_returns_once_its_tree_is_gone(helpers):
+    policy = _policy()
+    policy.module(time)
+    with ProcessSandbox(
+        policy, isolation="none", supervise_tree=True, tree_grace=0.5
+    ) as sb:
+        pid = _spawn(sb, helpers, "60", "ignore_term=True")
+        started = time.monotonic()
+        result = sb.exec("import time\ntime.sleep(30)", deadline=0.3)
+        took = time.monotonic() - started
+        assert isinstance(result.error, StDeadline)
+        # Its helper outlasted SIGTERM and needed the SIGKILL after the
+        # grace, and was gone before the call returned.
+        assert not _running(pid)
+        assert took >= 0.3 + 0.5
+        result = sb.drain(timeout=10.0)
+    assert result == DrainResult("confirmed", workers=1, helpers=1, killed=1)
+
+
+@linux_only
+def test_a_call_killed_at_its_deadline_does_not_wait_out_an_empty_trees_grace():
+    policy = _policy()
+    policy.module(time)
+    with ProcessSandbox(
+        policy, isolation="none", supervise_tree=True, tree_grace=5.0
+    ) as sb:
+        started = time.monotonic()
+        result = sb.exec("import time\ntime.sleep(30)", deadline=0.3)
+        took = time.monotonic() - started
+        assert isinstance(result.error, StDeadline)
+        assert took < 0.3 + 3.0
+        assert sb.exec("x = 1").namespace["x"] == 1
+        result = sb.drain(timeout=10.0)
+    assert result == DrainResult("confirmed", workers=2, helpers=0, killed=0)
 
 
 @linux_only

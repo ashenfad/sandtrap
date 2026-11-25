@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- **`deadline=` on `ProcessSandbox.exec` and `aexec`**: a hard limit, kept by
+  the parent, that kills a worker blocked in a call or in host time and returns
+  a `StDeadline` error (a `StTimeout`); an in-process sandbox refuses it.
+
+### Changed
+
+- **An execution killed as unresponsive waits for its tree.** Under
+  `supervise_tree` it returns once its worker's tree is confirmed gone, or
+  `tree_grace` plus a second has passed.
+
 ## 0.5.5 - 2026-11-24
 
 ### Fixed
