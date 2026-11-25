@@ -18,6 +18,7 @@ from sandtrap.process.spool import (
     SpoolClosedError,
     SpooledNamespace,
     SpoolEntry,
+    discard_spooled,
 )
 
 WORKER_ISOLATIONS = ("process", "kernel")
@@ -269,6 +270,25 @@ def test_a_restricted_worker_can_still_spool(tmp_path):
 def test_only_a_file_the_worker_could_have_named_is_read(tmp_path, name):
     with pytest.raises(ValueError, match="unexpected spool file name"):
         SpooledNamespace(str(tmp_path), {"v": SpoolEntry(size=1, file=name)})
+
+
+def test_discarding_removes_only_files_the_worker_could_have_named(tmp_path):
+    spool, outside = tmp_path / "spool", tmp_path / "escape.pkl"
+    spool.mkdir()
+    named = "0" * 32 + ".pkl"
+    for path in (spool / named, spool / "a.pkl", outside):
+        path.write_bytes(b"x")
+    discard_spooled(
+        str(spool),
+        {
+            "v": SpoolEntry(size=1, file=named),
+            "w": SpoolEntry(size=1, file="a.pkl"),
+            "x": SpoolEntry(size=1, file="../escape.pkl"),
+            "y": SpoolEntry(size=1, data=b"x"),
+        },
+    )
+    assert os.listdir(spool) == ["a.pkl"]
+    assert outside.exists()
 
 
 # ------------------------------------------------------------------

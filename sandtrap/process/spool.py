@@ -129,6 +129,20 @@ def _remove(directory: str, files: set[str]) -> None:
     files.clear()
 
 
+def discard_spooled(directory: str, entries: Mapping[str, SpoolEntry]) -> None:
+    """Remove the files of a spooled result that will never be read. Only
+    a name the worker could have written is removed, so nothing outside
+    ``directory`` is touched."""
+    _remove(
+        directory,
+        {
+            entry.file
+            for entry in entries.values()
+            if entry.file is not None and _FILE_RE.fullmatch(entry.file)
+        },
+    )
+
+
 class SpooledNamespace(Mapping[str, Any]):
     """A result namespace whose values are read on first access.
 
